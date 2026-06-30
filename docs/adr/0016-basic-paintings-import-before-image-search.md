@@ -1,0 +1,3 @@
+# Basic Paintings Import Before Image Search
+
+The first milestone should include a basic import workflow for existing paintings folders: copy local image files into the Paintings subvault, create item folders and item records, infer metadata from filenames when possible, and mark uncertain items for review. Import should copy files by default rather than move them, so the existing archive remains intact until the vault result is verified. Image-search or reverse-lookup identification is valuable for imported items and later enrichment, but it should not be required for the basic import workflow.
