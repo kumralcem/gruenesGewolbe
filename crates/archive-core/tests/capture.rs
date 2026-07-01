@@ -178,6 +178,62 @@ fn url_capture_returns_a_manual_fallback_prompt_when_extraction_is_blocked() {
     fs::remove_dir_all(&root).expect("clean temp vault");
 }
 
+#[test]
+fn url_capture_persists_extracted_cleaned_text_when_extraction_succeeds() {
+    let root = temp_path("capture-url-extracted-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let extractor = FakeExtractor::new(SourceExtraction::ExtractedText {
+        title: Some("Extracted essay title".to_string()),
+        cleaned_text: "Full main content from the extracted source.".to_string(),
+    });
+
+    let result = vault
+        .capture_source_link(
+            SourceLinkCapture {
+                source_link: "https://example.com/essay".to_string(),
+                title: "Pasted fallback title".to_string(),
+                saving_reason: Some("Quote source for archive design".to_string()),
+            },
+            &extractor,
+        )
+        .expect("capture extracted source");
+
+    let SourceCaptureResult::Captured(captured) = result else {
+        panic!("expected captured source");
+    };
+
+    assert_eq!(captured.home_subvault(), "Idea Sources");
+    assert_eq!(
+        extractor.last_request().source_link,
+        "https://example.com/essay"
+    );
+    assert_eq!(
+        fs::read_to_string(
+            captured
+                .item_folder()
+                .join("source-copies")
+                .join("cleaned-text.md")
+        )
+        .expect("read cleaned text"),
+        "Full main content from the extracted source.\n"
+    );
+
+    let record =
+        fs::read_to_string(captured.item_folder().join("record.md")).expect("read item record");
+    assert!(record.contains("title: Extracted essay title"));
+    assert!(record.contains("source_link: https://example.com/essay"));
+    assert!(record.contains("source_copy: source-copies/cleaned-text.md"));
+    assert!(record.contains("capture_method: extracted-text"));
+    assert!(record.contains("## Saving Reason\n\nQuote source for archive design\n"));
+
+    let results = vault
+        .search_metadata("archive design")
+        .expect("search extracted source");
+    assert_eq!(results[0].saved_item().id(), captured.id());
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+}
+
 #[derive(Debug)]
 struct FakeExtractor {
     response: SourceExtraction,

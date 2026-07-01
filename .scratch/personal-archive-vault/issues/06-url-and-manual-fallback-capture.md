@@ -28,4 +28,4 @@ Manual fallback should accept a source link, saving reason, copied image data, a
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/capture.rs`, `apps/desktop/tests/capture.rs`, `crates/archive-core/tests/workbench.rs`, and `crates/archive-cli/tests/capture.rs`. URL capture now goes through a source-extraction boundary and returns a prefilled manual fallback prompt when extraction is blocked rather than creating a partial item or failing hard.
+Implemented with TDD. Evidence: `crates/archive-core/tests/capture.rs`, `apps/desktop/tests/capture.rs`, `crates/archive-core/tests/workbench.rs`, and `crates/archive-cli/tests/capture.rs`. URL capture now goes through a source-extraction boundary: successful extraction persists cleaned text into the vault, while blocked extraction returns a prefilled manual fallback prompt rather than creating a partial item or failing hard.
