@@ -56,7 +56,7 @@ elements.importForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const sourceFolder = elements.importPath.value.trim();
   if (!sourceFolder) return;
-  const imported = await invoke("import_paintings", { command: { sourceFolder } });
+  const imported = await invoke("import_paintings", { command: { source_folder: sourceFolder } });
   state.selectedItemId = imported[0]?.id ?? state.selectedItemId;
   await refreshWorkbench();
 });
@@ -65,10 +65,10 @@ elements.captureForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   await invoke("capture_idea", {
     command: {
-      sourceLink: elements.captureUrl.value.trim(),
+      source_link: elements.captureUrl.value.trim(),
       title: elements.captureTitle.value.trim(),
-      savingReason: null,
-      copiedText: elements.captureText.value.trim() || null,
+      saving_reason: null,
+      copied_text: elements.captureText.value.trim() || null,
     },
   });
   elements.captureUrl.value = "";
@@ -80,19 +80,19 @@ elements.captureForm.addEventListener("submit", async (event) => {
 async function refreshWorkbench() {
   const snapshot = await invoke("workbench_snapshot", {
     command: {
-      homeSubvault: state.currentSubvault,
-      searchQuery: state.searchQuery || null,
-      selectedItemId: state.selectedItemId,
+      home_subvault: state.currentSubvault,
+      search_query: state.searchQuery || null,
+      selected_item_id: state.selectedItemId,
     },
   });
   renderSnapshot(snapshot);
 }
 
 function renderSnapshot(snapshot) {
-  state.activeVault = snapshot.activeVault;
-  elements.activeVault.textContent = snapshot.activeVault?.root ?? "No vault open";
+  state.activeVault = snapshot.active_vault;
+  elements.activeVault.textContent = snapshot.active_vault?.root ?? "No vault open";
   elements.currentSubvault.textContent = state.currentSubvault;
-  elements.itemCount.textContent = `${snapshot.artworkItems.length} items`;
+  elements.itemCount.textContent = `${snapshot.artwork_items.length} items`;
 
   renderNav(elements.subvaults, snapshot.subvaults, (subvault) => {
     state.currentSubvault = subvault;
@@ -103,11 +103,11 @@ function renderSnapshot(snapshot) {
     snapshot.collections.map((collection) => collection.name),
     () => {},
   );
-  renderArtwork(snapshot.artworkItems);
-  renderDenseList(elements.reviewQueue, snapshot.reviewQueue, "reviewStatus");
-  renderDenseList(elements.ideaSources, snapshot.ideaSources, "sourceLink");
-  renderDenseList(elements.searchResults, snapshot.searchResults, "homeSubvault");
-  renderDetails(snapshot.selectedItem);
+  renderArtwork(snapshot.artwork_items);
+  renderDenseList(elements.reviewQueue, snapshot.review_queue, "review_status");
+  renderDenseList(elements.ideaSources, snapshot.idea_sources, "source_link");
+  renderDenseList(elements.searchResults, snapshot.search_results, "home_subvault");
+  renderDetails(snapshot.selected_item);
 }
 
 function renderNav(container, values, onSelect) {
@@ -167,11 +167,11 @@ function renderDetails(item) {
     ["Title", item.title],
     ["Creator", item.creator],
     ["Year", item.year],
-    ["Subvault", item.homeSubvault],
-    ["Review", item.reviewStatus],
+    ["Subvault", item.home_subvault],
+    ["Review", item.review_status],
     ["Tags", item.tags.join(", ")],
     ["Collections", item.collections.join(", ")],
-    ["Source", item.sourceLink ?? ""],
+    ["Source", item.source_link ?? ""],
   ];
 
   elements.detailsList.replaceChildren(

@@ -19,4 +19,8 @@ fn tauri_scaffold_points_at_the_workbench_ui_and_commands() {
     assert!(script.contains("invoke(\"import_paintings\""));
     assert!(script.contains("invoke(\"capture_idea\""));
     assert!(script.contains("invoke(\"workbench_snapshot\""));
+    assert!(script.contains("source_folder"));
+    assert!(script.contains("home_subvault"));
+    assert!(script.contains("search_query"));
+    assert!(script.contains("selected_item_id"));
 }
