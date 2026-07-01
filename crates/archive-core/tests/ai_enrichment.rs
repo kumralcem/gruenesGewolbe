@@ -266,6 +266,11 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
     assert_eq!(details.metadata_suggestions()[1].field(), "year");
     assert_eq!(details.review_status(), "needs-review");
 
+    let queue = vault.review_queue().expect("browse review queue");
+    assert!(queue
+        .iter()
+        .any(|item| item.saved_item().id() == saved.id()));
+
     let record = fs::read_to_string(saved.item_folder().join("record.md")).expect("read record");
     assert!(record.contains(
         "## Metadata Suggestions\n\n- creator | Jane Painter | 0.47 | fake-vision:signature\n- year | 1884 | 0.38 | fake-vision:inscription\n"
