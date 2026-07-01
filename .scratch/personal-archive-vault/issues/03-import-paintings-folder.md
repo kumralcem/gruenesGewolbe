@@ -14,14 +14,18 @@ This slice should be demoable from both the app and the CLI, because Paintings i
 
 ## Acceptance criteria
 
-- [ ] A user can choose a local folder and import supported artwork files into the active vault.
-- [ ] Import copies files by default and leaves the source folder unchanged.
-- [ ] Each imported item records original filename, source folder, and import date as import provenance.
-- [ ] Folder names prefer creator, year, and title when known, with explicit unknown fallbacks.
-- [ ] Items with missing or uncertain metadata receive a review status that makes them findable later.
-- [ ] The CLI can run the same import workflow against an active or specified vault.
-- [ ] Tests cover copy-by-default behavior, provenance, readable folder creation, review status, and preservation of original file formats.
+- [x] A user can choose a local folder and import supported artwork files into the active vault.
+- [x] Import copies files by default and leaves the source folder unchanged.
+- [x] Each imported item records original filename, source folder, and import date as import provenance.
+- [x] Folder names prefer creator, year, and title when known, with explicit unknown fallbacks.
+- [x] Items with missing or uncertain metadata receive a review status that makes them findable later.
+- [x] The CLI can run the same import workflow against an active or specified vault.
+- [x] Tests cover copy-by-default behavior, provenance, readable folder creation, review status, and preservation of original file formats.
 
 ## Blocked by
 
 - .scratch/personal-archive-vault/issues/02-save-first-artwork-item.md
+
+## Comments
+
+Implemented with TDD. Evidence: `crates/archive-core/tests/paintings_import.rs`, `crates/archive-cli/tests/import_paintings.rs`, `crates/archive-cli/tests/inspect_item.rs`, and `apps/desktop/tests/import_paintings.rs`. Paintings import copies supported image files by default, preserves source folders, records original filename/source folder/import date provenance, uses readable known/unknown folder names, marks uncertain imports for review while keeping complete known imports out of the review queue, and is available through the CLI and desktop shell.

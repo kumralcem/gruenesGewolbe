@@ -61,7 +61,7 @@ fn user_can_import_a_paintings_folder_copying_supported_images_by_default() {
     );
     assert!(known_record.contains(&format!("import_source_folder: {}", source_dir.display())));
     assert!(known_record.contains("imported_at: "));
-    assert!(known_record.contains("review_status: needs-review"));
+    assert!(known_record.contains("review_status: reviewed"));
 
     let unknown_folder = root
         .join("subvaults")

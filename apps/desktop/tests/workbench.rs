@@ -10,11 +10,8 @@ fn desktop_shell_supports_workbench_browse_inspect_edit_and_review() {
     let root = temp_path("desktop-workbench-vault");
     let source_dir = temp_path("desktop-workbench-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
-    fs::write(
-        source_dir.join("Jane Painter - 1884 - Nocturne Study.jpg"),
-        b"known painting bytes",
-    )
-    .expect("write source painting");
+    fs::write(source_dir.join("mystery.jpg"), b"known painting bytes")
+        .expect("write source painting");
 
     let mut shell = DesktopShell::default();
     shell.create_vault(&root).expect("create active vault");
@@ -26,23 +23,20 @@ fn desktop_shell_supports_workbench_browse_inspect_edit_and_review() {
         .browse_artwork_items("Paintings")
         .expect("browse artwork grid");
     assert_eq!(grid.len(), 1);
-    assert_eq!(grid[0].title(), "Nocturne Study");
+    assert_eq!(grid[0].title(), "mystery");
     assert_eq!(grid[0].review_status(), "needs-review");
 
     let details = shell
         .item_details(grid[0].saved_item().id())
         .expect("open item details");
-    assert_eq!(details.creator(), "Jane Painter");
-    assert_eq!(
-        details.import_original_filename(),
-        Some("Jane Painter - 1884 - Nocturne Study.jpg")
-    );
+    assert_eq!(details.creator(), "Unknown Creator");
+    assert_eq!(details.import_original_filename(), Some("mystery.jpg"));
 
     let review_queue = shell.review_queue().expect("browse review queue");
     assert_eq!(review_queue.len(), 1);
     assert_eq!(review_queue[0].saved_item().id(), details.id());
     assert_eq!(review_queue[0].home_subvault(), "Paintings");
-    assert_eq!(review_queue[0].title(), "Nocturne Study");
+    assert_eq!(review_queue[0].title(), "mystery");
     assert_eq!(review_queue[0].review_status(), "needs-review");
 
     let updated = shell

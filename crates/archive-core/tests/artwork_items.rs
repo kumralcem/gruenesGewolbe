@@ -54,7 +54,7 @@ fn user_can_add_a_local_image_as_an_artwork_saved_item() {
     assert!(item_record.contains("primary_file: files/source-image.jpg"));
     assert!(item_record.contains("import_original_filename: source-image.jpg"));
     assert!(item_record.contains(&format!("import_source_path: {}", source_file.display())));
-    assert!(item_record.contains("review_status: needs-review"));
+    assert!(item_record.contains("review_status: reviewed"));
     assert!(item_record.contains(&format!("id: {}", saved_item.id())));
     assert!(item_record.contains("## Saving Reason\n\nPalette reference for night scenes\n"));
 

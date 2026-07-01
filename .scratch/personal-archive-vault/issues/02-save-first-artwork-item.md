@@ -14,13 +14,17 @@ This is the tracer bullet for the saved item model. It should prove that ordinar
 
 ## Acceptance criteria
 
-- [ ] A user can add a local image file to a Paintings subvault from the app.
-- [ ] The original file format is preserved and the saved file is not silently converted or replaced.
-- [ ] The saved item has one home subvault and one readable item folder.
-- [ ] The item record includes the stable item ID, source/import provenance when available, saving reason when supplied, review status, and basic descriptive fields.
-- [ ] The saved item can be reopened from disk after the app restarts.
-- [ ] Tests assert on the created item folder, preserved file, and item record contents through the archive core public API.
+- [x] A user can add a local image file to a Paintings subvault from the app.
+- [x] The original file format is preserved and the saved file is not silently converted or replaced.
+- [x] The saved item has one home subvault and one readable item folder.
+- [x] The item record includes the stable item ID, source/import provenance when available, saving reason when supplied, review status, and basic descriptive fields.
+- [x] The saved item can be reopened from disk after the app restarts.
+- [x] Tests assert on the created item folder, preserved file, and item record contents through the archive core public API.
 
 ## Blocked by
 
 - .scratch/personal-archive-vault/issues/01-create-and-open-active-vault.md
+
+## Comments
+
+Implemented with TDD. Evidence: `crates/archive-core/tests/artwork_items.rs` and `apps/desktop/tests/artwork_items.rs`. Local artwork saves create readable item folders, preserve the original file bytes and extension, write canonical Markdown item records with stable IDs/provenance/review status, and can be reopened from disk by stable ID.

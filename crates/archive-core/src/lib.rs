@@ -1900,6 +1900,14 @@ fn artwork_record(
     let creator = item.creator.as_deref().unwrap_or("Unknown Creator");
     let year = item.year.as_deref().unwrap_or("Unknown Year");
     let saving_reason = item.saving_reason.as_deref().unwrap_or("");
+    let review_status = if duplicate_candidates.is_empty()
+        && creator != "Unknown Creator"
+        && year != "Unknown Year"
+    {
+        "reviewed"
+    } else {
+        "needs-review"
+    };
     let duplicate_candidates = duplicate_candidate_frontmatter(duplicate_candidates);
     let import_source_folder = import_source_path
         .parent()
@@ -1922,7 +1930,7 @@ import_source_folder: {import_source_folder}\n\
 imported_at: {imported_at}\n\
 file_fingerprint: {file_fingerprint}\n\
 duplicate_candidates: {duplicate_candidates}\n\
-review_status: needs-review\n\
+review_status: {review_status}\n\
 ---\n\
 \n\
 # {title}\n\

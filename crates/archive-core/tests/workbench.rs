@@ -43,7 +43,7 @@ fn user_can_browse_artwork_items_and_open_item_details_from_records() {
     assert_eq!(grid[0].title(), "Garden Window");
     assert_eq!(grid[0].creator(), "Lee Artist");
     assert_eq!(grid[0].year(), "2024");
-    assert_eq!(grid[0].review_status(), "needs-review");
+    assert_eq!(grid[0].review_status(), "reviewed");
     assert!(grid[0].primary_file().ends_with("files/garden.png"));
     assert_eq!(grid[1].title(), "Nocturne Study");
 
@@ -55,7 +55,7 @@ fn user_can_browse_artwork_items_and_open_item_details_from_records() {
     assert_eq!(details.title(), "Nocturne Study");
     assert_eq!(details.creator(), "Jane Painter");
     assert_eq!(details.year(), "1884");
-    assert_eq!(details.review_status(), "needs-review");
+    assert_eq!(details.review_status(), "reviewed");
     assert_eq!(
         details.saving_reason(),
         Some("Palette reference for night scenes")

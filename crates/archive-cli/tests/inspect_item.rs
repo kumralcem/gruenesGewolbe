@@ -59,7 +59,7 @@ fn cli_inspects_an_item_record_as_structured_lines() {
     assert!(stdout.contains("field\ttitle\tNocturne Study\n"));
     assert!(stdout.contains("field\tcreator\tJane Painter\n"));
     assert!(stdout.contains("field\tyear\t1884\n"));
-    assert!(stdout.contains("field\treview_status\tneeds-review\n"));
+    assert!(stdout.contains("field\treview_status\treviewed\n"));
     assert!(stdout.contains("file\tprimary\t"));
     assert!(stdout.contains("Jane Painter - 1884 - Nocturne Study.jpg\n"));
 
