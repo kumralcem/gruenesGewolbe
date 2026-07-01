@@ -105,6 +105,51 @@ fn metadata_search_rebuilds_automatically_when_the_derived_index_is_missing() {
 }
 
 #[test]
+fn metadata_search_refreshes_after_new_artwork_is_saved() {
+    let root = temp_path("metadata-search-new-artwork-refresh");
+    let source_dir = temp_path("metadata-search-new-artwork-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let first_source = source_dir.join("nocturne.jpg");
+    let second_source = source_dir.join("garden.png");
+    fs::write(&first_source, b"nocturne bytes").expect("write first source image");
+    fs::write(&second_source, b"garden bytes").expect("write second source image");
+
+    let vault = Vault::create(&root).expect("create vault");
+    vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: first_source,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Jane Painter".to_string()),
+            year: Some("1884".to_string()),
+            title: "Nocturne Study".to_string(),
+            saving_reason: None,
+        })
+        .expect("save first artwork item");
+    vault
+        .search_metadata("nocturne")
+        .expect("build initial metadata index");
+
+    let second = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: second_source,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Lee Artist".to_string()),
+            year: Some("2024".to_string()),
+            title: "Garden Window".to_string(),
+            saving_reason: Some("Fresh composition reference".to_string()),
+        })
+        .expect("save second artwork item");
+
+    let results = vault
+        .search_metadata("fresh composition")
+        .expect("search after saving second artwork");
+    assert_eq!(ids(results), vec![second.id().to_string()]);
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
 fn metadata_search_rebuilds_collection_references_from_collection_files() {
     let root = temp_path("metadata-search-collections-vault");
     let source_dir = temp_path("metadata-search-collections-source");

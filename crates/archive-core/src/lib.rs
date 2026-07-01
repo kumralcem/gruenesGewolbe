@@ -100,6 +100,7 @@ impl Vault {
             &duplicate_candidates,
         );
         fs::write(item_folder.join("record.md"), record)?;
+        self.rebuild_metadata_index()?;
 
         Ok(SavedItem {
             id,

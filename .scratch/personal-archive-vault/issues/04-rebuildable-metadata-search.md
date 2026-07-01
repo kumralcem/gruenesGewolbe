@@ -14,12 +14,12 @@ This slice should provide search through the archive core, expose it through the
 
 ## Acceptance criteria
 
-- [ ] A missing or stale derived index can be rebuilt from item records and collection files.
-- [ ] Metadata search returns saved items by title, creator, year, tags, saving reason, summary, source link, original filename, and collection references.
-- [ ] Search works without paid AI calls or network access.
-- [ ] The CLI can rebuild the index and run metadata searches.
-- [ ] The app can search within the active vault and open a matching saved item.
-- [ ] Tests verify rebuild behavior by deleting derived state and rebuilding from visible vault files.
+- [x] A missing or stale derived index can be rebuilt from item records and collection files.
+- [x] Metadata search returns saved items by title, creator, year, tags, saving reason, summary, source link, original filename, and collection references.
+- [x] Search works without paid AI calls or network access.
+- [x] The CLI can rebuild the index and run metadata searches.
+- [x] The app can search within the active vault and open a matching saved item.
+- [x] Tests verify rebuild behavior by deleting derived state and rebuilding from visible vault files.
 
 ## Blocked by
 
@@ -27,4 +27,4 @@ This slice should provide search through the archive core, expose it through the
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/metadata_search.rs`, `crates/archive-cli/tests/search.rs`, and `apps/desktop/tests/search.rs`. Metadata index rebuilds from canonical item records and collection files, so collection references remain searchable even when the item-record backreference is missing and derived state has been deleted.
+Implemented with TDD. Evidence: `crates/archive-core/tests/metadata_search.rs`, `crates/archive-cli/tests/search.rs`, and `apps/desktop/tests/search.rs`. Metadata index rebuilds from canonical item records and collection files, refreshes after newly saved artwork so stale indexes do not hide fresh records, and keeps collection references searchable even when the item-record backreference is missing and derived state has been deleted.
