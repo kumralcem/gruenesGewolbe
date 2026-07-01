@@ -1,0 +1,10 @@
+[package]
+name = "gruenes-gewolbe-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "gruenes_gewolbe_core"
+path = "src/lib.rs"
