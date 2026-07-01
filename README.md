@@ -8,7 +8,7 @@ The first implemented slices establish the vault lifecycle, the first artwork sa
 
 - `gruenes-gewolbe-core`: archive core module for creating, opening, and validating a vault.
 - `ggvault`: minimal CLI adapter for `create`, `open`, `validate`, `import-paintings`, `rebuild-index`, `search`, `capture-manual-text`, and `inspect-item`.
-- `gruenes-gewolbe-desktop`: desktop-shell-facing module that makes the active vault explicit, remembers multiple vault roots in user app state, and switches between them for future Tauri commands.
+- `gruenes-gewolbe-desktop`: desktop-shell-facing module that makes the active vault explicit, remembers multiple vault roots in user app state, switches between them, and exposes a Tauri-facing command adapter with frontend-ready view models.
 - Artwork saved items: local image files can be added to the Paintings subvault, preserved unchanged, recorded in Markdown, and reopened by stable item ID.
 - Paintings import: supported image files can be copied from a local folder into the Paintings subvault through the core, CLI, and desktop shell.
 - Metadata search: a derived index under `.gruenesgewolbe/` can be rebuilt from visible item records and queried through the core, CLI, and desktop shell.

@@ -27,4 +27,4 @@ None - can start immediately
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/vault_lifecycle.rs`, `apps/desktop/tests/active_vault.rs`, and `crates/archive-cli/tests/validate.rs`. The desktop shell now remembers multiple vault roots in user app state and can switch the active vault explicitly.
+Implemented with TDD. Evidence: `crates/archive-core/tests/vault_lifecycle.rs`, `apps/desktop/tests/active_vault.rs`, `apps/desktop/tests/tauri_commands.rs`, and `crates/archive-cli/tests/validate.rs`. The desktop shell now remembers multiple vault roots in user app state, can switch the active vault explicitly, and exposes create/open state through the Tauri-facing command adapter.

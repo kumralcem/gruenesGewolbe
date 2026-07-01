@@ -455,6 +455,305 @@ impl WorkbenchSnapshot {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct TauriCommandState {
+    shell: DesktopShell,
+}
+
+impl TauriCommandState {
+    pub fn create_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
+        self.shell
+            .create_vault(root)
+            .map(ActiveVaultView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn open_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
+        self.shell
+            .open_vault(root)
+            .map(ActiveVaultView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn import_paintings(
+        &self,
+        command: ImportPaintingsCommand,
+    ) -> Result<Vec<SavedItemView>, DesktopShellError> {
+        self.shell
+            .import_paintings_folder(command.source_folder)
+            .map(|items| items.into_iter().map(SavedItemView::from).collect())
+    }
+
+    pub fn capture_idea(
+        &self,
+        command: CaptureIdeaCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .manual_fallback_capture(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: None,
+            })
+            .map(SavedItemView::from)
+    }
+
+    pub fn workbench_snapshot(
+        &self,
+        command: WorkbenchSnapshotCommand,
+    ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
+        self.shell
+            .workbench_snapshot(WorkbenchRequest {
+                home_subvault: command.home_subvault,
+                search_query: command.search_query,
+                selected_item_id: command.selected_item_id,
+            })
+            .map(WorkbenchSnapshotView::from)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportPaintingsCommand {
+    pub source_folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureIdeaCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+    pub copied_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchSnapshotCommand {
+    pub home_subvault: String,
+    pub search_query: Option<String>,
+    pub selected_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveVaultView {
+    pub root: String,
+}
+
+impl From<ActiveVault> for ActiveVaultView {
+    fn from(vault: ActiveVault) -> Self {
+        Self {
+            root: path_string(vault.root()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedItemView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+}
+
+impl From<SavedItem> for SavedItemView {
+    fn from(item: SavedItem) -> Self {
+        Self {
+            id: item.id().to_string(),
+            home_subvault: item.home_subvault().to_string(),
+            item_folder: path_string(item.item_folder()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionView {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<&Collection> for CollectionView {
+    fn from(collection: &Collection) -> Self {
+        Self {
+            id: collection.id().to_string(),
+            name: collection.name().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtworkGridItemView {
+    pub id: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub primary_file: String,
+    pub thumbnail_file: String,
+    pub review_status: String,
+}
+
+impl From<&ArtworkGridItem> for ArtworkGridItemView {
+    fn from(item: &ArtworkGridItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            title: item.title().to_string(),
+            creator: item.creator().to_string(),
+            year: item.year().to_string(),
+            primary_file: path_string(item.primary_file()),
+            thumbnail_file: path_string(item.thumbnail_file()),
+            review_status: item.review_status().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaSourceItemView {
+    pub id: String,
+    pub title: String,
+    pub source_link: String,
+    pub source_copy: Option<String>,
+    pub review_status: String,
+    pub reason: Option<String>,
+}
+
+impl From<&IdeaSourceListItem> for IdeaSourceItemView {
+    fn from(item: &IdeaSourceListItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            title: item.title().to_string(),
+            source_link: item.source_link().to_string(),
+            source_copy: item.source_copy().map(path_string),
+            review_status: item.review_status().to_string(),
+            reason: item.reason().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewQueueItemView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_type: String,
+    pub title: String,
+    pub review_status: String,
+    pub reason: Option<String>,
+}
+
+impl From<&ReviewQueueItem> for ReviewQueueItemView {
+    fn from(item: &ReviewQueueItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            home_subvault: item.home_subvault().to_string(),
+            item_type: item.item_type().to_string(),
+            title: item.title().to_string(),
+            review_status: item.review_status().to_string(),
+            reason: item.reason().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResultView {
+    pub id: String,
+    pub home_subvault: String,
+}
+
+impl From<&SearchResult> for SearchResultView {
+    fn from(result: &SearchResult) -> Self {
+        Self {
+            id: result.saved_item().id().to_string(),
+            home_subvault: result.saved_item().home_subvault().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemDetailsView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub primary_file: String,
+    pub review_status: String,
+    pub tags: Vec<String>,
+    pub collections: Vec<String>,
+    pub saving_reason: Option<String>,
+    pub source_link: Option<String>,
+    pub summary: Option<String>,
+    pub source_copy: Option<String>,
+}
+
+impl From<&ItemDetails> for ItemDetailsView {
+    fn from(details: &ItemDetails) -> Self {
+        Self {
+            id: details.id().to_string(),
+            home_subvault: details.home_subvault().to_string(),
+            item_folder: path_string(details.item_folder()),
+            title: details.title().to_string(),
+            creator: details.creator().to_string(),
+            year: details.year().to_string(),
+            primary_file: path_string(details.primary_file()),
+            review_status: details.review_status().to_string(),
+            tags: details.tags().into_iter().map(str::to_string).collect(),
+            collections: details
+                .collections()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            saving_reason: details.saving_reason().map(str::to_string),
+            source_link: details.source_link().map(str::to_string),
+            summary: details.summary().map(str::to_string),
+            source_copy: details.source_copy().map(path_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkbenchSnapshotView {
+    pub active_vault: ActiveVaultView,
+    pub subvaults: Vec<String>,
+    pub collections: Vec<CollectionView>,
+    pub artwork_items: Vec<ArtworkGridItemView>,
+    pub idea_sources: Vec<IdeaSourceItemView>,
+    pub review_queue: Vec<ReviewQueueItemView>,
+    pub search_results: Vec<SearchResultView>,
+    pub selected_item: Option<ItemDetailsView>,
+}
+
+impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
+    fn from(snapshot: WorkbenchSnapshot) -> Self {
+        Self {
+            active_vault: ActiveVaultView::from(snapshot.active_vault().clone()),
+            subvaults: snapshot.subvaults().to_vec(),
+            collections: snapshot
+                .collections()
+                .iter()
+                .map(CollectionView::from)
+                .collect(),
+            artwork_items: snapshot
+                .artwork_items()
+                .iter()
+                .map(ArtworkGridItemView::from)
+                .collect(),
+            idea_sources: snapshot
+                .idea_sources()
+                .iter()
+                .map(IdeaSourceItemView::from)
+                .collect(),
+            review_queue: snapshot
+                .review_queue()
+                .iter()
+                .map(ReviewQueueItemView::from)
+                .collect(),
+            search_results: snapshot
+                .search_results()
+                .iter()
+                .map(SearchResultView::from)
+                .collect(),
+            selected_item: snapshot.selected_item().map(ItemDetailsView::from),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveVault {
     root: PathBuf,
@@ -566,6 +865,10 @@ fn toml_string_value(contents: &str, key: &str) -> Option<String> {
 
 fn escape_toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn path_string(path: &Path) -> String {
+    path.display().to_string()
 }
 
 fn read_known_vault_roots(app_state_dir: &Path) -> io::Result<Vec<PathBuf>> {
