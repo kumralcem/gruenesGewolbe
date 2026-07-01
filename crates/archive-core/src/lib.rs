@@ -453,6 +453,7 @@ impl Vault {
                     }
                 }),
                 metadata_suggestions: metadata_suggestions(&text),
+                better_file_candidates: better_file_candidates(&text),
                 folder_rename_suggestion: folder_rename_suggestion(
                     &record.item_folder,
                     &item_type,
@@ -513,6 +514,7 @@ impl Vault {
                 accepted_summary: None,
                 accepted_tags: Vec::new(),
                 staged_suggestions: Vec::new(),
+                better_file_candidates: Vec::new(),
                 estimated_cost_cents: 0,
             });
         }
@@ -548,6 +550,7 @@ impl Vault {
                 accepted_summary: None,
                 accepted_tags: Vec::new(),
                 staged_suggestions: Vec::new(),
+                better_file_candidates: Vec::new(),
                 estimated_cost_cents: 0,
             });
         }
@@ -869,6 +872,7 @@ impl Vault {
         accepted_tags.sort();
         let accepted_summary = response.summary;
         let staged_suggestions = response.suggestions;
+        let better_file_candidates = response.better_file_candidates;
         let estimated_cost_cents = response.estimated_cost_cents;
 
         for record in self.item_record_entries()? {
@@ -903,6 +907,18 @@ impl Vault {
                 );
                 updated = replace_frontmatter_value(&updated, "review_status", "needs-review");
             }
+            if !better_file_candidates.is_empty() {
+                let candidate_lines = better_file_candidates
+                    .iter()
+                    .map(better_file_candidate_line)
+                    .collect::<Vec<_>>();
+                updated = replace_or_append_markdown_list_section(
+                    &updated,
+                    "Better File Candidates",
+                    &candidate_lines,
+                );
+                updated = replace_frontmatter_value(&updated, "review_status", "needs-review");
+            }
 
             fs::write(&record.record_path, updated)?;
             self.append_ai_cost_log(id, budget_mode, estimated_cost_cents)?;
@@ -924,6 +940,7 @@ impl Vault {
                 accepted_summary,
                 accepted_tags,
                 staged_suggestions,
+                better_file_candidates,
                 estimated_cost_cents,
             });
         }
@@ -1098,6 +1115,7 @@ pub struct ItemDetails {
     summary: Option<String>,
     source_copy: Option<PathBuf>,
     metadata_suggestions: Vec<AiMetadataSuggestion>,
+    better_file_candidates: Vec<BetterFileCandidate>,
     folder_rename_suggestion: Option<String>,
     import_original_filename: Option<String>,
     import_source_path: Option<PathBuf>,
@@ -1170,6 +1188,10 @@ impl ItemDetails {
 
     pub fn metadata_suggestions(&self) -> &[AiMetadataSuggestion] {
         &self.metadata_suggestions
+    }
+
+    pub fn better_file_candidates(&self) -> &[BetterFileCandidate] {
+        &self.better_file_candidates
     }
 
     pub fn folder_rename_suggestion(&self) -> Option<&str> {
@@ -1301,6 +1323,7 @@ pub struct AiProviderResponse {
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub suggestions: Vec<AiMetadataSuggestion>,
+    pub better_file_candidates: Vec<BetterFileCandidate>,
     pub estimated_cost_cents: u32,
 }
 
@@ -1330,11 +1353,33 @@ impl AiMetadataSuggestion {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BetterFileCandidate {
+    pub source_link: String,
+    pub reason: String,
+    pub provenance: String,
+}
+
+impl BetterFileCandidate {
+    pub fn source_link(&self) -> &str {
+        &self.source_link
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    pub fn provenance(&self) -> &str {
+        &self.provenance
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiEnrichmentResult {
     accepted_summary: Option<String>,
     accepted_tags: Vec<String>,
     staged_suggestions: Vec<AiMetadataSuggestion>,
+    better_file_candidates: Vec<BetterFileCandidate>,
     estimated_cost_cents: u32,
 }
 
@@ -1349,6 +1394,10 @@ impl AiEnrichmentResult {
 
     pub fn staged_suggestions(&self) -> &[AiMetadataSuggestion] {
         &self.staged_suggestions
+    }
+
+    pub fn better_file_candidates(&self) -> &[BetterFileCandidate] {
+        &self.better_file_candidates
     }
 
     pub fn estimated_cost_cents(&self) -> u32 {
@@ -2107,6 +2156,27 @@ fn metadata_suggestions(record: &str) -> Vec<AiMetadataSuggestion> {
                 field: parts.next()?.to_string(),
                 suggested_value: parts.next()?.to_string(),
                 confidence: parts.next()?.parse().ok()?,
+                provenance: parts.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn better_file_candidate_line(candidate: &BetterFileCandidate) -> String {
+    format!(
+        "{} | {} | {}",
+        candidate.source_link, candidate.reason, candidate.provenance
+    )
+}
+
+fn better_file_candidates(record: &str) -> Vec<BetterFileCandidate> {
+    markdown_list_section(record, "Better File Candidates")
+        .into_iter()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, " | ").map(str::trim);
+            Some(BetterFileCandidate {
+                source_link: parts.next()?.to_string(),
+                reason: parts.next()?.to_string(),
                 provenance: parts.next()?.to_string(),
             })
         })

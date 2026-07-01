@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiMetadataSuggestion, AiProvider, AiProviderRequest,
-    AiProviderResponse, ExtractedTextCapture, TagDefinition, Vault,
+    AiProviderResponse, BetterFileCandidate, ExtractedTextCapture, TagDefinition, Vault,
 };
 
 #[test]
@@ -30,6 +30,7 @@ fn idea_enrichment_uses_cleaned_text_budget_mode_and_persists_summary_tags_and_s
             confidence: 0.42,
             provenance: "fake-provider:title".to_string(),
         }],
+        better_file_candidates: Vec::new(),
         estimated_cost_cents: 3,
     });
 
@@ -125,6 +126,7 @@ fn idea_enrichment_normalizes_ai_tags_through_the_vault_tag_registry() {
             "night palette".to_string(),
         ],
         suggestions: Vec::new(),
+        better_file_candidates: Vec::new(),
         estimated_cost_cents: 1,
     });
 
@@ -171,6 +173,7 @@ fn idea_enrichment_budget_off_skips_provider_and_leaves_item_unchanged() {
             confidence: 0.99,
             provenance: "fake-provider:title".to_string(),
         }],
+        better_file_candidates: Vec::new(),
         estimated_cost_cents: 99,
     });
 
@@ -232,6 +235,7 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
                 provenance: "fake-vision:inscription".to_string(),
             },
         ],
+        better_file_candidates: Vec::new(),
         estimated_cost_cents: 5,
     });
 
@@ -268,6 +272,75 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
     ));
     assert!(record.contains("creator: Unknown Creator"));
     assert!(record.contains("year: \"Unknown Year\""));
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn artwork_enrichment_records_better_file_candidates_without_replacing_the_primary_file() {
+    let root = temp_path("ai-better-file-vault");
+    let source_dir = temp_path("ai-better-file-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("small-nocturne.jpg");
+    fs::write(&source_file, b"small painting image bytes").expect("write source painting");
+
+    let vault = Vault::create(&root).expect("create vault");
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Jane Painter".to_string()),
+            year: Some("1884".to_string()),
+            title: "Nocturne Study".to_string(),
+            saving_reason: Some("Palette reference".to_string()),
+        })
+        .expect("save artwork");
+    let original_primary_file = vault
+        .item_details(saved.id())
+        .expect("read details")
+        .primary_file()
+        .to_path_buf();
+
+    let provider = FakeProvider::new(AiProviderResponse {
+        summary: None,
+        tags: Vec::new(),
+        suggestions: Vec::new(),
+        better_file_candidates: vec![BetterFileCandidate {
+            source_link: "https://example.com/full-size-nocturne.jpg".to_string(),
+            reason: "Higher resolution source image".to_string(),
+            provenance: "fake-vision:source-page".to_string(),
+        }],
+        estimated_cost_cents: 4,
+    });
+
+    let enrichment = vault
+        .suggest_artwork_metadata_with_ai(saved.id(), AiBudgetMode::Standard, &provider)
+        .expect("suggest better file candidate");
+
+    assert_eq!(enrichment.better_file_candidates().len(), 1);
+    assert_eq!(
+        enrichment.better_file_candidates()[0].source_link(),
+        "https://example.com/full-size-nocturne.jpg"
+    );
+
+    let details = vault.item_details(saved.id()).expect("read details");
+    assert_eq!(details.primary_file(), original_primary_file.as_path());
+    assert_eq!(details.better_file_candidates().len(), 1);
+    assert_eq!(
+        details.better_file_candidates()[0].reason(),
+        "Higher resolution source image"
+    );
+    assert_eq!(
+        fs::read(details.primary_file()).expect("read original primary file"),
+        b"small painting image bytes"
+    );
+
+    let record = fs::read_to_string(saved.item_folder().join("record.md")).expect("read record");
+    assert!(record.contains(
+        "## Better File Candidates\n\n- https://example.com/full-size-nocturne.jpg | Higher resolution source image | fake-vision:source-page\n"
+    ));
+    assert!(record.contains("primary_file: files/small-nocturne.jpg"));
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
