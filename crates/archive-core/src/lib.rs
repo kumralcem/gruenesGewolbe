@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
@@ -271,6 +272,7 @@ impl Vault {
 
     pub fn rebuild_metadata_index(&self) -> Result<RebuiltMetadataIndex, VaultError> {
         let records = self.item_record_entries()?;
+        let collection_search_text = self.collection_search_text_by_item_id()?;
         let hidden_state = self.root.join(HIDDEN_STATE_DIR);
         fs::create_dir_all(&hidden_state)?;
 
@@ -282,7 +284,12 @@ impl Vault {
                 .ok_or_else(|| VaultError::MalformedItemRecord(record.record_path.clone()))?;
             let home_subvault = frontmatter_value(&text, "home_subvault")
                 .ok_or_else(|| VaultError::MalformedItemRecord(record.record_path.clone()))?;
-            let searchable_text = normalize_search_text(&text);
+            let mut searchable_source = text;
+            if let Some(collection_text) = collection_search_text.get(&id) {
+                searchable_source.push('\n');
+                searchable_source.push_str(collection_text);
+            }
+            let searchable_text = normalize_search_text(&searchable_source);
 
             index.push_str(&escape_index_field(&id));
             index.push('\t');
@@ -794,6 +801,32 @@ impl Vault {
 
         records.sort_by(|left, right| left.item_folder.cmp(&right.item_folder));
         Ok(records)
+    }
+
+    fn collection_search_text_by_item_id(&self) -> Result<HashMap<String, String>, VaultError> {
+        let mut text_by_item_id = HashMap::new();
+        let collections_root = self.root.join(COLLECTIONS_DIR);
+        if !collections_root.is_dir() {
+            return Ok(text_by_item_id);
+        }
+
+        for entry in fs::read_dir(collections_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            let collection_text = fs::read_to_string(entry.path())?;
+            for item_id in collection_items(&collection_text) {
+                let item_text = text_by_item_id.entry(item_id).or_insert_with(String::new);
+                if !item_text.is_empty() {
+                    item_text.push('\n');
+                }
+                item_text.push_str(&collection_text);
+            }
+        }
+
+        Ok(text_by_item_id)
     }
 
     fn duplicate_candidates_for_artwork(

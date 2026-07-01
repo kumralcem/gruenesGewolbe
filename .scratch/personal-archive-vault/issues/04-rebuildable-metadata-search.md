@@ -24,3 +24,7 @@ This slice should provide search through the archive core, expose it through the
 ## Blocked by
 
 - .scratch/personal-archive-vault/issues/02-save-first-artwork-item.md
+
+## Comments
+
+Implemented with TDD. Evidence: `crates/archive-core/tests/metadata_search.rs`, `crates/archive-cli/tests/search.rs`, and `apps/desktop/tests/search.rs`. Metadata index rebuilds from canonical item records and collection files, so collection references remain searchable even when the item-record backreference is missing and derived state has been deleted.
