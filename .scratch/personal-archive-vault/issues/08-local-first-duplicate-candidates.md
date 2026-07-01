@@ -28,4 +28,4 @@ Duplicate signals should include source links, file fingerprints, import provena
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/duplicate_candidates.rs` and `apps/desktop/tests/duplicate_candidates.rs`. Duplicate candidates are detected locally through source links, file fingerprints, import provenance, and descriptive metadata; saves/imports continue; duplicate records keep the candidate signal in item details and remain `needs-review` instead of failing hard.
+Implemented with TDD. Evidence: `crates/archive-core/tests/duplicate_candidates.rs` and `apps/desktop/tests/duplicate_candidates.rs`. Duplicate candidates are detected locally through source links, including successful URL extraction captures, file fingerprints, import provenance, and descriptive metadata; saves/imports continue; duplicate records keep the candidate signal in item details and remain `needs-review` instead of failing hard.

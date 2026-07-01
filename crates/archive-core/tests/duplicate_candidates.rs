@@ -2,7 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, ManualFallbackCapture, Vault};
+use gruenes_gewolbe_core::{
+    AddArtworkItem, ManualFallbackCapture, SourceCaptureResult, SourceExtraction,
+    SourceExtractionRequest, SourceExtractor, SourceLinkCapture, Vault,
+};
 
 #[test]
 fn paintings_import_warns_about_file_fingerprint_duplicate_candidates_without_blocking_save() {
@@ -111,6 +114,59 @@ fn manual_capture_warns_about_exact_source_link_duplicate_candidates_without_blo
 }
 
 #[test]
+fn successful_url_capture_warns_about_exact_source_link_duplicate_candidates_without_blocking_save()
+{
+    let root = temp_path("duplicate-url-source-link-vault");
+    let vault = Vault::create(&root).expect("create vault");
+
+    let first = vault
+        .manual_fallback_capture(ManualFallbackCapture {
+            source_link: "https://example.com/same-source".to_string(),
+            title: "First source capture".to_string(),
+            saving_reason: Some("First reason".to_string()),
+            copied_text: Some("First copied text".to_string()),
+            copied_image: None,
+        })
+        .expect("capture first source");
+    let extractor = FakeExtractor::new(SourceExtraction::ExtractedText {
+        title: Some("Extracted duplicate source".to_string()),
+        cleaned_text: "Full extracted text for the duplicate source.".to_string(),
+    });
+
+    let result = vault
+        .capture_source_link(
+            SourceLinkCapture {
+                source_link: "https://example.com/same-source".to_string(),
+                title: "Pasted fallback title".to_string(),
+                saving_reason: Some("Second reason".to_string()),
+            },
+            &extractor,
+        )
+        .expect("capture duplicate source link");
+
+    let SourceCaptureResult::Captured(second) = result else {
+        panic!("expected captured source");
+    };
+    assert_ne!(first.id(), second.id());
+
+    let second_details = vault
+        .item_details(second.id())
+        .expect("read second details");
+    assert_eq!(second_details.review_status(), "needs-review");
+    assert_eq!(second_details.duplicate_candidates().len(), 1);
+    assert_eq!(
+        second_details.duplicate_candidates()[0].item_id(),
+        first.id()
+    );
+    assert_eq!(
+        second_details.duplicate_candidates()[0].signal(),
+        "source-link"
+    );
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+}
+
+#[test]
 fn paintings_import_warns_about_import_provenance_duplicate_candidates_without_blocking_save() {
     let root = temp_path("duplicate-provenance-vault");
     let import_source_dir = temp_path("duplicate-provenance-source");
@@ -194,4 +250,21 @@ fn temp_path(name: &str) -> PathBuf {
         .as_nanos();
 
     std::env::temp_dir().join(format!("gruenes-gewolbe-{name}-{unique}"))
+}
+
+#[derive(Debug)]
+struct FakeExtractor {
+    response: SourceExtraction,
+}
+
+impl FakeExtractor {
+    fn new(response: SourceExtraction) -> Self {
+        Self { response }
+    }
+}
+
+impl SourceExtractor for FakeExtractor {
+    fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
+        self.response.clone()
+    }
 }
