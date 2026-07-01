@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gruenes Gewoelbe</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="workbench-shell">
+      <header class="topbar">
+        <div>
+          <h1>Gruenes Gewoelbe</h1>
+          <p id="active-vault">No vault open</p>
+        </div>
+        <form id="vault-form" class="command-row">
+          <input id="vault-path" name="vault-path" placeholder="Vault path" autocomplete="off" />
+          <button type="submit">Open</button>
+          <button id="create-vault" type="button">Create</button>
+        </form>
+      </header>
+
+      <section class="toolbar" aria-label="Workbench controls">
+        <form id="search-form" class="search-box">
+          <input id="search-query" name="search-query" placeholder="Search metadata" autocomplete="off" />
+          <button type="submit">Search</button>
+        </form>
+        <form id="import-form" class="command-row">
+          <input id="import-path" name="import-path" placeholder="Paintings folder" autocomplete="off" />
+          <button type="submit">Import</button>
+        </form>
+      </section>
+
+      <section class="workspace">
+        <aside class="rail" aria-label="Archive navigation">
+          <section>
+            <h2>Subvaults</h2>
+            <nav id="subvaults" class="nav-list"></nav>
+          </section>
+          <section>
+            <h2>Collections</h2>
+            <nav id="collections" class="nav-list"></nav>
+          </section>
+        </aside>
+
+        <section class="main-pane" aria-label="Current subvault">
+          <div class="pane-heading">
+            <h2 id="current-subvault">Paintings</h2>
+            <span id="item-count">0 items</span>
+          </div>
+          <div id="artwork-grid" class="artwork-grid"></div>
+        </section>
+
+        <aside class="side-pane" aria-label="Review and source material">
+          <section>
+            <h2>Review</h2>
+            <ol id="review-queue" class="dense-list"></ol>
+          </section>
+          <section>
+            <h2>Ideas</h2>
+            <ol id="idea-sources" class="dense-list"></ol>
+          </section>
+          <form id="capture-form" class="capture-form">
+            <input id="capture-url" placeholder="Source URL" autocomplete="off" />
+            <input id="capture-title" placeholder="Title" autocomplete="off" />
+            <textarea id="capture-text" placeholder="Copied text"></textarea>
+            <button type="submit">Capture</button>
+          </form>
+        </aside>
+
+        <section id="item-details" class="details-pane" aria-label="Item details">
+          <h2>Details</h2>
+          <dl id="details-list"></dl>
+        </section>
+      </section>
+
+      <section class="search-results" aria-label="Search results">
+        <h2>Search Results</h2>
+        <ol id="search-results" class="dense-list horizontal"></ol>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
