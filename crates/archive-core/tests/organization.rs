@@ -35,7 +35,7 @@ fn user_can_add_tags_normalized_through_the_vault_tag_registry() {
         .expect("create tag registry entry");
 
     let details = vault
-        .add_tags_to_item(saved_item.id(), vec!["nocturne colors".to_string()])
+        .add_tags_to_item(saved_item.id(), vec!["Nocturne Colors".to_string()])
         .expect("add normalized tag");
 
     assert_eq!(details.tags(), vec!["night palette"]);

@@ -2506,9 +2506,16 @@ fn slugify(value: &str) -> String {
 
 fn canonical_tag(registry: &[TagDefinition], input: &str) -> String {
     let input = input.trim();
+    let normalized_input = input.to_ascii_lowercase();
     registry
         .iter()
-        .find(|tag| tag.name == input || tag.aliases.iter().any(|alias| alias == input))
+        .find(|tag| {
+            tag.name.to_ascii_lowercase() == normalized_input
+                || tag
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.to_ascii_lowercase() == normalized_input)
+        })
         .map(|tag| tag.name.clone())
         .unwrap_or_else(|| input.to_string())
 }

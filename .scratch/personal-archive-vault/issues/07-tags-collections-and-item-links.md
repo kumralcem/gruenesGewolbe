@@ -14,13 +14,13 @@ This slice should make cross-subvault relevance visible in the app and searchabl
 
 ## Acceptance criteria
 
-- [ ] A user can add tags to a saved item and reuse existing registry entries or aliases.
-- [ ] A user can create genuinely new tags when no existing tag matches.
-- [ ] A user can create a collection and add saved items to it without moving item folders.
-- [ ] Collection membership is visible from the saved item detail view.
-- [ ] A user can add item links to related saved items, collections, notes, URLs, or archive areas.
-- [ ] Search can find saved items by tags, collection membership, and item-link text where appropriate.
-- [ ] Tests verify tag registry normalization, collection files with item backreferences, and one-home-subvault behavior.
+- [x] A user can add tags to a saved item and reuse existing registry entries or aliases.
+- [x] A user can create genuinely new tags when no existing tag matches.
+- [x] A user can create a collection and add saved items to it without moving item folders.
+- [x] Collection membership is visible from the saved item detail view.
+- [x] A user can add item links to related saved items, collections, notes, URLs, or archive areas.
+- [x] Search can find saved items by tags, collection membership, and item-link text where appropriate.
+- [x] Tests verify tag registry normalization, collection files with item backreferences, and one-home-subvault behavior.
 
 ## Blocked by
 
@@ -29,4 +29,4 @@ This slice should make cross-subvault relevance visible in the app and searchabl
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/organization.rs` and `apps/desktop/tests/organization.rs`. Tags normalize through the vault tag registry, collections are durable files with item backreferences, item details can recover collection membership from canonical collection files, item links do not move home subvault folders, and tags/collections/item links are searchable through rebuildable metadata search.
+Implemented with TDD. Evidence: `crates/archive-core/tests/organization.rs` and `apps/desktop/tests/organization.rs`. Tags normalize through the vault tag registry, including case-varied aliases, collections are durable files with item backreferences, item details can recover collection membership from canonical collection files, item links do not move home subvault folders, and tags/collections/item links are searchable through rebuildable metadata search.
