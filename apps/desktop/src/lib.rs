@@ -143,6 +143,42 @@ impl DesktopShell {
         vault.review_queue().map_err(DesktopShellError::Vault)
     }
 
+    pub fn workbench_snapshot(
+        &self,
+        request: WorkbenchRequest,
+    ) -> Result<WorkbenchSnapshot, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        let search_results = match request.search_query.as_deref().map(str::trim) {
+            Some(query) if !query.is_empty() => vault
+                .search_metadata(query)
+                .map_err(DesktopShellError::Vault)?,
+            _ => Vec::new(),
+        };
+        let selected_item = match request.selected_item_id.as_deref() {
+            Some(id) => Some(vault.item_details(id).map_err(DesktopShellError::Vault)?),
+            None => None,
+        };
+
+        Ok(WorkbenchSnapshot {
+            active_vault: ActiveVault::from(vault.root()),
+            subvaults: vault.list_subvaults().map_err(DesktopShellError::Vault)?,
+            collections: vault.list_collections().map_err(DesktopShellError::Vault)?,
+            artwork_items: vault
+                .browse_artwork_items(&request.home_subvault)
+                .map_err(DesktopShellError::Vault)?,
+            idea_sources: vault
+                .browse_idea_sources()
+                .map_err(DesktopShellError::Vault)?,
+            review_queue: vault.review_queue().map_err(DesktopShellError::Vault)?,
+            search_results,
+            selected_item,
+        })
+    }
+
     pub fn item_details(&self, id: &str) -> Result<ItemDetails, DesktopShellError> {
         let vault = self
             .active_vault
@@ -363,6 +399,59 @@ impl DesktopShell {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchRequest {
+    pub home_subvault: String,
+    pub search_query: Option<String>,
+    pub selected_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkbenchSnapshot {
+    active_vault: ActiveVault,
+    subvaults: Vec<String>,
+    collections: Vec<Collection>,
+    artwork_items: Vec<ArtworkGridItem>,
+    idea_sources: Vec<IdeaSourceListItem>,
+    review_queue: Vec<ReviewQueueItem>,
+    search_results: Vec<SearchResult>,
+    selected_item: Option<ItemDetails>,
+}
+
+impl WorkbenchSnapshot {
+    pub fn active_vault(&self) -> &ActiveVault {
+        &self.active_vault
+    }
+
+    pub fn subvaults(&self) -> &[String] {
+        &self.subvaults
+    }
+
+    pub fn collections(&self) -> &[Collection] {
+        &self.collections
+    }
+
+    pub fn artwork_items(&self) -> &[ArtworkGridItem] {
+        &self.artwork_items
+    }
+
+    pub fn idea_sources(&self) -> &[IdeaSourceListItem] {
+        &self.idea_sources
+    }
+
+    pub fn review_queue(&self) -> &[ReviewQueueItem] {
+        &self.review_queue
+    }
+
+    pub fn search_results(&self) -> &[SearchResult] {
+        &self.search_results
+    }
+
+    pub fn selected_item(&self) -> Option<&ItemDetails> {
+        self.selected_item.as_ref()
     }
 }
 

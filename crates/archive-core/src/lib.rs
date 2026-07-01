@@ -50,6 +50,39 @@ impl Vault {
         &self.root
     }
 
+    pub fn list_subvaults(&self) -> Result<Vec<String>, VaultError> {
+        let mut subvaults = Vec::new();
+        for entry in fs::read_dir(self.root.join(SUBVAULTS_DIR))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+
+            subvaults.push(entry.file_name().to_string_lossy().to_string());
+        }
+        subvaults.sort();
+        Ok(subvaults)
+    }
+
+    pub fn list_collections(&self) -> Result<Vec<Collection>, VaultError> {
+        let mut collections = Vec::new();
+        for entry in fs::read_dir(self.root.join(COLLECTIONS_DIR))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let text = fs::read_to_string(&path)?;
+            collections.push(Collection {
+                id: required_frontmatter_value(&path, &text, "id")?,
+                name: required_frontmatter_value(&path, &text, "name")?,
+            });
+        }
+        collections.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(collections)
+    }
+
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
         let file_name = item
             .source_file
