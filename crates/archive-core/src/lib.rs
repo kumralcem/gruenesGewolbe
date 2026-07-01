@@ -452,6 +452,7 @@ impl Vault {
                         Some(PathBuf::from(path))
                     }
                 }),
+                metadata_provenance: metadata_provenance(&text),
                 metadata_suggestions: metadata_suggestions(&text),
                 better_file_candidates: better_file_candidates(&text),
                 folder_rename_suggestion: folder_rename_suggestion(
@@ -513,6 +514,7 @@ impl Vault {
             return Ok(AiEnrichmentResult {
                 accepted_summary: None,
                 accepted_tags: Vec::new(),
+                accepted_metadata: Vec::new(),
                 staged_suggestions: Vec::new(),
                 better_file_candidates: Vec::new(),
                 estimated_cost_cents: 0,
@@ -549,6 +551,7 @@ impl Vault {
             return Ok(AiEnrichmentResult {
                 accepted_summary: None,
                 accepted_tags: Vec::new(),
+                accepted_metadata: Vec::new(),
                 staged_suggestions: Vec::new(),
                 better_file_candidates: Vec::new(),
                 estimated_cost_cents: 0,
@@ -871,7 +874,7 @@ impl Vault {
         }
         accepted_tags.sort();
         let accepted_summary = response.summary;
-        let staged_suggestions = response.suggestions;
+        let mut incoming_suggestions = Some(response.suggestions);
         let better_file_candidates = response.better_file_candidates;
         let estimated_cost_cents = response.estimated_cost_cents;
 
@@ -882,6 +885,10 @@ impl Vault {
             }
 
             let mut updated = text;
+            let (accepted_metadata, staged_suggestions) = split_metadata_suggestions(
+                &updated,
+                incoming_suggestions.take().unwrap_or_default(),
+            );
             if !accepted_tags.is_empty() {
                 let mut tags = frontmatter_list(&updated, "tags");
                 for tag in &accepted_tags {
@@ -894,6 +901,27 @@ impl Vault {
             }
             if let Some(summary) = accepted_summary.as_deref() {
                 updated = replace_or_append_markdown_section(&updated, "Summary", summary);
+            }
+            if !accepted_metadata.is_empty() {
+                for suggestion in &accepted_metadata {
+                    updated = replace_frontmatter_value(
+                        &updated,
+                        suggestion.field(),
+                        &frontmatter_metadata_value(
+                            suggestion.field(),
+                            suggestion.suggested_value(),
+                        ),
+                    );
+                }
+                let provenance_lines = accepted_metadata
+                    .iter()
+                    .map(metadata_suggestion_line)
+                    .collect::<Vec<_>>();
+                updated = replace_or_append_markdown_list_section(
+                    &updated,
+                    "Metadata Provenance",
+                    &provenance_lines,
+                );
             }
             if !staged_suggestions.is_empty() {
                 let suggestion_lines = staged_suggestions
@@ -939,6 +967,7 @@ impl Vault {
             return Ok(AiEnrichmentResult {
                 accepted_summary,
                 accepted_tags,
+                accepted_metadata,
                 staged_suggestions,
                 better_file_candidates,
                 estimated_cost_cents,
@@ -1114,6 +1143,7 @@ pub struct ItemDetails {
     source_link: Option<String>,
     summary: Option<String>,
     source_copy: Option<PathBuf>,
+    metadata_provenance: Vec<AiMetadataSuggestion>,
     metadata_suggestions: Vec<AiMetadataSuggestion>,
     better_file_candidates: Vec<BetterFileCandidate>,
     folder_rename_suggestion: Option<String>,
@@ -1184,6 +1214,10 @@ impl ItemDetails {
 
     pub fn source_copy(&self) -> Option<&Path> {
         self.source_copy.as_deref()
+    }
+
+    pub fn metadata_provenance(&self) -> &[AiMetadataSuggestion] {
+        &self.metadata_provenance
     }
 
     pub fn metadata_suggestions(&self) -> &[AiMetadataSuggestion] {
@@ -1378,6 +1412,7 @@ impl BetterFileCandidate {
 pub struct AiEnrichmentResult {
     accepted_summary: Option<String>,
     accepted_tags: Vec<String>,
+    accepted_metadata: Vec<AiMetadataSuggestion>,
     staged_suggestions: Vec<AiMetadataSuggestion>,
     better_file_candidates: Vec<BetterFileCandidate>,
     estimated_cost_cents: u32,
@@ -1390,6 +1425,10 @@ impl AiEnrichmentResult {
 
     pub fn accepted_tags(&self) -> Vec<&str> {
         self.accepted_tags.iter().map(String::as_str).collect()
+    }
+
+    pub fn accepted_metadata(&self) -> &[AiMetadataSuggestion] {
+        &self.accepted_metadata
     }
 
     pub fn staged_suggestions(&self) -> &[AiMetadataSuggestion] {
@@ -2160,6 +2199,66 @@ fn metadata_suggestions(record: &str) -> Vec<AiMetadataSuggestion> {
             })
         })
         .collect()
+}
+
+fn metadata_provenance(record: &str) -> Vec<AiMetadataSuggestion> {
+    markdown_list_section(record, "Metadata Provenance")
+        .into_iter()
+        .filter_map(|line| {
+            let mut parts = line.splitn(4, " | ").map(str::trim);
+            Some(AiMetadataSuggestion {
+                field: parts.next()?.to_string(),
+                suggested_value: parts.next()?.to_string(),
+                confidence: parts.next()?.parse().ok()?,
+                provenance: parts.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn split_metadata_suggestions(
+    record: &str,
+    suggestions: Vec<AiMetadataSuggestion>,
+) -> (Vec<AiMetadataSuggestion>, Vec<AiMetadataSuggestion>) {
+    let mut accepted = Vec::new();
+    let mut staged = Vec::new();
+
+    for suggestion in suggestions {
+        if can_accept_metadata_suggestion(record, &suggestion) {
+            accepted.push(suggestion);
+        } else {
+            staged.push(suggestion);
+        }
+    }
+
+    (accepted, staged)
+}
+
+fn can_accept_metadata_suggestion(record: &str, suggestion: &AiMetadataSuggestion) -> bool {
+    if suggestion.confidence < 0.90 {
+        return false;
+    }
+
+    if !matches!(suggestion.field.as_str(), "creator" | "year" | "title") {
+        return false;
+    }
+
+    frontmatter_value(record, &suggestion.field)
+        .map(|value| is_unknown_metadata_value(&value))
+        .unwrap_or(false)
+}
+
+fn is_unknown_metadata_value(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty() || value.starts_with("Unknown") || value.starts_with("Untitled")
+}
+
+fn frontmatter_metadata_value(field: &str, value: &str) -> String {
+    if field == "year" {
+        format!("\"{value}\"")
+    } else {
+        value.to_string()
+    }
 }
 
 fn better_file_candidate_line(candidate: &BetterFileCandidate) -> String {

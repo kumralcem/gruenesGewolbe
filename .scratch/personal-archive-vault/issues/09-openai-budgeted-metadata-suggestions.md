@@ -29,4 +29,4 @@ AI output should produce summaries, tags, and metadata suggestions. High-confide
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/ai_enrichment.rs`, `apps/desktop/tests/ai_enrichment.rs`, and `apps/desktop/tests/ai_provider_config.rs`. AI enrichment also records additive better-file candidates with provenance without replacing the current primary file.
+Implemented with TDD. Evidence: `crates/archive-core/tests/ai_enrichment.rs`, `apps/desktop/tests/ai_enrichment.rs`, and `apps/desktop/tests/ai_provider_config.rs`. AI enrichment accepts high-confidence suggestions only when they fill unknown placeholder metadata, records compact metadata provenance, stages conflicting suggestions for review, and records additive better-file candidates with provenance without replacing the current primary file.

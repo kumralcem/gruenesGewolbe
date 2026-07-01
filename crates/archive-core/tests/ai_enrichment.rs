@@ -278,6 +278,90 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
 }
 
 #[test]
+fn artwork_enrichment_accepts_high_confidence_unknown_metadata_and_stages_conflicts() {
+    let root = temp_path("ai-accepted-metadata-vault");
+    let source_dir = temp_path("ai-accepted-metadata-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("unknown-nocturne.jpg");
+    fs::write(&source_file, b"painting image bytes").expect("write source painting");
+
+    let vault = Vault::create(&root).expect("create vault");
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Unknown Creator".to_string()),
+            year: Some("Unknown Year".to_string()),
+            title: "Nocturne Study".to_string(),
+            saving_reason: Some("Palette reference".to_string()),
+        })
+        .expect("save artwork");
+
+    let provider = FakeProvider::new(AiProviderResponse {
+        summary: None,
+        tags: Vec::new(),
+        suggestions: vec![
+            AiMetadataSuggestion {
+                field: "creator".to_string(),
+                suggested_value: "Jane Painter".to_string(),
+                confidence: 0.96,
+                provenance: "fake-vision:signature".to_string(),
+            },
+            AiMetadataSuggestion {
+                field: "year".to_string(),
+                suggested_value: "1884".to_string(),
+                confidence: 0.94,
+                provenance: "fake-vision:inscription".to_string(),
+            },
+            AiMetadataSuggestion {
+                field: "title".to_string(),
+                suggested_value: "Moonlit Harbor".to_string(),
+                confidence: 0.95,
+                provenance: "fake-vision:catalogue".to_string(),
+            },
+        ],
+        better_file_candidates: Vec::new(),
+        estimated_cost_cents: 6,
+    });
+
+    let enrichment = vault
+        .suggest_artwork_metadata_with_ai(saved.id(), AiBudgetMode::Standard, &provider)
+        .expect("suggest artwork metadata");
+
+    assert_eq!(enrichment.accepted_metadata().len(), 2);
+    assert_eq!(enrichment.accepted_metadata()[0].field(), "creator");
+    assert_eq!(enrichment.accepted_metadata()[1].field(), "year");
+    assert_eq!(enrichment.staged_suggestions().len(), 1);
+    assert_eq!(enrichment.staged_suggestions()[0].field(), "title");
+
+    let details = vault.item_details(saved.id()).expect("read details");
+    assert_eq!(details.creator(), "Jane Painter");
+    assert_eq!(details.year(), "1884");
+    assert_eq!(details.title(), "Nocturne Study");
+    assert_eq!(details.metadata_provenance().len(), 2);
+    assert_eq!(details.metadata_suggestions().len(), 1);
+    assert_eq!(details.metadata_suggestions()[0].field(), "title");
+    assert_eq!(
+        details.metadata_suggestions()[0].suggested_value(),
+        "Moonlit Harbor"
+    );
+
+    let record = fs::read_to_string(saved.item_folder().join("record.md")).expect("read record");
+    assert!(record.contains("creator: Jane Painter"));
+    assert!(record.contains("year: \"1884\""));
+    assert!(record.contains("title: Nocturne Study"));
+    assert!(record.contains(
+        "## Metadata Provenance\n\n- creator | Jane Painter | 0.96 | fake-vision:signature\n- year | 1884 | 0.94 | fake-vision:inscription\n"
+    ));
+    assert!(record.contains(
+        "## Metadata Suggestions\n\n- title | Moonlit Harbor | 0.95 | fake-vision:catalogue\n"
+    ));
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
 fn artwork_enrichment_records_better_file_candidates_without_replacing_the_primary_file() {
     let root = temp_path("ai-better-file-vault");
     let source_dir = temp_path("ai-better-file-source");
