@@ -26,3 +26,7 @@ This slice should make cross-subvault relevance visible in the app and searchabl
 
 - .scratch/personal-archive-vault/issues/04-rebuildable-metadata-search.md
 - .scratch/personal-archive-vault/issues/05-workbench-browse-edit-review.md
+
+## Comments
+
+Implemented with TDD. Evidence: `crates/archive-core/tests/organization.rs` and `apps/desktop/tests/organization.rs`. Tags normalize through the vault tag registry, collections are durable files with item backreferences, item details can recover collection membership from canonical collection files, item links do not move home subvault folders, and tags/collections/item links are searchable through rebuildable metadata search.

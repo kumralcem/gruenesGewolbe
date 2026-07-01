@@ -117,6 +117,51 @@ fn user_can_create_a_collection_and_add_items_without_moving_item_folders() {
 }
 
 #[test]
+fn item_details_reads_collection_membership_from_collection_files() {
+    let root = temp_path("organization-collection-file-vault");
+    let source_dir = temp_path("organization-collection-file-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("nocturne.jpg");
+    fs::write(&source_file, b"nocturne bytes").expect("write source image");
+
+    let vault = Vault::create(&root).expect("create vault");
+    let saved_item = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Jane Painter".to_string()),
+            year: Some("1884".to_string()),
+            title: "Nocturne Study".to_string(),
+            saving_reason: None,
+        })
+        .expect("save artwork item");
+    let collection = vault
+        .create_collection(CollectionDefinition {
+            name: "Night References".to_string(),
+            purpose: "Visual research".to_string(),
+            description: Some("Paintings to revisit for night palette work".to_string()),
+        })
+        .expect("create collection");
+    vault
+        .add_item_to_collection(collection.id(), saved_item.id())
+        .expect("add item to collection");
+
+    let record_path = saved_item.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).expect("read item record");
+    fs::write(
+        &record_path,
+        record.replace("collections: Night References\n", ""),
+    )
+    .expect("remove item backreference");
+
+    let details = vault.item_details(saved_item.id()).expect("read details");
+    assert_eq!(details.collections(), vec!["Night References"]);
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
 fn user_can_add_item_links_without_moving_the_home_subvault() {
     let root = temp_path("organization-links-vault");
     let source_dir = temp_path("organization-links-source");

@@ -476,7 +476,7 @@ impl Vault {
                     "review_status",
                 )?,
                 tags: frontmatter_list(&text, "tags"),
-                collections: frontmatter_list(&text, "collections"),
+                collections: self.collection_names_for_item(id, &text)?,
                 item_links: item_links(&text),
                 duplicate_candidates: duplicate_candidates(&text),
                 saving_reason: markdown_section(&text, "Saving Reason"),
@@ -827,6 +827,43 @@ impl Vault {
         }
 
         Ok(text_by_item_id)
+    }
+
+    fn collection_names_for_item(
+        &self,
+        item_id: &str,
+        item_record: &str,
+    ) -> Result<Vec<String>, VaultError> {
+        let mut collections = frontmatter_list(item_record, "collections");
+        let collections_root = self.root.join(COLLECTIONS_DIR);
+        if !collections_root.is_dir() {
+            collections.sort();
+            return Ok(collections);
+        }
+
+        for entry in fs::read_dir(collections_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let collection_text = fs::read_to_string(&path)?;
+            if !collection_items(&collection_text)
+                .iter()
+                .any(|id| id == item_id)
+            {
+                continue;
+            }
+
+            let name = required_frontmatter_value(&path, &collection_text, "name")?;
+            if !collections.iter().any(|collection| collection == &name) {
+                collections.push(name);
+            }
+        }
+
+        collections.sort();
+        Ok(collections)
     }
 
     fn duplicate_candidates_for_artwork(
