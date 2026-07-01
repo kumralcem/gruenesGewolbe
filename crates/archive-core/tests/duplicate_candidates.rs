@@ -90,6 +90,7 @@ fn manual_capture_warns_about_exact_source_link_duplicate_candidates_without_blo
     let second_details = vault
         .item_details(second.id())
         .expect("read second details");
+    assert_eq!(second_details.review_status(), "needs-review");
     assert_eq!(second_details.duplicate_candidates().len(), 1);
     assert_eq!(
         second_details.duplicate_candidates()[0].item_id(),
@@ -129,6 +130,7 @@ fn paintings_import_warns_about_import_provenance_duplicate_candidates_without_b
     let duplicate_details = vault
         .item_details(second_import[0].id())
         .expect("read duplicate details");
+    assert_eq!(duplicate_details.review_status(), "needs-review");
     assert!(duplicate_details
         .duplicate_candidates()
         .iter()
@@ -174,6 +176,7 @@ fn artwork_save_warns_about_descriptive_metadata_duplicate_candidates_without_bl
     let duplicate_details = vault
         .item_details(second.id())
         .expect("read duplicate details");
+    assert_eq!(duplicate_details.review_status(), "needs-review");
     assert!(duplicate_details
         .duplicate_candidates()
         .iter()
