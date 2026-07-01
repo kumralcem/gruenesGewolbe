@@ -9,7 +9,8 @@ use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem, Collection,
     CollectionDefinition, ExtractedTextCapture, IdeaSourceListItem, ItemDetails,
     ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
-    TagDefinition, UpdateItemRecord, Vault, VaultError,
+    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
+    Vault, VaultError,
 };
 
 #[derive(Debug, Default)]
@@ -199,6 +200,21 @@ impl DesktopShell {
 
         vault
             .capture_extracted_text(capture)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn capture_source_link(
+        &self,
+        capture: SourceLinkCapture,
+        extractor: &dyn SourceExtractor,
+    ) -> Result<SourceCaptureResult, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .capture_source_link(capture, extractor)
             .map_err(DesktopShellError::Vault)
     }
 

@@ -176,6 +176,36 @@ impl Vault {
         })
     }
 
+    pub fn capture_source_link(
+        &self,
+        capture: SourceLinkCapture,
+        extractor: &dyn SourceExtractor,
+    ) -> Result<SourceCaptureResult, VaultError> {
+        match extractor.extract(SourceExtractionRequest {
+            source_link: capture.source_link.clone(),
+        }) {
+            SourceExtraction::ExtractedText {
+                title,
+                cleaned_text,
+            } => self
+                .capture_extracted_text(ExtractedTextCapture {
+                    source_link: capture.source_link,
+                    title: title.unwrap_or(capture.title),
+                    saving_reason: capture.saving_reason,
+                    cleaned_text,
+                })
+                .map(SourceCaptureResult::Captured),
+            SourceExtraction::NeedsManualFallback { reason } => Ok(
+                SourceCaptureResult::NeedsManualFallback(ManualFallbackPrompt {
+                    source_link: capture.source_link,
+                    title: capture.title,
+                    saving_reason: capture.saving_reason,
+                    reason,
+                }),
+            ),
+        }
+    }
+
     fn capture_idea_source(&self, capture: IdeaSourceCapture) -> Result<SavedItem, VaultError> {
         let folder_name = readable_part(Some(&capture.title), "Untitled Capture");
         let items_root = self
@@ -1475,6 +1505,65 @@ pub struct ExtractedTextCapture {
     pub title: String,
     pub saving_reason: Option<String>,
     pub cleaned_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLinkCapture {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+}
+
+pub trait SourceExtractor {
+    fn extract(&self, request: SourceExtractionRequest) -> SourceExtraction;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceExtractionRequest {
+    pub source_link: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceExtraction {
+    ExtractedText {
+        title: Option<String>,
+        cleaned_text: String,
+    },
+    NeedsManualFallback {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceCaptureResult {
+    Captured(SavedItem),
+    NeedsManualFallback(ManualFallbackPrompt),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualFallbackPrompt {
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    reason: String,
+}
+
+impl ManualFallbackPrompt {
+    pub fn source_link(&self) -> &str {
+        &self.source_link
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn saving_reason(&self) -> Option<&str> {
+        self.saving_reason.as_deref()
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
