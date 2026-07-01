@@ -27,4 +27,4 @@ This slice should provide search through the archive core, expose it through the
 
 ## Comments
 
-Implemented with TDD. Evidence: `crates/archive-core/tests/metadata_search.rs`, `crates/archive-cli/tests/search.rs`, and `apps/desktop/tests/search.rs`. Metadata index rebuilds from canonical item records and collection files, refreshes after newly saved artwork so stale indexes do not hide fresh records, and keeps collection references searchable even when the item-record backreference is missing and derived state has been deleted.
+Implemented with TDD. Evidence: `crates/archive-core/tests/metadata_search.rs`, `crates/archive-cli/tests/search.rs`, and `apps/desktop/tests/search.rs`. Metadata index rebuilds from canonical item records and collection files, refreshes after newly saved artwork so stale indexes do not hide fresh records, finds source URLs and AI summaries, and keeps collection references searchable even when the item-record backreference is missing and derived state has been deleted.

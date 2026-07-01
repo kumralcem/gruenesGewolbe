@@ -2,7 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, CollectionDefinition, Vault};
+use gruenes_gewolbe_core::{
+    AddArtworkItem, AiBudgetMode, AiProvider, AiProviderRequest, AiProviderResponse,
+    CollectionDefinition, ExtractedTextCapture, Vault,
+};
 
 #[test]
 fn metadata_search_rebuilds_from_visible_item_records_after_derived_state_is_deleted() {
@@ -196,6 +199,56 @@ fn metadata_search_rebuilds_collection_references_from_collection_files() {
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn metadata_search_finds_source_links_and_ai_summaries() {
+    let root = temp_path("metadata-search-source-summary-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let captured = vault
+        .capture_extracted_text(ExtractedTextCapture {
+            source_link: "https://example.com/archive-design".to_string(),
+            title: "Archive design source".to_string(),
+            saving_reason: Some("Reference for personal archive design".to_string()),
+            cleaned_text: "Full main content about durable local archives.".to_string(),
+        })
+        .expect("capture extracted text");
+
+    let source_results = vault
+        .search_metadata("example.com/archive-design")
+        .expect("search source URL");
+    assert_eq!(ids(source_results), vec![captured.id().to_string()]);
+
+    let provider = FakeProvider {
+        response: AiProviderResponse {
+            summary: Some("A concise summary about durable archive retrieval.".to_string()),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 1,
+        },
+    };
+    vault
+        .enrich_idea_with_ai(captured.id(), AiBudgetMode::Cheap, &provider)
+        .expect("enrich captured idea");
+
+    let summary_results = vault
+        .search_metadata("durable archive retrieval")
+        .expect("search AI summary");
+    assert_eq!(ids(summary_results), vec![captured.id().to_string()]);
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+}
+
+#[derive(Debug)]
+struct FakeProvider {
+    response: AiProviderResponse,
+}
+
+impl AiProvider for FakeProvider {
+    fn enrich(&self, _request: AiProviderRequest) -> AiProviderResponse {
+        self.response.clone()
+    }
 }
 
 fn ids(results: Vec<gruenes_gewolbe_core::SearchResult>) -> Vec<String> {
