@@ -1,7 +1,8 @@
 use std::sync::Mutex;
 
 use gruenes_gewolbe_desktop::{
-    ActiveVaultView, DesktopStartupView, OpenVaultView, TauriCommandState,
+    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, OpenVaultView, SavedItemView,
+    TauriCommandState, WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Manager, State};
 
@@ -55,6 +56,36 @@ fn cancel_vault_repair(root: String, state: State<'_, CommandState>) -> Result<(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn add_artwork_files(
+    source_files: Vec<String>,
+    state: State<'_, CommandState>,
+) -> Result<Vec<SavedItemView>, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .add_artwork_files(AddArtworkFilesCommand { source_files })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn workbench_snapshot(
+    artwork_sort: String,
+    selected_item_id: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<WorkbenchSnapshotView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort,
+            search_query: None,
+            selected_item_id,
+        })
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -70,7 +101,9 @@ fn main() {
             create_vault,
             open_vault,
             confirm_vault_repair,
-            cancel_vault_repair
+            cancel_vault_repair,
+            add_artwork_files,
+            workbench_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Gruenes Gewoelbe");

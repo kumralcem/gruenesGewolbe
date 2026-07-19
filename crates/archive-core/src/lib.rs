@@ -165,6 +165,33 @@ impl Vault {
         })
     }
 
+    pub fn add_artwork_files(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+    ) -> Result<Vec<SavedItem>, VaultError> {
+        let source_files = source_files.into_iter().collect::<Vec<_>>();
+        for source_file in &source_files {
+            if !is_supported_image_file(source_file) {
+                return Err(VaultError::UnsupportedImageFile(source_file.clone()));
+            }
+        }
+
+        source_files
+            .into_iter()
+            .map(|source_file| {
+                let inferred = infer_artwork_metadata(&source_file);
+                self.add_artwork_item(AddArtworkItem {
+                    source_file,
+                    home_subvault: "Paintings".to_string(),
+                    creator: inferred.creator,
+                    year: inferred.year,
+                    title: inferred.title,
+                    saving_reason: None,
+                })
+            })
+            .collect()
+    }
+
     pub fn import_paintings_folder(
         &self,
         source_folder: impl AsRef<Path>,
@@ -1983,6 +2010,7 @@ pub enum VaultError {
     UnsupportedFormat(PathBuf),
     MissingSourceFile(PathBuf),
     MissingFileName(PathBuf),
+    UnsupportedImageFile(PathBuf),
     MissingImportFolder(PathBuf),
     SavedItemNotFound(String),
     CollectionNotFound(String),
@@ -2033,6 +2061,9 @@ impl fmt::Display for VaultError {
             }
             Self::MissingFileName(path) => {
                 write!(f, "source file has no file name: {}", path.display())
+            }
+            Self::UnsupportedImageFile(path) => {
+                write!(f, "unsupported image file: {}", path.display())
             }
             Self::MissingImportFolder(path) => {
                 write!(f, "import folder does not exist: {}", path.display())

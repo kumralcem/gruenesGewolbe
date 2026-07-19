@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{CollectionDefinition, ManualFallbackCapture, UpdateItemRecord};
+use gruenes_gewolbe_core::{
+    ArtworkSort, CollectionDefinition, ManualFallbackCapture, UpdateItemRecord,
+};
 use gruenes_gewolbe_desktop::{DesktopShell, WorkbenchRequest};
 
 #[test]
@@ -112,6 +114,7 @@ fn desktop_shell_builds_a_first_screen_workbench_snapshot() {
     let snapshot = shell
         .workbench_snapshot(WorkbenchRequest {
             home_subvault: "Paintings".to_string(),
+            artwork_sort: ArtworkSort::Newest,
             search_query: Some("nocturne".to_string()),
             selected_item_id: Some(item_id.clone()),
         })

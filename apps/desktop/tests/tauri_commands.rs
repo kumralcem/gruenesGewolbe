@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_desktop::{
-    CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView, TauriCommandState,
-    WorkbenchSnapshotCommand,
+    AddArtworkFilesCommand, CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView,
+    TauriCommandState, WorkbenchSnapshotCommand,
 };
 
 #[test]
@@ -43,6 +43,7 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
     let snapshot = state
         .workbench_snapshot(WorkbenchSnapshotCommand {
             home_subvault: "Paintings".to_string(),
+            artwork_sort: "newest".to_string(),
             search_query: Some("nocturne".to_string()),
             selected_item_id: Some(imported[0].id.clone()),
         })
@@ -65,6 +66,54 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
     );
 
     fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
+    let root = temp_path("tauri-add-artwork-vault");
+    let source_dir = temp_path("tauri-add-artwork-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let zed = source_dir.join("Zed - 2001 - Amber.jpg");
+    let amy = source_dir.join("Amy - 1999 - Zebra.png");
+    fs::write(&zed, b"damaged jpeg fixture").expect("write first source");
+    fs::write(&amy, b"damaged png fixture").expect("write second source");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+
+    let added = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+        })
+        .expect("add selected artwork files");
+    assert_eq!(added.len(), 2);
+
+    let snapshot = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "title".to_string(),
+            search_query: None,
+            selected_item_id: Some(added[1].id.clone()),
+        })
+        .expect("load sorted gallery");
+
+    assert_eq!(
+        snapshot
+            .artwork_items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Amber", "Zebra"]
+    );
+    assert!(snapshot.artwork_items[0].thumbnail_is_placeholder);
+    assert_eq!(
+        snapshot.selected_item.expect("selected details").title,
+        "Zebra"
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
 }
 

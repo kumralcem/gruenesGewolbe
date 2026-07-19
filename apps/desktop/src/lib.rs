@@ -9,8 +9,8 @@ const LAST_ACTIVE_VAULT_FILE: &str = "last-active-vault.txt";
 const OPENAI_PROVIDER_FILE: &str = "openai-provider.toml";
 
 use gruenes_gewolbe_core::{
-    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem, Collection,
-    CollectionDefinition, ExtractedTextCapture, IdeaSourceListItem, ItemDetails,
+    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem, ArtworkSort,
+    Collection, CollectionDefinition, ExtractedTextCapture, IdeaSourceListItem, ItemDetails,
     ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
     Vault, VaultError, VaultOpen, VaultRepairProposal,
@@ -155,6 +155,19 @@ impl DesktopShell {
             .map_err(DesktopShellError::Vault)
     }
 
+    pub fn add_artwork_files(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+    ) -> Result<Vec<SavedItem>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .add_artwork_files(source_files)
+            .map_err(DesktopShellError::Vault)
+    }
+
     pub fn import_paintings_folder(
         &self,
         source_folder: impl AsRef<Path>,
@@ -248,7 +261,7 @@ impl DesktopShell {
             subvaults: vault.list_subvaults().map_err(DesktopShellError::Vault)?,
             collections: vault.list_collections().map_err(DesktopShellError::Vault)?,
             artwork_items: vault
-                .browse_artwork_items(&request.home_subvault)
+                .browse_artwork_items_sorted(&request.home_subvault, request.artwork_sort)
                 .map_err(DesktopShellError::Vault)?,
             idea_sources: vault
                 .browse_idea_sources()
@@ -490,6 +503,7 @@ impl DesktopShell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbenchRequest {
     pub home_subvault: String,
+    pub artwork_sort: ArtworkSort,
     pub search_query: Option<String>,
     pub selected_item_id: Option<String>,
 }
@@ -592,6 +606,15 @@ impl TauriCommandState {
             .map(|items| items.into_iter().map(SavedItemView::from).collect())
     }
 
+    pub fn add_artwork_files(
+        &self,
+        command: AddArtworkFilesCommand,
+    ) -> Result<Vec<SavedItemView>, DesktopShellError> {
+        self.shell
+            .add_artwork_files(command.source_files.into_iter().map(PathBuf::from))
+            .map(|items| items.into_iter().map(SavedItemView::from).collect())
+    }
+
     pub fn capture_idea(
         &self,
         command: CaptureIdeaCommand,
@@ -611,9 +634,11 @@ impl TauriCommandState {
         &self,
         command: WorkbenchSnapshotCommand,
     ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
+        let artwork_sort = parse_artwork_sort(&command.artwork_sort)?;
         self.shell
             .workbench_snapshot(WorkbenchRequest {
                 home_subvault: command.home_subvault,
+                artwork_sort,
                 search_query: command.search_query,
                 selected_item_id: command.selected_item_id,
             })
@@ -627,6 +652,11 @@ pub struct ImportPaintingsCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddArtworkFilesCommand {
+    pub source_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureIdeaCommand {
     pub source_link: String,
     pub title: String,
@@ -637,6 +667,7 @@ pub struct CaptureIdeaCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbenchSnapshotCommand {
     pub home_subvault: String,
+    pub artwork_sort: String,
     pub search_query: Option<String>,
     pub selected_item_id: Option<String>,
 }
@@ -729,7 +760,7 @@ impl From<DesktopStartup> for DesktopStartupView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SavedItemView {
     pub id: String,
     pub home_subvault: String,
@@ -746,7 +777,7 @@ impl From<SavedItem> for SavedItemView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CollectionView {
     pub id: String,
     pub name: String,
@@ -761,7 +792,7 @@ impl From<&Collection> for CollectionView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ArtworkGridItemView {
     pub id: String,
     pub title: String,
@@ -769,6 +800,7 @@ pub struct ArtworkGridItemView {
     pub year: String,
     pub primary_file: String,
     pub thumbnail_file: String,
+    pub thumbnail_is_placeholder: bool,
     pub review_status: String,
 }
 
@@ -781,12 +813,13 @@ impl From<&ArtworkGridItem> for ArtworkGridItemView {
             year: item.year().to_string(),
             primary_file: path_string(item.primary_file()),
             thumbnail_file: path_string(item.thumbnail_file()),
+            thumbnail_is_placeholder: item.thumbnail_is_placeholder(),
             review_status: item.review_status().to_string(),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IdeaSourceItemView {
     pub id: String,
     pub title: String,
@@ -809,7 +842,7 @@ impl From<&IdeaSourceListItem> for IdeaSourceItemView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewQueueItemView {
     pub id: String,
     pub home_subvault: String,
@@ -832,7 +865,7 @@ impl From<&ReviewQueueItem> for ReviewQueueItemView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SearchResultView {
     pub id: String,
     pub home_subvault: String,
@@ -847,7 +880,7 @@ impl From<&SearchResult> for SearchResultView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ItemDetailsView {
     pub id: String,
     pub home_subvault: String,
@@ -890,7 +923,7 @@ impl From<&ItemDetails> for ItemDetailsView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WorkbenchSnapshotView {
     pub active_vault: ActiveVaultView,
     pub subvaults: Vec<String>,
@@ -1021,6 +1054,7 @@ pub enum DesktopShellError {
     NoPendingVaultRepair(PathBuf),
     AppStateNotConfigured,
     MalformedProviderConfig(PathBuf),
+    UnsupportedArtworkSort(String),
     Io(io::Error),
     Vault(VaultError),
 }
@@ -1036,6 +1070,7 @@ impl std::fmt::Display for DesktopShellError {
             Self::MalformedProviderConfig(path) => {
                 write!(f, "provider config is malformed: {}", path.display())
             }
+            Self::UnsupportedArtworkSort(sort) => write!(f, "unsupported artwork sort: {sort}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::Vault(error) => write!(f, "{error}"),
         }
@@ -1049,6 +1084,7 @@ impl std::error::Error for DesktopShellError {
             Self::NoPendingVaultRepair(_) => None,
             Self::AppStateNotConfigured => None,
             Self::MalformedProviderConfig(_) => None,
+            Self::UnsupportedArtworkSort(_) => None,
             Self::Io(error) => Some(error),
             Self::Vault(error) => Some(error),
         }
@@ -1089,6 +1125,17 @@ fn escape_toml_string(value: &str) -> String {
 
 fn path_string(path: &Path) -> String {
     path.display().to_string()
+}
+
+fn parse_artwork_sort(sort: &str) -> Result<ArtworkSort, DesktopShellError> {
+    match sort {
+        "newest" => Ok(ArtworkSort::Newest),
+        "oldest" => Ok(ArtworkSort::Oldest),
+        "title" => Ok(ArtworkSort::Title),
+        "creator" => Ok(ArtworkSort::Creator),
+        "year" => Ok(ArtworkSort::Year),
+        _ => Err(DesktopShellError::UnsupportedArtworkSort(sort.to_string())),
+    }
 }
 
 fn read_known_vault_roots(app_state_dir: &Path) -> io::Result<Vec<PathBuf>> {

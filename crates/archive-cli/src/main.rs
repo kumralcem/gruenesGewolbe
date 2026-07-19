@@ -62,6 +62,31 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 imported.len()
             ))
         }
+        "add-files" => {
+            let [vault_path, source_files @ ..] = rest else {
+                return Err(usage());
+            };
+            if source_files.is_empty() {
+                return Err(usage());
+            }
+            let vault =
+                Vault::open(PathBuf::from(vault_path)).map_err(|error| error.to_string())?;
+            let added = vault
+                .add_artwork_files(source_files.iter().map(PathBuf::from))
+                .map_err(|error| error.to_string())?;
+            Ok(added
+                .into_iter()
+                .map(|item| {
+                    format!(
+                        "added-artwork\t{}\t{}\t{}",
+                        item.id(),
+                        cli_field(item.home_subvault()),
+                        cli_field(&item.item_folder().display().to_string())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
         "rebuild-index" => {
             let [vault_path] = rest else {
                 return Err(usage());
@@ -163,7 +188,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index> <vault-path> | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
+    "usage: ggvault <create|open|validate|rebuild-index> <vault-path> | ggvault add-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
         .to_string()
 }
 

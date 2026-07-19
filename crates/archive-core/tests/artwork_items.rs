@@ -150,6 +150,42 @@ fn artwork_item_record_has_parseable_structured_frontmatter() {
     fs::remove_dir_all(&source_dir).expect("clean source directory");
 }
 
+#[test]
+fn user_can_add_several_selected_image_files_with_filename_metadata() {
+    let root = temp_path("selected-artwork-files");
+    let source_dir = temp_path("selected-artwork-sources");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let first = source_dir.join("Jane Painter - 1884 - Nocturne.jpg");
+    let second = source_dir.join("mystery.png");
+    image::RgbImage::from_pixel(6, 4, image::Rgb([20, 40, 60]))
+        .save(&first)
+        .expect("write first image");
+    image::RgbImage::from_pixel(4, 6, image::Rgb([60, 40, 20]))
+        .save(&second)
+        .expect("write second image");
+    let vault = Vault::create(&root).expect("create vault");
+
+    let saved = vault
+        .add_artwork_files([first.clone(), second.clone()])
+        .expect("add selected files");
+
+    assert_eq!(saved.len(), 2);
+    let known = vault.item_details(saved[0].id()).expect("read known item");
+    assert_eq!(known.creator(), "Jane Painter");
+    assert_eq!(known.year(), "1884");
+    assert_eq!(known.title(), "Nocturne");
+    assert_eq!(known.import_source_path(), Some(first.as_path()));
+    let mystery = vault
+        .item_details(saved[1].id())
+        .expect("read mystery item");
+    assert_eq!(mystery.creator(), "Unknown Creator");
+    assert_eq!(mystery.title(), "mystery");
+    assert_eq!(mystery.import_source_path(), Some(second.as_path()));
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
 fn temp_path(name: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
