@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::Vault;
+use gruenes_gewolbe_core::{Vault, VaultOpen};
 
 #[test]
 fn user_can_create_a_vault_as_ordinary_files_and_reopen_it() {
@@ -83,6 +83,122 @@ fn validation_reports_clear_errors_for_invalid_vault_folders() {
     );
 
     fs::remove_dir_all(&root).expect("clean invalid root");
+}
+
+#[test]
+fn opening_a_recognizable_incomplete_vault_proposes_missing_structure_without_changing_it() {
+    let root = temp_path("repair-proposal");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write valid config");
+
+    let outcome = Vault::open_or_repair(&root).expect("inspect incomplete vault");
+    let VaultOpen::RepairRequired(proposal) = outcome else {
+        panic!("missing structure should require repair");
+    };
+
+    assert_eq!(proposal.root(), root.as_path());
+    assert_eq!(
+        proposal.directories(),
+        &[root.join("subvaults"), root.join("collections")]
+    );
+    assert!(!root.join("subvaults").exists());
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean incomplete vault");
+}
+
+#[test]
+fn confirming_repair_creates_only_missing_structure_and_opens_the_vault() {
+    let root = temp_path("confirmed-repair");
+    let record_path = root
+        .join("subvaults")
+        .join("Paintings")
+        .join("items")
+        .join("Damaged Record")
+        .join("record.md");
+    fs::create_dir_all(record_path.parent().expect("record parent"))
+        .expect("create existing item structure");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write valid config");
+    fs::write(&record_path, b"not valid frontmatter\nkeep these bytes\n")
+        .expect("write malformed item record");
+
+    let VaultOpen::RepairRequired(proposal) =
+        Vault::open_or_repair(&root).expect("inspect incomplete vault")
+    else {
+        panic!("missing collections should require repair");
+    };
+    assert_eq!(proposal.directories(), &[root.join("collections")]);
+
+    let repaired = proposal.confirm().expect("confirm safe repair");
+
+    assert_eq!(repaired.root(), root.as_path());
+    assert!(root.join("collections").is_dir());
+    assert!(!root.join(".gruenesgewolbe").exists());
+    assert_eq!(
+        fs::read(&record_path).expect("read malformed record after repair"),
+        b"not valid frontmatter\nkeep these bytes\n"
+    );
+
+    fs::remove_dir_all(&root).expect("clean repaired vault");
+}
+
+#[test]
+fn opening_rejects_structural_conflicts_instead_of_proposing_repair() {
+    let root = temp_path("unsafe-repair");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write valid config");
+    fs::write(root.join("subvaults"), b"canonical content")
+        .expect("write conflicting canonical file");
+
+    let error = Vault::open_or_repair(&root).expect_err("structural conflict should fail");
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "required vault directory conflicts with an existing file: {}",
+            root.join("subvaults").display()
+        )
+    );
+    assert_eq!(
+        fs::read(root.join("subvaults")).expect("read conflicting file"),
+        b"canonical content"
+    );
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean conflicting vault");
+}
+
+#[test]
+fn opening_rejects_invalid_configuration_without_proposing_or_creating_structure() {
+    let root = temp_path("invalid-repair");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(root.join("vault.toml"), "name = \"Unversioned\"\n").expect("write invalid config");
+
+    let error = Vault::open_or_repair(&root).expect_err("invalid config should fail");
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "vault config has an unsupported format: {}",
+            root.join("vault.toml").display()
+        )
+    );
+    assert!(!root.join("subvaults").exists());
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean invalid vault");
 }
 
 fn temp_path(name: &str) -> PathBuf {

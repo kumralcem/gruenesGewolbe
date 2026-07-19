@@ -46,6 +46,23 @@ impl Vault {
         })
     }
 
+    pub fn open_or_repair(root: impl AsRef<Path>) -> Result<VaultOpen, VaultError> {
+        let root = root.as_ref();
+        validate_vault_config(root)?;
+        let directories = missing_repairable_directories(root)?;
+
+        if directories.is_empty() {
+            return Ok(VaultOpen::Opened(Self {
+                root: root.to_path_buf(),
+            }));
+        }
+
+        Ok(VaultOpen::RepairRequired(VaultRepairProposal {
+            root: root.to_path_buf(),
+            directories,
+        }))
+    }
+
     pub fn validate(root: impl AsRef<Path>) -> Result<(), VaultError> {
         validate_vault_root(root.as_ref())
     }
@@ -1154,6 +1171,40 @@ impl Vault {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultOpen {
+    Opened(Vault),
+    RepairRequired(VaultRepairProposal),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultRepairProposal {
+    root: PathBuf,
+    directories: Vec<PathBuf>,
+}
+
+impl VaultRepairProposal {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn directories(&self) -> &[PathBuf] {
+        &self.directories
+    }
+
+    pub fn confirm(self) -> Result<Vault, VaultError> {
+        validate_vault_config(&self.root)?;
+        let current_directories = missing_repairable_directories(&self.root)?;
+        if current_directories != self.directories {
+            return Err(VaultError::RepairProposalChanged(self.root));
+        }
+        for directory in self.directories {
+            fs::create_dir(&directory)?;
+        }
+        Vault::open(self.root)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtworkGridItem {
     saved_item: SavedItem,
     title: String,
@@ -1747,6 +1798,8 @@ pub enum VaultError {
     MissingConfig(PathBuf),
     MissingSubvaults(PathBuf),
     MissingCollections(PathBuf),
+    StructuralConflict(PathBuf),
+    RepairProposalChanged(PathBuf),
     UnsupportedFormat(PathBuf),
     MissingSourceFile(PathBuf),
     MissingFileName(PathBuf),
@@ -1773,6 +1826,16 @@ impl fmt::Display for VaultError {
             Self::MissingCollections(path) => {
                 write!(f, "collections directory is missing: {}", path.display())
             }
+            Self::StructuralConflict(path) => write!(
+                f,
+                "required vault directory conflicts with an existing file: {}",
+                path.display()
+            ),
+            Self::RepairProposalChanged(path) => write!(
+                f,
+                "vault structure changed after repair was proposed: {}",
+                path.display()
+            ),
             Self::UnsupportedFormat(path) => {
                 write!(
                     f,
@@ -1814,6 +1877,22 @@ impl From<io::Error> for VaultError {
 }
 
 fn validate_vault_root(root: &Path) -> Result<(), VaultError> {
+    validate_vault_config(root)?;
+
+    let subvaults_path = root.join(SUBVAULTS_DIR);
+    if !subvaults_path.is_dir() {
+        return Err(VaultError::MissingSubvaults(subvaults_path));
+    }
+
+    let collections_path = root.join(COLLECTIONS_DIR);
+    if !collections_path.is_dir() {
+        return Err(VaultError::MissingCollections(collections_path));
+    }
+
+    Ok(())
+}
+
+fn validate_vault_config(root: &Path) -> Result<(), VaultError> {
     if !root.exists() {
         return Err(VaultError::MissingRoot(root.to_path_buf()));
     }
@@ -1831,17 +1910,22 @@ fn validate_vault_root(root: &Path) -> Result<(), VaultError> {
         return Err(VaultError::UnsupportedFormat(config_path));
     }
 
-    let subvaults_path = root.join(SUBVAULTS_DIR);
-    if !subvaults_path.is_dir() {
-        return Err(VaultError::MissingSubvaults(subvaults_path));
-    }
-
-    let collections_path = root.join(COLLECTIONS_DIR);
-    if !collections_path.is_dir() {
-        return Err(VaultError::MissingCollections(collections_path));
-    }
-
     Ok(())
+}
+
+fn missing_repairable_directories(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
+    let mut missing = Vec::new();
+    for directory in [SUBVAULTS_DIR, COLLECTIONS_DIR] {
+        let path = root.join(directory);
+        if path.is_dir() {
+            continue;
+        }
+        if path.exists() {
+            return Err(VaultError::StructuralConflict(path));
+        }
+        missing.push(path);
+    }
+    Ok(missing)
 }
 
 fn default_config() -> String {
