@@ -107,7 +107,7 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
-        self.preserve_artwork_item(item, true, None)
+        self.preserve_artwork_item(item, true, &[])
             .map(|outcome| outcome.saved_item)
     }
 
@@ -115,7 +115,7 @@ impl Vault {
         &self,
         item: AddArtworkItem,
         refresh_metadata_index: bool,
-        excluded_duplicate_candidate_id: Option<&str>,
+        excluded_duplicate_candidate_ids: &[String],
     ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
@@ -153,7 +153,7 @@ impl Vault {
             Some(item.title.as_str()),
             Some(&item.source_file),
             None,
-            excluded_duplicate_candidate_id,
+            excluded_duplicate_candidate_ids,
         )?;
         let primary_file = format!("files/{}", file_name.to_string_lossy());
         let record = artwork_record(
@@ -337,7 +337,7 @@ impl Vault {
             };
             vault_problems.extend(duplicate_check.vault_problems);
             if options.exact_duplicate_policy == ExactDuplicatePolicy::Skip {
-                if let Some(existing_item_id) = duplicate_check.existing_item_id.as_ref() {
+                if let Some(existing_item_id) = duplicate_check.existing_item_ids.first() {
                     skipped_entries.push(ImportSkippedEntry {
                         path: source_file.clone(),
                         reason: ImportSkipReason::ExactFileDuplicate {
@@ -350,7 +350,7 @@ impl Vault {
             match self.preserve_artwork_item(
                 inferred_artwork_item(source_file.clone(), &options.metadata),
                 false,
-                duplicate_check.existing_item_id.as_deref(),
+                &duplicate_check.existing_item_ids,
             ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
@@ -504,7 +504,7 @@ impl Vault {
             Some(capture.title.as_str()),
             None,
             Some(capture.source_link.as_str()),
-            None,
+            &[],
         )?;
         let id = new_item_id();
         let record = idea_source_record(
@@ -1190,7 +1190,7 @@ impl Vault {
         title: Option<&str>,
         source_path: Option<&Path>,
         source_link: Option<&str>,
-        excluded_candidate_id: Option<&str>,
+        excluded_candidate_ids: &[String],
     ) -> Result<Vec<DuplicateCandidate>, VaultError> {
         let mut candidates = Vec::new();
         for record in self.item_record_entries()? {
@@ -1200,7 +1200,10 @@ impl Vault {
             let Some(id) = frontmatter_value(&text, "id") else {
                 continue;
             };
-            if excluded_candidate_id == Some(id.as_str()) {
+            if excluded_candidate_ids
+                .iter()
+                .any(|excluded| excluded == &id)
+            {
                 continue;
             }
 
@@ -1247,7 +1250,7 @@ impl Vault {
         let incoming_fingerprint = file_fingerprint(source_file)?;
         let incoming_bytes = fs::read(source_file)?;
         let mut vault_problems = Vec::new();
-        let mut existing_item_id = None;
+        let mut existing_item_ids = Vec::new();
         for record in self.item_record_entries()? {
             let text = match fs::read_to_string(&record.record_path) {
                 Ok(text) => text,
@@ -1312,9 +1315,7 @@ impl Vault {
             }
             match fs::read(&preserved_path) {
                 Ok(existing_bytes) if existing_bytes == incoming_bytes => {
-                    if existing_item_id.is_none() {
-                        existing_item_id = Some(id);
-                    }
+                    existing_item_ids.push(id);
                 }
                 Ok(_) => {}
                 Err(error) => vault_problems.push(ImportVaultProblem {
@@ -1324,7 +1325,7 @@ impl Vault {
             }
         }
         Ok(ExactDuplicateCheck {
-            existing_item_id,
+            existing_item_ids,
             vault_problems,
         })
     }
@@ -1663,7 +1664,7 @@ struct PreservedArtwork {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExactDuplicateCheck {
-    existing_item_id: Option<String>,
+    existing_item_ids: Vec<String>,
     vault_problems: Vec<ImportVaultProblem>,
 }
 

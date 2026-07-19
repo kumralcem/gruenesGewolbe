@@ -414,12 +414,25 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
     assert_eq!(summary.imported_count(), 1);
     assert_eq!(summary.exact_duplicate_count(), 0);
     assert_eq!(summary.duplicate_candidate_count(), 0);
+
+    let repeated_summary = vault
+        .run_paintings_import_with_options(
+            &source,
+            ImportRunOptions {
+                exact_duplicate_policy: ExactDuplicatePolicy::ImportAnyway,
+                ..ImportRunOptions::default()
+            },
+            |_| ImportRunAction::Continue,
+        )
+        .expect("import around multiple approved exact copies");
+    assert_eq!(repeated_summary.imported_count(), 1);
+    assert_eq!(repeated_summary.duplicate_candidate_count(), 0);
     assert_eq!(
         vault
             .browse_artwork_items("Paintings")
             .expect("browse paintings")
             .len(),
-        2
+        3
     );
 
     fs::remove_dir_all(&root).expect("clean vault");
