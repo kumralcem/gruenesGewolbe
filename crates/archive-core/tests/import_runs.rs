@@ -416,6 +416,7 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
 
     assert_eq!(summary.imported_count(), 1);
     assert_eq!(summary.exact_duplicate_count(), 0);
+    assert_eq!(summary.duplicate_candidate_count(), 0);
     assert_eq!(
         vault
             .browse_artwork_items("Paintings")
@@ -423,6 +424,55 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
             .len(),
         2
     );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+    fs::remove_dir_all(&existing_source).expect("clean existing source");
+}
+
+#[test]
+fn exact_duplicate_check_uses_the_durable_preserved_file_not_the_current_primary_file() {
+    let root = temp_path("preserved-file-identity-vault");
+    let source = temp_path("preserved-file-identity-source");
+    let existing_source = temp_path("preserved-file-identity-existing");
+    fs::create_dir_all(&source).expect("create import source");
+    fs::create_dir_all(&existing_source).expect("create existing source");
+    let incoming = source.join("incoming.png");
+    fs::write(&incoming, b"original bytes").expect("write incoming file");
+    let existing_file = existing_source.join("existing.png");
+    fs::write(&existing_file, b"original bytes").expect("write existing file");
+
+    let vault = Vault::create(&root).expect("create vault");
+    let existing = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: existing_file,
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Existing".to_string(),
+            saving_reason: None,
+        })
+        .expect("save existing item");
+    let alternate = existing.item_folder().join("files/alternate.png");
+    fs::write(&alternate, b"different primary bytes").expect("write alternate primary");
+    let record_path = existing.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).expect("read record");
+    fs::write(
+        &record_path,
+        record.replace(
+            "primary_file: files/existing.png",
+            "primary_file: files/alternate.png",
+        ),
+    )
+    .expect("change current primary file");
+
+    let summary = vault
+        .run_paintings_import(&source, |_| ImportRunAction::Continue)
+        .expect("run import");
+
+    assert_eq!(summary.imported_count(), 0);
+    assert_eq!(summary.exact_duplicate_count(), 1);
+    assert_eq!(summary.vault_problems().len(), 0);
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");

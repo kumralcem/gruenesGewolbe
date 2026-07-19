@@ -107,7 +107,7 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
-        self.preserve_artwork_item(item, true)
+        self.preserve_artwork_item(item, true, false)
             .map(|outcome| outcome.saved_item)
     }
 
@@ -115,6 +115,7 @@ impl Vault {
         &self,
         item: AddArtworkItem,
         refresh_metadata_index: bool,
+        suppress_fingerprint_candidates: bool,
     ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
@@ -146,7 +147,7 @@ impl Vault {
         let id = new_item_id();
         let file_fingerprint = file_fingerprint(&item.source_file)?;
         let duplicate_candidates = self.duplicate_candidates_for_artwork(
-            Some(&file_fingerprint),
+            (!suppress_fingerprint_candidates).then_some(file_fingerprint.as_str()),
             item.creator.as_deref(),
             item.year.as_deref(),
             Some(item.title.as_str()),
@@ -334,6 +335,7 @@ impl Vault {
                 }
             };
             vault_problems.extend(duplicate_check.vault_problems);
+            let is_exact_duplicate = duplicate_check.existing_item_id.is_some();
             if options.exact_duplicate_policy == ExactDuplicatePolicy::Skip {
                 if let Some(existing_item_id) = duplicate_check.existing_item_id {
                     skipped_entries.push(ImportSkippedEntry {
@@ -346,6 +348,7 @@ impl Vault {
             match self.preserve_artwork_item(
                 inferred_artwork_item(source_file.clone(), &options.metadata),
                 false,
+                is_exact_duplicate,
             ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
@@ -1267,14 +1270,23 @@ impl Vault {
                 });
                 continue;
             };
-            let Some(primary_file) = frontmatter_value(&text, "primary_file") else {
+            let Some(original_filename) = frontmatter_value(&text, "import_original_filename")
+            else {
                 vault_problems.push(ImportVaultProblem {
                     path: record.record_path.clone(),
-                    error: "missing primary file".to_string(),
+                    error: "missing preserved-file provenance".to_string(),
                 });
                 continue;
             };
-            let preserved_path = record.item_folder.join(primary_file);
+            let original_path = Path::new(&original_filename);
+            if original_path.file_name() != Some(original_path.as_os_str()) {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "invalid preserved-file provenance".to_string(),
+                });
+                continue;
+            }
+            let preserved_path = record.item_folder.join("files").join(original_path);
             match fs::read(&preserved_path) {
                 Ok(existing_bytes) if existing_bytes == incoming_bytes => {
                     return Ok(ExactDuplicateCheck {
