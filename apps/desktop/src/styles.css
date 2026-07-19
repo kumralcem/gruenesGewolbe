@@ -363,6 +363,186 @@ button:disabled {
   border-color: #e7b6b1;
 }
 
+.artwork-workspace {
+  width: 100%;
+  min-height: 100%;
+  align-self: stretch;
+}
+
+.artwork-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #e2e7e4;
+}
+
+.artwork-actions {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.sort-control {
+  display: grid;
+  gap: 5px;
+  color: #59645f;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sort-control select {
+  min-width: 126px;
+  height: 38px;
+  padding: 0 30px 0 10px;
+  color: #33413b;
+  background: #fff;
+  border: 1px solid #c5cec9;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 13px;
+  text-transform: none;
+}
+
+.artwork-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  padding-top: 24px;
+}
+
+.artwork-content.has-selection {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+}
+
+.artwork-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  align-content: start;
+  gap: 16px;
+}
+
+.gallery-empty {
+  grid-column: 1 / -1;
+  margin: 40px 0;
+  color: #6d7772;
+  text-align: center;
+}
+
+.artwork-card {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  color: #202724;
+  background: #fff;
+  border: 1px solid #d8dfdb;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.artwork-card:hover,
+.artwork-card.is-selected {
+  border-color: #176b4d;
+  box-shadow: 0 0 0 1px #176b4d;
+}
+
+.artwork-preview {
+  aspect-ratio: 4 / 3;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #edf1ef;
+}
+
+.artwork-preview.is-placeholder {
+  background: #f3ead8;
+}
+
+.artwork-preview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.artwork-caption {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px 12px;
+}
+
+.artwork-caption strong,
+.artwork-caption small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artwork-caption strong {
+  font-size: 14px;
+}
+
+.artwork-caption small {
+  color: #6d7772;
+  font-size: 12px;
+}
+
+.artwork-details {
+  align-self: start;
+  padding: 18px;
+  background: #f7f9f8;
+  border: 1px solid #d8dfdb;
+  border-radius: 7px;
+}
+
+.preserved-file {
+  width: 100%;
+  max-height: 320px;
+  display: block;
+  margin-bottom: 18px;
+  object-fit: contain;
+  background: #e9eeeb;
+  border-radius: 4px;
+}
+
+.artwork-details .detail-byline {
+  margin: 7px 0 20px;
+  color: #65706b;
+}
+
+.artwork-details dl {
+  display: grid;
+  gap: 11px;
+  margin: 0;
+}
+
+.artwork-details dl div {
+  display: grid;
+  gap: 3px;
+}
+
+.artwork-details dt {
+  color: #6d7772;
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.artwork-details dd {
+  margin: 0;
+  color: #303a35;
+  font-size: 13px;
+}
+
+.artwork-details .file-path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
 @media (max-width: 720px) {
   .app-shell {
     grid-template-rows: auto minmax(0, 1fr);
@@ -428,6 +608,16 @@ button:disabled {
 
   .workspace {
     padding: 72px 18px 24px;
+  }
+
+  .artwork-toolbar,
+  .artwork-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .artwork-content.has-selection {
+    grid-template-columns: 1fr;
   }
 
   .workspace h2 {

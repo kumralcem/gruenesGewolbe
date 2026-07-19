@@ -9,14 +9,18 @@ import {
 
 import type {
   ActiveVault,
+  ArtworkSort,
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
+  WorkbenchSnapshot,
 } from "./contracts";
 
 interface AppState extends DesktopStartup {
   busy: boolean;
   error: string | null;
+  artwork_sort: ArtworkSort;
+  workbench_snapshot: WorkbenchSnapshot | null;
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
@@ -27,10 +31,12 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     notice: null,
     busy: true,
     error: null,
+    artwork_sort: "newest",
+    workbench_snapshot: null,
   };
 
   const render = () => {
-    root.innerHTML = pageTemplate(state);
+    root.innerHTML = pageTemplate(state, adapter);
     createIcons({
       icons: { Archive, CircleAlert, FolderOpen, FolderPlus, Vault },
       attrs: { "aria-hidden": "true", width: 18, height: 18 },
@@ -43,7 +49,19 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
 
   render();
   try {
-    state = { ...(await adapter.startup()), busy: false, error: null };
+    state = {
+      ...(await adapter.startup()),
+      busy: false,
+      error: null,
+      artwork_sort: "newest",
+      workbench_snapshot: null,
+    };
+    if (state.active_vault && adapter.workbenchSnapshot) {
+      state = {
+        ...state,
+        workbench_snapshot: await adapter.workbenchSnapshot("newest", null),
+      };
+    }
   } catch (error) {
     state = { ...state, busy: false, error: errorMessage(error) };
   }
@@ -74,7 +92,7 @@ function bindActions(
   root.querySelector<HTMLButtonElement>("[data-repair-confirm]")?.addEventListener("click", async () => {
     const proposal = state.repair_proposal;
     if (!proposal) return;
-    await activateVault(() => adapter.confirmVaultRepair(proposal.root), state, update);
+    await activateVault(() => adapter.confirmVaultRepair(proposal.root), adapter, state, update);
   });
 
   root.querySelector<HTMLButtonElement>("[data-repair-cancel]")?.addEventListener("click", async () => {
@@ -87,6 +105,35 @@ function bindActions(
     } catch (error) {
       await update({ ...state, busy: false, error: errorMessage(error) });
     }
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-add-artwork]")?.addEventListener("click", async () => {
+    if (!adapter.selectArtworkFiles || !adapter.addArtworkFiles) return;
+    await update({ ...state, busy: true, error: null });
+    try {
+      const sourceFiles = await adapter.selectArtworkFiles();
+      if (sourceFiles.length === 0) {
+        await update({ ...state, busy: false, error: null });
+        return;
+      }
+      await adapter.addArtworkFiles(sourceFiles);
+      await refreshWorkbench(adapter, state, update, state.artwork_sort, null);
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
+  });
+
+  root.querySelector<HTMLSelectElement>("[data-artwork-sort]")?.addEventListener("change", async (event) => {
+    const sort = (event.currentTarget as HTMLSelectElement).value as ArtworkSort;
+    await refreshWorkbench(adapter, state, update, sort, state.workbench_snapshot?.selected_item?.id ?? null);
+  });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-artwork-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const itemId = button.dataset.artworkId;
+      if (!itemId) return;
+      await refreshWorkbench(adapter, state, update, state.artwork_sort, itemId);
+    });
   });
 }
 
@@ -106,7 +153,7 @@ async function chooseVault(
   if (!selected) return;
 
   if (purpose === "create") {
-    await activateVault(() => adapter.createVault(selected), state, update);
+    await activateVault(() => adapter.createVault(selected), adapter, state, update);
   } else {
     await openVault(selected, adapter, state, update);
   }
@@ -130,7 +177,7 @@ async function openVault(
       });
       return;
     }
-    await activateOpenedVault(result.vault, state, update);
+    await activateOpenedVault(result.vault, adapter, state, update);
   } catch (error) {
     await update({ ...state, busy: false, error: errorMessage(error) });
   }
@@ -138,13 +185,14 @@ async function openVault(
 
 async function activateVault(
   operation: () => Promise<ActiveVault>,
+  adapter: DesktopAdapter,
   state: AppState,
   update: (state: AppState) => Promise<void>,
 ): Promise<void> {
   await update({ ...state, busy: true, error: null });
   try {
     const activeVault = await operation();
-    await activateOpenedVault(activeVault, state, update);
+    await activateOpenedVault(activeVault, adapter, state, update);
   } catch (error) {
     await update({ ...state, busy: false, error: errorMessage(error) });
   }
@@ -152,13 +200,14 @@ async function activateVault(
 
 async function activateOpenedVault(
   activeVault: ActiveVault,
+  adapter: DesktopAdapter,
   state: AppState,
   update: (state: AppState) => Promise<void>,
 ): Promise<void> {
   const knownVaults = state.known_vaults.some((vault) => vault.root === activeVault.root)
     ? state.known_vaults
     : [...state.known_vaults, activeVault];
-  await update({
+  let nextState: AppState = {
     ...state,
     active_vault: activeVault,
     known_vaults: knownVaults,
@@ -166,10 +215,40 @@ async function activateOpenedVault(
     notice: null,
     busy: false,
     error: null,
-  });
+  };
+  if (adapter.workbenchSnapshot) {
+    nextState = {
+      ...nextState,
+      workbench_snapshot: await adapter.workbenchSnapshot(nextState.artwork_sort, null),
+    };
+  }
+  await update(nextState);
 }
 
-function pageTemplate(state: AppState): string {
+async function refreshWorkbench(
+  adapter: DesktopAdapter,
+  state: AppState,
+  update: (state: AppState) => Promise<void>,
+  sort: ArtworkSort,
+  selectedItemId: string | null,
+): Promise<void> {
+  if (!adapter.workbenchSnapshot) return;
+  await update({ ...state, artwork_sort: sort, busy: true, error: null });
+  try {
+    const snapshot = await adapter.workbenchSnapshot(sort, selectedItemId);
+    await update({
+      ...state,
+      artwork_sort: sort,
+      workbench_snapshot: snapshot,
+      busy: false,
+      error: null,
+    });
+  } catch (error) {
+    await update({ ...state, artwork_sort: sort, busy: false, error: errorMessage(error) });
+  }
+}
+
+function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
   return `
     <div class="app-shell" aria-busy="${state.busy}">
       <header class="app-bar">
@@ -206,7 +285,15 @@ function pageTemplate(state: AppState): string {
 
         <main class="workspace" aria-live="polite">
           ${messageTemplate(state)}
-          ${state.repair_proposal ? repairVaultTemplate(state) : state.active_vault ? activeVaultTemplate(state.active_vault) : emptyVaultTemplate(state.busy)}
+          ${
+            state.repair_proposal
+              ? repairVaultTemplate(state)
+              : state.active_vault && state.workbench_snapshot
+                ? artworkWorkbenchTemplate(state, adapter)
+                : state.active_vault
+                  ? activeVaultTemplate(state.active_vault)
+                  : emptyVaultTemplate(state.busy)
+          }
         </main>
       </div>
     </div>
@@ -231,6 +318,91 @@ function repairVaultTemplate(state: AppState): string {
       </div>
     </section>
   `;
+}
+
+function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): string {
+  const snapshot = state.workbench_snapshot;
+  if (!snapshot) return "";
+  const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
+  const selected = snapshot.selected_item;
+
+  return `
+    <section class="artwork-workspace">
+      <header class="artwork-toolbar">
+        <div>
+          <p class="eyebrow">Artwork archive</p>
+          <h2>Paintings</h2>
+        </div>
+        <div class="artwork-actions">
+          <label class="sort-control">
+            <span>Sort artwork</span>
+            <select aria-label="Sort artwork" data-artwork-sort ${state.busy ? "disabled" : ""}>
+              ${sortOption("newest", "Newest", state.artwork_sort)}
+              ${sortOption("oldest", "Oldest", state.artwork_sort)}
+              ${sortOption("title", "Title", state.artwork_sort)}
+              ${sortOption("creator", "Creator", state.artwork_sort)}
+              ${sortOption("year", "Year", state.artwork_sort)}
+            </select>
+          </label>
+          <button class="primary-button" type="button" data-add-artwork ${state.busy || !adapter.addArtworkFiles || !adapter.selectArtworkFiles ? "disabled" : ""}>
+            <i data-lucide="folder-plus"></i>Add Artwork
+          </button>
+        </div>
+      </header>
+
+      <div class="artwork-content ${selected ? "has-selection" : ""}">
+        <div class="artwork-gallery" aria-label="Artwork gallery">
+          ${
+            snapshot.artwork_items.length === 0
+              ? '<p class="gallery-empty">No artwork saved yet. Add one or more image files to begin.</p>'
+              : snapshot.artwork_items
+                  .map(
+                    (item) => `
+                      <button class="artwork-card ${selected?.id === item.id ? "is-selected" : ""}" type="button"
+                        data-artwork-id="${escapeHtml(item.id)}" ${state.busy ? "disabled" : ""}>
+                        <span class="artwork-preview ${item.thumbnail_is_placeholder ? "is-placeholder" : ""}">
+                          <img src="${fileUrl(item.thumbnail_file)}" alt="${escapeHtml(item.title)}">
+                        </span>
+                        <span class="artwork-caption">
+                          <strong>${escapeHtml(item.title)}</strong>
+                          <small>${escapeHtml(metadataLine(item.creator, item.year))}</small>
+                        </span>
+                      </button>
+                    `,
+                  )
+                  .join("")
+          }
+        </div>
+
+        ${
+          selected
+            ? `
+              <aside class="artwork-details" aria-label="Artwork details">
+                <img class="preserved-file" src="${fileUrl(selected.primary_file)}" alt="Preserved File for ${escapeHtml(selected.title)}">
+                <p class="eyebrow">Preserved file</p>
+                <h2>${escapeHtml(selected.title)}</h2>
+                <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
+                <dl>
+                  <div><dt>Home Subvault</dt><dd>${escapeHtml(selected.home_subvault)}</dd></div>
+                  <div><dt>Review Status</dt><dd>${escapeHtml(selected.review_status)}</dd></div>
+                  ${selected.saving_reason ? `<div><dt>Saving Reason</dt><dd>${escapeHtml(selected.saving_reason)}</dd></div>` : ""}
+                  <div><dt>File</dt><dd class="file-path">${escapeHtml(selected.primary_file)}</dd></div>
+                </dl>
+              </aside>
+            `
+            : ""
+        }
+      </div>
+    </section>
+  `;
+}
+
+function sortOption(value: ArtworkSort, label: string, selected: ArtworkSort): string {
+  return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
+}
+
+function metadataLine(creator: string, year: string): string {
+  return [creator, year].filter(Boolean).join(" · ") || "Unknown creator";
 }
 
 function knownVaultTemplate(state: AppState): string {
