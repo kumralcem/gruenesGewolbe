@@ -191,6 +191,22 @@ impl DesktopShell {
     pub fn run_paintings_import<F>(
         &self,
         source_folder: impl AsRef<Path>,
+        on_progress: F,
+    ) -> Result<ImportRunSummary, DesktopShellError>
+    where
+        F: FnMut(&ImportProgress) -> bool,
+    {
+        self.run_paintings_import_with_metadata(
+            source_folder,
+            ArtworkImportMetadata::default(),
+            on_progress,
+        )
+    }
+
+    pub fn run_paintings_import_with_metadata<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        metadata: ArtworkImportMetadata,
         mut on_progress: F,
     ) -> Result<ImportRunSummary, DesktopShellError>
     where
@@ -201,7 +217,7 @@ impl DesktopShell {
             .as_ref()
             .ok_or(DesktopShellError::NoActiveVault)?;
         vault
-            .run_paintings_import(source_folder, |progress| {
+            .run_paintings_import_with_metadata(source_folder, metadata, |progress| {
                 if on_progress(progress) {
                     ImportRunAction::Cancel
                 } else {
@@ -637,16 +653,22 @@ impl TauriCommandState {
 
     pub fn run_paintings_import<F>(
         &self,
-        command: ImportPaintingsCommand,
+        command: RunPaintingsImportCommand,
         mut on_progress: F,
     ) -> Result<ImportRunSummaryView, DesktopShellError>
     where
         F: FnMut(&ImportProgressView) -> bool,
     {
         self.shell
-            .run_paintings_import(command.source_folder, |progress| {
-                on_progress(&ImportProgressView::from(progress))
-            })
+            .run_paintings_import_with_metadata(
+                command.source_folder,
+                ArtworkImportMetadata {
+                    creator: non_empty(command.creator),
+                    year: non_empty(command.year),
+                    saving_reason: non_empty(command.saving_reason),
+                },
+                |progress| on_progress(&ImportProgressView::from(progress)),
+            )
             .map(ImportRunSummaryView::from)
     }
 
@@ -702,6 +724,14 @@ pub struct ImportPaintingsCommand {
     pub source_folder: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunPaintingsImportCommand {
+    pub source_folder: String,
+    pub creator: Option<String>,
+    pub year: Option<String>,
+    pub saving_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportProgressView {
     pub processed: usize,
@@ -720,9 +750,23 @@ impl From<&ImportProgress> for ImportProgressView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ImportRunEntryView {
+pub struct ImportSkippedEntryView {
     pub path: String,
-    pub detail: String,
+    pub reason: String,
+    pub existing_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportDuplicateCandidateEntryView {
+    pub path: String,
+    pub item_id: String,
+    pub candidate_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportFailedEntryView {
+    pub path: String,
+    pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -730,14 +774,16 @@ pub struct ImportRunSummaryView {
     pub imported_count: usize,
     pub skipped_count: usize,
     pub duplicate_candidate_count: usize,
+    pub exact_duplicate_count: usize,
     pub cancelled_count: usize,
     pub failed_count: usize,
     pub cancelled: bool,
     pub imported_items: Vec<SavedItemView>,
-    pub skipped_entries: Vec<ImportRunEntryView>,
-    pub duplicate_candidate_entries: Vec<ImportRunEntryView>,
+    pub skipped_entries: Vec<ImportSkippedEntryView>,
+    pub duplicate_candidate_entries: Vec<ImportDuplicateCandidateEntryView>,
     pub cancelled_files: Vec<String>,
-    pub failed_entries: Vec<ImportRunEntryView>,
+    pub failed_entries: Vec<ImportFailedEntryView>,
+    pub maintenance_errors: Vec<String>,
 }
 
 impl From<ImportRunSummary> for ImportRunSummaryView {
@@ -746,6 +792,7 @@ impl From<ImportRunSummary> for ImportRunSummaryView {
             imported_count: summary.imported_count(),
             skipped_count: summary.skipped_count(),
             duplicate_candidate_count: summary.duplicate_candidate_count(),
+            exact_duplicate_count: summary.exact_duplicate_count(),
             cancelled_count: summary.cancelled_count(),
             failed_count: summary.failed_count(),
             cancelled: summary.was_cancelled(),
@@ -758,21 +805,19 @@ impl From<ImportRunSummary> for ImportRunSummaryView {
             skipped_entries: summary
                 .skipped_entries()
                 .iter()
-                .map(|entry| ImportRunEntryView {
+                .map(|entry| ImportSkippedEntryView {
                     path: entry.path().display().to_string(),
-                    detail: entry.reason().to_string(),
+                    reason: entry.reason().to_string(),
+                    existing_item_id: entry.existing_item_id().map(ToOwned::to_owned),
                 })
                 .collect(),
             duplicate_candidate_entries: summary
                 .duplicate_candidate_entries()
                 .iter()
-                .map(|entry| ImportRunEntryView {
+                .map(|entry| ImportDuplicateCandidateEntryView {
                     path: entry.path().display().to_string(),
-                    detail: format!(
-                        "item={} candidates={}",
-                        entry.item_id(),
-                        entry.candidate_count()
-                    ),
+                    item_id: entry.item_id().to_string(),
+                    candidate_count: entry.candidate_count(),
                 })
                 .collect(),
             cancelled_files: summary
@@ -783,11 +828,12 @@ impl From<ImportRunSummary> for ImportRunSummaryView {
             failed_entries: summary
                 .failed_entries()
                 .iter()
-                .map(|entry| ImportRunEntryView {
+                .map(|entry| ImportFailedEntryView {
                     path: entry.path().display().to_string(),
-                    detail: entry.error().to_string(),
+                    error: entry.error().to_string(),
                 })
                 .collect(),
+            maintenance_errors: summary.maintenance_errors().to_vec(),
         }
     }
 }

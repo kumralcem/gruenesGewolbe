@@ -138,6 +138,11 @@ function bindActions(
 
   root.querySelector<HTMLButtonElement>("[data-import-folder]")?.addEventListener("click", async () => {
     if (!adapter.selectImportFolder || !adapter.runPaintingsImport) return;
+    const metadata = {
+      creator: inputValue(root, "[data-import-creator]"),
+      year: inputValue(root, "[data-import-year]"),
+      savingReason: inputValue(root, "[data-import-reason]"),
+    };
     try {
       const sourceFolder = await adapter.selectImportFolder();
       if (!sourceFolder) return;
@@ -148,7 +153,7 @@ function bindActions(
         import_progress: { processed: 0, total: 0, current_file: sourceFolder },
         import_summary: null,
       });
-      const summary = await adapter.runPaintingsImport(sourceFolder, async (progress) => {
+      const summary = await adapter.runPaintingsImport(sourceFolder, metadata, async (progress) => {
         await update({
           ...state,
           busy: true,
@@ -494,25 +499,28 @@ function importRunTemplate(state: AppState, adapter: DesktopAdapter): string {
           <span>${summary.imported_count} imported</span>
           <span>${summary.skipped_count} skipped</span>
           <span>${summary.duplicate_candidate_count} duplicate-candidate</span>
+          <span>${summary.exact_duplicate_count} exact duplicate</span>
           <span>${summary.cancelled_count} cancelled</span>
           <span>${summary.failed_count} failed</span>
         </div>
         <div class="summary-details">
           ${summaryGroup(
             "Skipped",
-            summary.skipped_entries.map((entry) => `${displayName(entry.path)} — ${entry.detail}`),
+            summary.skipped_entries.map((entry) => `${displayName(entry.path)} — ${entry.reason}`),
           )}
           ${summaryGroup(
             "Duplicate candidates",
             summary.duplicate_candidate_entries.map(
-              (entry) => `${displayName(entry.path)} — ${entry.detail}`,
+              (entry) =>
+                `${displayName(entry.path)} — item=${entry.item_id} candidates=${entry.candidate_count}`,
             ),
           )}
           ${summaryGroup("Cancelled", summary.cancelled_files.map(displayName))}
           ${summaryGroup(
             "Failed",
-            summary.failed_entries.map((entry) => `${displayName(entry.path)} — ${entry.detail}`),
+            summary.failed_entries.map((entry) => `${displayName(entry.path)} — ${entry.error}`),
           )}
+          ${summaryGroup("Maintenance", summary.maintenance_errors)}
         </div>
       </div>
     </section>

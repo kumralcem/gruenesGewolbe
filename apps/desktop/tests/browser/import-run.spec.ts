@@ -50,7 +50,7 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
       cancelVaultRepair: async () => {},
       workbenchSnapshot: async () => snapshot(),
       selectImportFolder: async () => "/imports/paintings",
-      runPaintingsImport: async (_sourceFolder, onProgress) => {
+      runPaintingsImport: async (_sourceFolder, _metadata, onProgress) => {
         await onProgress({ processed: 1, total: 3, current_file: "/imports/paintings/two.png" });
         return new Promise((resolve) => {
           finishImport = resolve;
@@ -62,16 +62,24 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
           imported_count: 1,
           skipped_count: 1,
           duplicate_candidate_count: 0,
+          exact_duplicate_count: 0,
           cancelled_count: 1,
           failed_count: 0,
           cancelled: true,
           imported_items: [
             { id: "item-one", home_subvault: "Paintings", item_folder: "/items/one" },
           ],
-          skipped_entries: [{ path: "/imports/paintings/notes.txt", detail: "unsupported-file" }],
+          skipped_entries: [
+            {
+              path: "/imports/paintings/notes.txt",
+              reason: "unsupported-file",
+              existing_item_id: null,
+            },
+          ],
           duplicate_candidate_entries: [],
           cancelled_files: ["/imports/paintings/three.png"],
           failed_entries: [],
+          maintenance_errors: [],
         });
       },
       fileUrl: (path) => path,

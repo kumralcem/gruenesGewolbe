@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_desktop::{
-    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, ImportPaintingsCommand,
-    ImportRunSummaryView, OpenVaultView, SavedItemView, TauriCommandState,
+    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, ImportRunSummaryView,
+    OpenVaultView, RunPaintingsImportCommand, SavedItemView, TauriCommandState,
     WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
@@ -82,6 +82,9 @@ fn add_artwork_files(
 #[tauri::command]
 async fn run_paintings_import(
     source_folder: String,
+    creator: Option<String>,
+    year: Option<String>,
+    saving_reason: Option<String>,
     app: tauri::AppHandle,
     state: State<'_, CommandState>,
     cancellation: State<'_, ImportCancellation>,
@@ -93,10 +96,18 @@ async fn run_paintings_import(
         state
             .lock()
             .map_err(|_| "desktop state is unavailable".to_string())?
-            .run_paintings_import(ImportPaintingsCommand { source_folder }, |progress| {
-                let _ = app.emit("import-progress", progress);
-                cancellation.load(Ordering::Acquire)
-            })
+            .run_paintings_import(
+                RunPaintingsImportCommand {
+                    source_folder,
+                    creator,
+                    year,
+                    saving_reason,
+                },
+                |progress| {
+                    let _ = app.emit("import-progress", progress);
+                    cancellation.load(Ordering::Acquire)
+                },
+            )
             .map_err(|error| error.to_string())
     })
     .await

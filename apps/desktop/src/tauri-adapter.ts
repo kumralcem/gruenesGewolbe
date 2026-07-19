@@ -49,12 +49,17 @@ export function createTauriAdapter(): DesktopAdapter {
       }),
     selectImportFolder: () =>
       open({ directory: true, multiple: false, title: "Import Paintings Folder" }),
-    runPaintingsImport: async (sourceFolder, onProgress) => {
+    runPaintingsImport: async (sourceFolder, metadata, onProgress) => {
       const unlisten = await listen<ImportProgress>("import-progress", (event) => {
         void onProgress(event.payload);
       });
       try {
-        return await invoke<ImportRunSummary>("run_paintings_import", { sourceFolder });
+        return await invoke<ImportRunSummary>("run_paintings_import", {
+          sourceFolder,
+          creator: metadata.creator,
+          year: metadata.year,
+          savingReason: metadata.savingReason,
+        });
       } finally {
         unlisten();
       }

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_desktop::{
     AddArtworkFilesCommand, CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView,
-    TauriCommandState, WorkbenchSnapshotCommand,
+    RunPaintingsImportCommand, TauriCommandState, WorkbenchSnapshotCommand,
 };
 
 #[test]
@@ -86,8 +86,11 @@ fn tauri_import_command_reports_progress_and_a_cancelled_summary() {
 
     let summary = state
         .run_paintings_import(
-            ImportPaintingsCommand {
+            RunPaintingsImportCommand {
                 source_folder: source.display().to_string(),
+                creator: Some("Batch Artist".to_string()),
+                year: Some("2024".to_string()),
+                saving_reason: Some("Folder study".to_string()),
             },
             |progress| {
                 updates.push(progress.clone());
@@ -101,6 +104,18 @@ fn tauri_import_command_reports_progress_and_a_cancelled_summary() {
     assert_eq!(summary.imported_count, 1);
     assert_eq!(summary.cancelled_count, 1);
     assert!(summary.cancelled);
+    let details = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "newest".to_string(),
+            search_query: None,
+            selected_item_id: Some(summary.imported_items[0].id.clone()),
+        })
+        .expect("load imported details")
+        .selected_item
+        .expect("selected imported item");
+    assert_eq!(details.creator, "Batch Artist");
+    assert_eq!(details.saving_reason, Some("Folder study".to_string()));
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");

@@ -43,23 +43,37 @@ export interface ImportProgress {
   current_file: string;
 }
 
-export interface ImportRunEntry {
+export interface ImportSkippedEntry {
   path: string;
-  detail: string;
+  reason: string;
+  existing_item_id: string | null;
+}
+
+export interface ImportDuplicateCandidateEntry {
+  path: string;
+  item_id: string;
+  candidate_count: number;
+}
+
+export interface ImportFailedEntry {
+  path: string;
+  error: string;
 }
 
 export interface ImportRunSummary {
   imported_count: number;
   skipped_count: number;
   duplicate_candidate_count: number;
+  exact_duplicate_count: number;
   cancelled_count: number;
   failed_count: number;
   cancelled: boolean;
   imported_items: SavedItem[];
-  skipped_entries: ImportRunEntry[];
-  duplicate_candidate_entries: ImportRunEntry[];
+  skipped_entries: ImportSkippedEntry[];
+  duplicate_candidate_entries: ImportDuplicateCandidateEntry[];
   cancelled_files: string[];
-  failed_entries: ImportRunEntry[];
+  failed_entries: ImportFailedEntry[];
+  maintenance_errors: string[];
 }
 
 export interface ArtworkGridItem {
@@ -116,6 +130,7 @@ export interface DesktopAdapter {
   selectImportFolder?(): Promise<string | null>;
   runPaintingsImport?(
     sourceFolder: string,
+    metadata: ArtworkImportMetadata,
     onProgress: (progress: ImportProgress) => void | Promise<void>,
   ): Promise<ImportRunSummary>;
   cancelPaintingsImport?(): Promise<void>;

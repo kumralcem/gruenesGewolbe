@@ -194,8 +194,11 @@ fn import_run_refreshes_metadata_search_once_after_processing_all_files() {
     let root = temp_path("batched-index-import-vault");
     let source = temp_path("batched-index-import-source");
     fs::create_dir_all(&source).expect("create source folder");
-    for name in ["First Study.png", "Second Study.png"] {
-        image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+    for (index, name) in ["First Study.png", "Second Study.png"]
+        .into_iter()
+        .enumerate()
+    {
+        image::RgbImage::from_pixel(4, 4, image::Rgb([10 + index as u8, 20, 30]))
             .save(source.join(name))
             .expect("write image");
     }
@@ -264,6 +267,110 @@ fn ambiguous_overlap_is_imported_with_a_duplicate_candidate_review_reason() {
         .review_reasons()
         .iter()
         .any(|reason| reason.starts_with("duplicate-candidate |")));
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+    fs::remove_dir_all(&existing_source).expect("clean existing source");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_nested_folder_is_reported_without_blocking_accessible_images() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = temp_path("unreadable-import-vault");
+    let source = temp_path("unreadable-import-source");
+    let unreadable = source.join("unreadable");
+    fs::create_dir_all(&unreadable).expect("create unreadable folder");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+        .save(source.join("accessible.png"))
+        .expect("write accessible image");
+    fs::write(unreadable.join("hidden.png"), b"hidden image").expect("write hidden image");
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+        .expect("make folder unreadable");
+    let vault = Vault::create(&root).expect("create vault");
+
+    let summary = vault
+        .run_paintings_import(&source, |_| ImportRunAction::Continue)
+        .expect("complete best-effort import");
+
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700))
+        .expect("restore folder permissions");
+    assert_eq!(summary.imported_count(), 1);
+    assert_eq!(summary.failed_count(), 1);
+    assert_eq!(summary.failed_entries()[0].path(), unreadable);
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+}
+
+#[test]
+fn secondary_state_failure_does_not_hide_successful_canonical_imports() {
+    let root = temp_path("maintenance-failure-import-vault");
+    let source = temp_path("maintenance-failure-import-source");
+    fs::create_dir_all(&source).expect("create source folder");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+        .save(source.join("survives.png"))
+        .expect("write image");
+    let vault = Vault::create(&root).expect("create vault");
+    fs::remove_dir(root.join(".gruenesgewolbe")).expect("remove derived state folder");
+    fs::write(root.join(".gruenesgewolbe"), b"blocks derived state")
+        .expect("block derived state path");
+
+    let summary = vault
+        .run_paintings_import(&source, |_| ImportRunAction::Continue)
+        .expect("return canonical import summary");
+
+    assert_eq!(summary.imported_count(), 1);
+    assert!(!summary.maintenance_errors().is_empty());
+    assert!(summary.imported_items()[0].item_folder().is_dir());
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+}
+
+#[test]
+fn exact_file_duplicates_are_skipped_before_creating_an_item_folder() {
+    let root = temp_path("exact-duplicate-import-vault");
+    let source = temp_path("exact-duplicate-import-source");
+    let existing_source = temp_path("exact-duplicate-existing-source");
+    fs::create_dir_all(&source).expect("create import source");
+    fs::create_dir_all(&existing_source).expect("create existing source");
+    let existing_file = existing_source.join("existing.png");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+        .save(&existing_file)
+        .expect("write existing image");
+    fs::copy(&existing_file, source.join("renamed-copy.png")).expect("copy exact duplicate");
+    let vault = Vault::create(&root).expect("create vault");
+    let existing = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: existing_file,
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Existing".to_string(),
+            saving_reason: None,
+        })
+        .expect("save existing item");
+
+    let summary = vault
+        .run_paintings_import(&source, |_| ImportRunAction::Continue)
+        .expect("run duplicate import");
+
+    assert_eq!(summary.imported_count(), 0);
+    assert_eq!(summary.exact_duplicate_count(), 1);
+    assert_eq!(summary.skipped_count(), 1);
+    assert_eq!(
+        summary.skipped_entries()[0].existing_item_id(),
+        Some(existing.id())
+    );
+    assert_eq!(
+        vault
+            .browse_artwork_items("Paintings")
+            .expect("browse paintings")
+            .len(),
+        1
+    );
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");

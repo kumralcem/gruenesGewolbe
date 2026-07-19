@@ -243,6 +243,22 @@ impl Vault {
     pub fn run_paintings_import<F>(
         &self,
         source_folder: impl AsRef<Path>,
+        on_progress: F,
+    ) -> Result<ImportRunSummary, VaultError>
+    where
+        F: FnMut(&ImportProgress) -> ImportRunAction,
+    {
+        self.run_paintings_import_with_metadata(
+            source_folder,
+            ArtworkImportMetadata::default(),
+            on_progress,
+        )
+    }
+
+    pub fn run_paintings_import_with_metadata<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        metadata: ArtworkImportMetadata,
         mut on_progress: F,
     ) -> Result<ImportRunSummary, VaultError>
     where
@@ -255,13 +271,24 @@ impl Vault {
 
         let mut source_files = Vec::new();
         let mut skipped_entries = Vec::new();
-        discover_import_entries(source_folder, &mut source_files, &mut skipped_entries)?;
+        let mut failed_entries = Vec::new();
+        let mut maintenance_errors = Vec::new();
+        discover_import_entries(
+            source_folder,
+            &mut source_files,
+            &mut skipped_entries,
+            &mut failed_entries,
+        );
         source_files.sort();
         skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
         let mut imported_items = Vec::new();
-        let mut failed_entries = Vec::new();
         let mut duplicate_candidate_entries = Vec::new();
         let mut cancelled_files = Vec::new();
+        for failure in &failed_entries {
+            if let Err(error) = self.append_import_file_failure(failure) {
+                maintenance_errors.push(format!("activity-log: {error}"));
+            }
+        }
         for (processed, source_file) in source_files.iter().enumerate() {
             let progress = ImportProgress {
                 processed,
@@ -272,10 +299,31 @@ impl Vault {
                 cancelled_files.extend_from_slice(&source_files[processed..]);
                 break;
             }
-            match self.preserve_artwork_item(
-                inferred_artwork_item(source_file.clone(), &ArtworkImportMetadata::default()),
-                false,
-            ) {
+            match self.exact_file_duplicate_item_id(source_file) {
+                Ok(Some(existing_item_id)) => {
+                    skipped_entries.push(ImportSkippedEntry {
+                        path: source_file.clone(),
+                        reason: "exact-file-duplicate",
+                        existing_item_id: Some(existing_item_id),
+                    });
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let failure = ImportFailedEntry {
+                        path: source_file.clone(),
+                        error: error.to_string(),
+                    };
+                    if let Err(log_error) = self.append_import_file_failure(&failure) {
+                        maintenance_errors.push(format!("activity-log: {log_error}"));
+                    }
+                    failed_entries.push(failure);
+                    continue;
+                }
+            }
+            match self
+                .preserve_artwork_item(inferred_artwork_item(source_file.clone(), &metadata), false)
+            {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
                         duplicate_candidate_entries.push(ImportDuplicateCandidateEntry {
@@ -287,21 +335,22 @@ impl Vault {
                     imported_items.push(outcome.saved_item);
                 }
                 Err(error) => {
-                    self.append_activity_log(&format!(
-                        "import-file-failed\t{}\t{}",
-                        activity_log_field(&source_file.display().to_string()),
-                        activity_log_field(&error.to_string())
-                    ))?;
-                    failed_entries.push(ImportFailedEntry {
+                    let failure = ImportFailedEntry {
                         path: source_file.clone(),
                         error: error.to_string(),
-                    });
+                    };
+                    if let Err(log_error) = self.append_import_file_failure(&failure) {
+                        maintenance_errors.push(format!("activity-log: {log_error}"));
+                    }
+                    failed_entries.push(failure);
                 }
             }
         }
 
-        self.rebuild_metadata_index()?;
-        self.append_activity_log(&format!(
+        if let Err(error) = self.rebuild_metadata_index() {
+            maintenance_errors.push(format!("metadata-index: {error}"));
+        }
+        let summary_event = format!(
             "import-run-{}\t{}\timported={}\tskipped={}\tduplicate-candidates={}\tcancelled={}\tfailed={}",
             if !cancelled_files.is_empty() {
                 "cancelled"
@@ -314,7 +363,10 @@ impl Vault {
             duplicate_candidate_entries.len(),
             cancelled_files.len(),
             failed_entries.len()
-        ))?;
+        );
+        if let Err(error) = self.append_activity_log(&summary_event) {
+            maintenance_errors.push(format!("activity-log: {error}"));
+        }
 
         Ok(ImportRunSummary {
             imported_items,
@@ -322,6 +374,7 @@ impl Vault {
             failed_entries,
             duplicate_candidate_entries,
             cancelled_files,
+            maintenance_errors,
         })
     }
 
@@ -1149,6 +1202,30 @@ impl Vault {
         Ok(candidates)
     }
 
+    fn exact_file_duplicate_item_id(
+        &self,
+        source_file: &Path,
+    ) -> Result<Option<String>, VaultError> {
+        let incoming_fingerprint = file_fingerprint(source_file)?;
+        for record in self.item_record_entries()? {
+            let text = fs::read_to_string(&record.record_path)?;
+            if frontmatter_value(&text, "file_fingerprint").as_deref()
+                == Some(incoming_fingerprint.as_str())
+            {
+                return required_frontmatter_value(&record.record_path, &text, "id").map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    fn append_import_file_failure(&self, failure: &ImportFailedEntry) -> Result<(), VaultError> {
+        self.append_activity_log(&format!(
+            "import-file-failed\t{}\t{}",
+            activity_log_field(&failure.path.display().to_string()),
+            activity_log_field(&failure.error)
+        ))
+    }
+
     fn read_tag_registry(&self) -> Result<Vec<TagDefinition>, VaultError> {
         let path = self.root.join(TAG_REGISTRY_FILE);
         if !path.is_file() {
@@ -1792,12 +1869,14 @@ pub struct ImportRunSummary {
     failed_entries: Vec<ImportFailedEntry>,
     duplicate_candidate_entries: Vec<ImportDuplicateCandidateEntry>,
     cancelled_files: Vec<PathBuf>,
+    maintenance_errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportSkippedEntry {
     path: PathBuf,
     reason: &'static str,
+    existing_item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1845,6 +1924,10 @@ impl ImportSkippedEntry {
     pub fn reason(&self) -> &str {
         self.reason
     }
+
+    pub fn existing_item_id(&self) -> Option<&str> {
+        self.existing_item_id.as_deref()
+    }
 }
 
 impl ImportRunSummary {
@@ -1890,6 +1973,17 @@ impl ImportRunSummary {
 
     pub fn cancelled_files(&self) -> &[PathBuf] {
         &self.cancelled_files
+    }
+
+    pub fn exact_duplicate_count(&self) -> usize {
+        self.skipped_entries
+            .iter()
+            .filter(|entry| entry.reason == "exact-file-duplicate")
+            .count()
+    }
+
+    pub fn maintenance_errors(&self) -> &[String] {
+        &self.maintenance_errors
     }
 }
 
@@ -2480,30 +2574,60 @@ fn discover_import_entries(
     source_folder: &Path,
     source_files: &mut Vec<PathBuf>,
     skipped_entries: &mut Vec<ImportSkippedEntry>,
-) -> Result<(), VaultError> {
-    for entry in fs::read_dir(source_folder)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+    failed_entries: &mut Vec<ImportFailedEntry>,
+) {
+    let entries = match fs::read_dir(source_folder) {
+        Ok(entries) => entries,
+        Err(error) => {
+            failed_entries.push(ImportFailedEntry {
+                path: source_folder.to_path_buf(),
+                error: error.to_string(),
+            });
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failed_entries.push(ImportFailedEntry {
+                    path: source_folder.to_path_buf(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                failed_entries.push(ImportFailedEntry {
+                    path: entry.path(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
         if file_type.is_symlink() {
             skipped_entries.push(ImportSkippedEntry {
                 path: entry.path(),
                 reason: "symbolic-link",
+                existing_item_id: None,
             });
             continue;
         }
         let path = entry.path();
         if file_type.is_dir() {
-            discover_import_entries(&path, source_files, skipped_entries)?;
+            discover_import_entries(&path, source_files, skipped_entries, failed_entries);
         } else if file_type.is_file() && is_supported_image_file(&path) {
             source_files.push(path);
         } else if file_type.is_file() {
             skipped_entries.push(ImportSkippedEntry {
                 path,
                 reason: "unsupported-file",
+                existing_item_id: None,
             });
         }
     }
-    Ok(())
 }
 
 fn imported_at() -> String {
