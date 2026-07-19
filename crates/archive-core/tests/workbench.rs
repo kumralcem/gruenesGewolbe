@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, ExtractedTextCapture, UpdateItemRecord, Vault};
+use gruenes_gewolbe_core::{
+    AddArtworkItem, ArtworkSort, ExtractedTextCapture, UpdateItemRecord, Vault,
+};
 
 #[test]
 fn user_can_browse_artwork_items_and_open_item_details_from_records() {
@@ -11,8 +13,12 @@ fn user_can_browse_artwork_items_and_open_item_details_from_records() {
     fs::create_dir_all(&source_dir).expect("create source directory");
     let nocturne_source = source_dir.join("nocturne.jpg");
     let garden_source = source_dir.join("garden.png");
-    fs::write(&nocturne_source, b"nocturne bytes").expect("write nocturne");
-    fs::write(&garden_source, b"garden bytes").expect("write garden");
+    image::RgbImage::from_pixel(12, 8, image::Rgb([20, 30, 40]))
+        .save(&nocturne_source)
+        .expect("write nocturne");
+    image::RgbImage::from_pixel(8, 12, image::Rgb([50, 60, 70]))
+        .save(&garden_source)
+        .expect("write garden");
 
     let vault = Vault::create(&root).expect("create vault");
     let nocturne = vault
@@ -76,7 +82,10 @@ fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_file
     let source_dir = temp_path("workbench-thumbnail-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
     let source_file = source_dir.join("nocturne.jpg");
-    fs::write(&source_file, b"nocturne image bytes").expect("write source image");
+    image::RgbImage::from_pixel(1200, 600, image::Rgb([30, 60, 90]))
+        .save(&source_file)
+        .expect("write real source image");
+    let original_bytes = fs::read(&source_file).expect("read original image bytes");
 
     let vault = Vault::create(&root).expect("create vault");
     let saved_item = vault
@@ -99,8 +108,18 @@ fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_file
         .thumbnail_file()
         .starts_with(root.join(".gruenesgewolbe").join("thumbnails")));
     assert_eq!(
-        fs::read(grid[0].thumbnail_file()).expect("read cached thumbnail"),
-        b"nocturne image bytes"
+        grid[0]
+            .thumbnail_file()
+            .extension()
+            .and_then(|value| value.to_str()),
+        Some("png")
+    );
+    let preview = image::open(grid[0].thumbnail_file()).expect("decode cached preview");
+    assert_eq!((preview.width(), preview.height()), (480, 240));
+    assert_eq!(
+        fs::read(saved_item.item_folder().join("files/nocturne.jpg"))
+            .expect("read preserved image"),
+        original_bytes
     );
 
     fs::remove_dir_all(root.join(".gruenesgewolbe")).expect("delete derived state");
@@ -108,13 +127,200 @@ fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_file
         .browse_artwork_items("Paintings")
         .expect("browse artwork grid after deleting cache");
     assert_eq!(rebuilt_grid[0].saved_item().id(), saved_item.id());
-    assert_eq!(
-        fs::read(rebuilt_grid[0].thumbnail_file()).expect("read rebuilt thumbnail"),
-        b"nocturne image bytes"
-    );
+    let rebuilt = image::open(rebuilt_grid[0].thumbnail_file()).expect("decode rebuilt preview");
+    assert_eq!((rebuilt.width(), rebuilt.height()), (480, 240));
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn animated_gif_thumbnail_preview_uses_the_first_frame() {
+    let root = temp_path("gif-preview-vault");
+    let source_dir = temp_path("gif-preview-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("animation.gif");
+    let file = fs::File::create(&source_file).expect("create GIF fixture");
+    let mut encoder = image::codecs::gif::GifEncoder::new(file);
+    encoder
+        .encode_frames([
+            image::Frame::new(image::RgbaImage::from_pixel(
+                20,
+                10,
+                image::Rgba([220, 10, 20, 255]),
+            )),
+            image::Frame::new(image::RgbaImage::from_pixel(
+                20,
+                10,
+                image::Rgba([10, 20, 220, 255]),
+            )),
+        ])
+        .expect("encode animated GIF fixture");
+
+    let vault = Vault::create(&root).expect("create vault");
+    vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Animation Artist".to_string()),
+            year: Some("2024".to_string()),
+            title: "Two Frames".to_string(),
+            saving_reason: None,
+        })
+        .expect("save GIF artwork");
+
+    let grid = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse GIF artwork");
+    let preview = image::open(grid[0].thumbnail_file())
+        .expect("decode GIF preview")
+        .to_rgba8();
+
+    assert_eq!(preview.get_pixel(0, 0).0, [220, 10, 20, 255]);
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
+    let root = temp_path("failed-preview-vault");
+    let source_dir = temp_path("failed-preview-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("damaged.jpg");
+    fs::write(&source_file, b"not actually a jpeg").expect("write damaged image");
+    let vault = Vault::create(&root).expect("create vault");
+
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Unknown Artist".to_string()),
+            year: Some("2024".to_string()),
+            title: "Damaged Study".to_string(),
+            saving_reason: None,
+        })
+        .expect("preserve undecodable artwork");
+
+    assert_eq!(
+        fs::read(saved.item_folder().join("files/damaged.jpg")).expect("read preserved file"),
+        b"not actually a jpeg"
+    );
+    let grid = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse placeholder artwork");
+    assert!(grid[0].thumbnail_is_placeholder());
+    assert!(image::open(grid[0].thumbnail_file()).is_ok());
+    let details = vault
+        .item_details(saved.id())
+        .expect("open damaged item details");
+    assert_eq!(details.review_status(), "needs-review");
+    assert!(details
+        .review_reasons()
+        .iter()
+        .any(|reason| reason.starts_with("thumbnail-preview-unavailable")));
+    let activity = fs::read_to_string(root.join(".gruenesgewolbe/activity-log.tsv"))
+        .expect("read activity log");
+    assert!(activity.contains("thumbnail-preview-failed"));
+    assert!(activity.contains(saved.id()));
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn artwork_gallery_defaults_to_newest_and_supports_metadata_sorting() {
+    let root = temp_path("gallery-sorting-vault");
+    let source_dir = temp_path("gallery-sorting-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let vault = Vault::create(&root).expect("create vault");
+    let fixtures = [
+        ("zeta.png", "Zed", "2001", "Amber"),
+        ("alpha.png", "Amy", "1999", "Zebra"),
+        ("middle.png", "Moe", "2010", "Middle"),
+    ];
+    let mut saved = Vec::new();
+    for (index, (file_name, creator, year, title)) in fixtures.into_iter().enumerate() {
+        let source_file = source_dir.join(file_name);
+        image::RgbImage::from_pixel(8, 8, image::Rgb([index as u8, 30, 60]))
+            .save(&source_file)
+            .expect("write image fixture");
+        saved.push(
+            vault
+                .add_artwork_item(AddArtworkItem {
+                    source_file,
+                    home_subvault: "Paintings".to_string(),
+                    creator: Some(creator.to_string()),
+                    year: Some(year.to_string()),
+                    title: title.to_string(),
+                    saving_reason: None,
+                })
+                .expect("save sortable artwork"),
+        );
+    }
+    for (item, added_at) in saved.iter().zip([100_u64, 200, 300]) {
+        let record_path = item.item_folder().join("record.md");
+        let record = fs::read_to_string(&record_path).expect("read sortable record");
+        let updated = record
+            .lines()
+            .map(|line| {
+                if line.starts_with("imported_at:") {
+                    format!("imported_at: {added_at}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(record_path, format!("{updated}\n")).expect("set deterministic added time");
+    }
+
+    assert_eq!(
+        gallery_titles(vault.browse_artwork_items("Paintings").unwrap()),
+        vec!["Middle", "Zebra", "Amber"]
+    );
+    assert_eq!(
+        gallery_titles(
+            vault
+                .browse_artwork_items_sorted("Paintings", ArtworkSort::Title)
+                .unwrap()
+        ),
+        vec!["Amber", "Middle", "Zebra"]
+    );
+    assert_eq!(
+        gallery_titles(
+            vault
+                .browse_artwork_items_sorted("Paintings", ArtworkSort::Creator)
+                .unwrap()
+        ),
+        vec!["Zebra", "Middle", "Amber"]
+    );
+    assert_eq!(
+        gallery_titles(
+            vault
+                .browse_artwork_items_sorted("Paintings", ArtworkSort::Year)
+                .unwrap()
+        ),
+        vec!["Zebra", "Amber", "Middle"]
+    );
+    assert_eq!(
+        gallery_titles(
+            vault
+                .browse_artwork_items_sorted("Paintings", ArtworkSort::Oldest)
+                .unwrap()
+        ),
+        vec!["Amber", "Zebra", "Middle"]
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+fn gallery_titles(items: Vec<gruenes_gewolbe_core::ArtworkGridItem>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|item| item.title().to_string())
+        .collect()
 }
 
 #[test]
@@ -215,7 +421,7 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
         .expect("read updated record");
     assert!(record.contains("title: Nocturne Study"));
     assert!(record.contains("creator: Jane Painter"));
-    assert!(record.contains("year: \"1884\""));
+    assert!(record.contains("year: '1884'"));
     assert!(record.contains("review_status: reviewed"));
     assert!(record.contains("## Saving Reason\n\nPalette reference for night scenes\n"));
 

@@ -5,6 +5,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
+
 const VAULT_CONFIG_FILE: &str = "vault.toml";
 const SUBVAULTS_DIR: &str = "subvaults";
 const COLLECTIONS_DIR: &str = "collections";
@@ -152,7 +154,7 @@ impl Vault {
             &imported_at(),
             &file_fingerprint,
             &duplicate_candidates,
-        );
+        )?;
         fs::write(item_folder.join("record.md"), record)?;
         self.rebuild_metadata_index()?;
 
@@ -404,6 +406,14 @@ impl Vault {
         &self,
         home_subvault: &str,
     ) -> Result<Vec<ArtworkGridItem>, VaultError> {
+        self.browse_artwork_items_sorted(home_subvault, ArtworkSort::Newest)
+    }
+
+    pub fn browse_artwork_items_sorted(
+        &self,
+        home_subvault: &str,
+        sort: ArtworkSort,
+    ) -> Result<Vec<ArtworkGridItem>, VaultError> {
         let mut items = Vec::new();
         for record in self.item_record_entries()? {
             let text = fs::read_to_string(&record.record_path)?;
@@ -420,7 +430,7 @@ impl Vault {
                 &text,
                 "primary_file",
             )?);
-            let thumbnail_file = self.cached_thumbnail_for(&saved_item, &primary_file)?;
+            let thumbnail = self.cached_thumbnail_for(&saved_item, &primary_file)?;
 
             items.push(ArtworkGridItem {
                 saved_item,
@@ -428,7 +438,11 @@ impl Vault {
                 creator: required_frontmatter_value(&record.record_path, &text, "creator")?,
                 year: required_frontmatter_value(&record.record_path, &text, "year")?,
                 primary_file,
-                thumbnail_file,
+                thumbnail_file: thumbnail.path,
+                thumbnail_is_placeholder: thumbnail.is_placeholder,
+                added_at: required_frontmatter_value(&record.record_path, &text, "imported_at")?
+                    .parse()
+                    .map_err(|_| VaultError::MalformedItemRecord(record.record_path.clone()))?,
                 review_status: required_frontmatter_value(
                     &record.record_path,
                     &text,
@@ -437,10 +451,29 @@ impl Vault {
             });
         }
 
-        items.sort_by(|left, right| {
-            left.title
-                .cmp(&right.title)
-                .then_with(|| left.saved_item.id.cmp(&right.saved_item.id))
+        items.sort_by(|left, right| match sort {
+            ArtworkSort::Newest => right
+                .added_at
+                .cmp(&left.added_at)
+                .then_with(|| right.saved_item.id.cmp(&left.saved_item.id)),
+            ArtworkSort::Oldest => left
+                .added_at
+                .cmp(&right.added_at)
+                .then_with(|| left.saved_item.id.cmp(&right.saved_item.id)),
+            ArtworkSort::Title => left
+                .title
+                .to_ascii_lowercase()
+                .cmp(&right.title.to_ascii_lowercase())
+                .then_with(|| left.saved_item.id.cmp(&right.saved_item.id)),
+            ArtworkSort::Creator => left
+                .creator
+                .to_ascii_lowercase()
+                .cmp(&right.creator.to_ascii_lowercase())
+                .then_with(|| left.title.cmp(&right.title)),
+            ArtworkSort::Year => left
+                .year
+                .cmp(&right.year)
+                .then_with(|| left.title.cmp(&right.title)),
         });
         Ok(items)
     }
@@ -530,6 +563,7 @@ impl Vault {
                     &text,
                     "review_status",
                 )?,
+                review_reasons: frontmatter_list(&text, "review_reasons"),
                 tags: frontmatter_list(&text, "tags"),
                 collections: self.collection_names_for_item(id, &text)?,
                 item_links: item_links(&text),
@@ -570,19 +604,24 @@ impl Vault {
                 continue;
             }
 
-            let mut updated = text;
+            let mut frontmatter_updates = Vec::new();
             if let Some(title) = update.title.as_deref() {
-                updated = replace_frontmatter_value(&updated, "title", title);
+                frontmatter_updates.push(("title", serde_yaml::Value::String(title.to_string())));
             }
             if let Some(creator) = update.creator.as_deref() {
-                updated = replace_frontmatter_value(&updated, "creator", creator);
+                frontmatter_updates
+                    .push(("creator", serde_yaml::Value::String(creator.to_string())));
             }
             if let Some(year) = update.year.as_deref() {
-                updated = replace_frontmatter_value(&updated, "year", &format!("\"{year}\""));
+                frontmatter_updates.push(("year", serde_yaml::Value::String(year.to_string())));
             }
             if let Some(review_status) = update.review_status.as_deref() {
-                updated = replace_frontmatter_value(&updated, "review_status", review_status);
+                frontmatter_updates.push((
+                    "review_status",
+                    serde_yaml::Value::String(review_status.to_string()),
+                ));
             }
+            let mut updated = update_frontmatter_values(&text, &frontmatter_updates)?;
             if let Some(saving_reason) = update.saving_reason.as_deref() {
                 updated = replace_markdown_section(&updated, "Saving Reason", saving_reason);
             }
@@ -692,8 +731,18 @@ impl Vault {
             }
             existing_tags.sort();
 
-            let updated =
-                replace_or_insert_frontmatter_value(&text, "tags", &existing_tags.join(", "));
+            let updated = update_frontmatter_values(
+                &text,
+                &[(
+                    "tags",
+                    serde_yaml::Value::Sequence(
+                        existing_tags
+                            .into_iter()
+                            .map(serde_yaml::Value::String)
+                            .collect(),
+                    ),
+                )],
+            )?;
             fs::write(&record.record_path, updated)?;
             self.rebuild_metadata_index()?;
             return self.item_details(id);
@@ -753,8 +802,18 @@ impl Vault {
                 collections.push(collection_name);
             }
             collections.sort();
-            let updated =
-                replace_or_insert_frontmatter_value(&text, "collections", &collections.join(", "));
+            let updated = update_frontmatter_values(
+                &text,
+                &[(
+                    "collections",
+                    serde_yaml::Value::Sequence(
+                        collections
+                            .into_iter()
+                            .map(serde_yaml::Value::String)
+                            .collect(),
+                    ),
+                )],
+            )?;
             fs::write(&record.record_path, updated)?;
             self.rebuild_metadata_index()?;
             return self.item_details(item_id);
@@ -1002,15 +1061,90 @@ impl Vault {
         &self,
         saved_item: &SavedItem,
         primary_file: &Path,
-    ) -> Result<PathBuf, VaultError> {
+    ) -> Result<ThumbnailPreview, VaultError> {
         let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
         fs::create_dir_all(&thumbnails_dir)?;
-        let thumbnail_file = thumbnails_dir.join(format!("{}.thumb", saved_item.id()));
-        if !thumbnail_file.is_file() {
-            fs::copy(primary_file, &thumbnail_file)?;
+        let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
+        if thumbnail_file.is_file() {
+            return Ok(ThumbnailPreview {
+                path: thumbnail_file,
+                is_placeholder: false,
+            });
+        }
+        let placeholder_file = thumbnails_dir.join(format!("{}.placeholder.png", saved_item.id()));
+        if placeholder_file.is_file() {
+            return Ok(ThumbnailPreview {
+                path: placeholder_file,
+                is_placeholder: true,
+            });
         }
 
-        Ok(thumbnail_file)
+        let decoded = image::io::Reader::open(primary_file)
+            .map_err(|error| error.to_string())
+            .and_then(|reader| {
+                reader
+                    .with_guessed_format()
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(|reader| reader.decode().map_err(|error| error.to_string()));
+        match decoded {
+            Ok(image) => {
+                image
+                    .thumbnail(480, 480)
+                    .save_with_format(&thumbnail_file, image::ImageFormat::Png)
+                    .map_err(|error| VaultError::PreviewGeneration(error.to_string()))?;
+                Ok(ThumbnailPreview {
+                    path: thumbnail_file,
+                    is_placeholder: false,
+                })
+            }
+            Err(reason) => {
+                write_thumbnail_placeholder(&placeholder_file)?;
+                self.record_thumbnail_preview_failure(saved_item, primary_file, &reason)?;
+                Ok(ThumbnailPreview {
+                    path: placeholder_file,
+                    is_placeholder: true,
+                })
+            }
+        }
+    }
+
+    fn record_thumbnail_preview_failure(
+        &self,
+        saved_item: &SavedItem,
+        primary_file: &Path,
+        reason: &str,
+    ) -> Result<(), VaultError> {
+        let record_path = saved_item.item_folder.join("record.md");
+        let record = fs::read_to_string(&record_path)?;
+        let review_reason = format!("thumbnail-preview-unavailable | {reason}");
+        if frontmatter_list(&record, "review_reasons")
+            .iter()
+            .any(|existing| existing.starts_with("thumbnail-preview-unavailable"))
+        {
+            return Ok(());
+        }
+
+        let updated = update_frontmatter_values(
+            &record,
+            &[
+                (
+                    "review_reasons",
+                    serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(review_reason)]),
+                ),
+                (
+                    "review_status",
+                    serde_yaml::Value::String("needs-review".to_string()),
+                ),
+            ],
+        )?;
+        fs::write(record_path, updated)?;
+        self.append_activity_log(&format!(
+            "thumbnail-preview-failed\t{}\t{}\t{}",
+            saved_item.id(),
+            activity_log_field(&primary_file.display().to_string()),
+            activity_log_field(reason)
+        ))
     }
 
     fn apply_ai_enrichment_response(
@@ -1052,21 +1186,28 @@ impl Vault {
                     }
                 }
                 tags.sort();
-                updated = replace_or_insert_frontmatter_value(&updated, "tags", &tags.join(", "));
+                updated = update_frontmatter_values(
+                    &updated,
+                    &[(
+                        "tags",
+                        serde_yaml::Value::Sequence(
+                            tags.into_iter().map(serde_yaml::Value::String).collect(),
+                        ),
+                    )],
+                )?;
             }
             if let Some(summary) = accepted_summary.as_deref() {
                 updated = replace_or_append_markdown_section(&updated, "Summary", summary);
             }
             if !accepted_metadata.is_empty() {
                 for suggestion in &accepted_metadata {
-                    updated = replace_frontmatter_value(
+                    updated = update_frontmatter_values(
                         &updated,
-                        suggestion.field(),
-                        &frontmatter_metadata_value(
+                        &[(
                             suggestion.field(),
-                            suggestion.suggested_value(),
-                        ),
-                    );
+                            serde_yaml::Value::String(suggestion.suggested_value().to_string()),
+                        )],
+                    )?;
                 }
                 let provenance_lines = accepted_metadata
                     .iter()
@@ -1088,7 +1229,13 @@ impl Vault {
                     "Metadata Suggestions",
                     &suggestion_lines,
                 );
-                updated = replace_frontmatter_value(&updated, "review_status", "needs-review");
+                updated = update_frontmatter_values(
+                    &updated,
+                    &[(
+                        "review_status",
+                        serde_yaml::Value::String("needs-review".to_string()),
+                    )],
+                )?;
             }
             if !better_file_candidates.is_empty() {
                 let candidate_lines = better_file_candidates
@@ -1100,7 +1247,13 @@ impl Vault {
                     "Better File Candidates",
                     &candidate_lines,
                 );
-                updated = replace_frontmatter_value(&updated, "review_status", "needs-review");
+                updated = update_frontmatter_values(
+                    &updated,
+                    &[(
+                        "review_status",
+                        serde_yaml::Value::String("needs-review".to_string()),
+                    )],
+                )?;
             }
 
             fs::write(&record.record_path, updated)?;
@@ -1182,6 +1335,12 @@ pub struct VaultRepairProposal {
     directories: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThumbnailPreview {
+    path: PathBuf,
+    is_placeholder: bool,
+}
+
 impl VaultRepairProposal {
     pub fn root(&self) -> &Path {
         &self.root
@@ -1212,7 +1371,18 @@ pub struct ArtworkGridItem {
     year: String,
     primary_file: PathBuf,
     thumbnail_file: PathBuf,
+    thumbnail_is_placeholder: bool,
+    added_at: u64,
     review_status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtworkSort {
+    Newest,
+    Oldest,
+    Title,
+    Creator,
+    Year,
 }
 
 impl ArtworkGridItem {
@@ -1238,6 +1408,10 @@ impl ArtworkGridItem {
 
     pub fn thumbnail_file(&self) -> &Path {
         &self.thumbnail_file
+    }
+
+    pub fn thumbnail_is_placeholder(&self) -> bool {
+        self.thumbnail_is_placeholder
     }
 
     pub fn review_status(&self) -> &str {
@@ -1324,6 +1498,7 @@ pub struct ItemDetails {
     year: String,
     primary_file: PathBuf,
     review_status: String,
+    review_reasons: Vec<String>,
     tags: Vec<String>,
     collections: Vec<String>,
     item_links: Vec<ItemLink>,
@@ -1371,6 +1546,10 @@ impl ItemDetails {
 
     pub fn review_status(&self) -> &str {
         &self.review_status
+    }
+
+    pub fn review_reasons(&self) -> &[String] {
+        &self.review_reasons
     }
 
     pub fn tags(&self) -> Vec<&str> {
@@ -1808,6 +1987,8 @@ pub enum VaultError {
     SavedItemNotFound(String),
     CollectionNotFound(String),
     MalformedItemRecord(PathBuf),
+    ItemRecordCodec(String),
+    PreviewGeneration(String),
 }
 
 impl fmt::Display for VaultError {
@@ -1860,6 +2041,10 @@ impl fmt::Display for VaultError {
             Self::CollectionNotFound(id) => write!(f, "collection not found: {id}"),
             Self::MalformedItemRecord(path) => {
                 write!(f, "item record is malformed: {}", path.display())
+            }
+            Self::ItemRecordCodec(reason) => write!(f, "item record codec failed: {reason}"),
+            Self::PreviewGeneration(reason) => {
+                write!(f, "thumbnail preview generation failed: {reason}")
             }
         }
     }
@@ -1998,11 +2183,7 @@ fn unique_folder_path(root: &Path, preferred_name: &str) -> PathBuf {
 }
 
 fn new_item_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("item-{nanos}")
+    format!("item-{}", uuid::Uuid::new_v4())
 }
 
 fn imported_at() -> String {
@@ -2023,6 +2204,24 @@ fn file_fingerprint(path: &Path) -> Result<String, VaultError> {
     Ok(format!("{hash:016x}"))
 }
 
+#[derive(Serialize)]
+struct ArtworkFrontmatter<'a> {
+    id: &'a str,
+    item_type: &'static str,
+    home_subvault: &'a str,
+    title: &'a str,
+    creator: &'a str,
+    year: &'a str,
+    primary_file: &'a str,
+    import_original_filename: &'a str,
+    import_source_path: String,
+    import_source_folder: String,
+    imported_at: &'a str,
+    file_fingerprint: &'a str,
+    duplicate_candidates: Vec<String>,
+    review_status: &'static str,
+}
+
 fn artwork_record(
     id: &str,
     item: &AddArtworkItem,
@@ -2032,7 +2231,7 @@ fn artwork_record(
     imported_at: &str,
     file_fingerprint: &str,
     duplicate_candidates: &[DuplicateCandidate],
-) -> String {
+) -> Result<String, VaultError> {
     let creator = item.creator.as_deref().unwrap_or("Unknown Creator");
     let year = item.year.as_deref().unwrap_or("Unknown Year");
     let saving_reason = item.saving_reason.as_deref().unwrap_or("");
@@ -2044,41 +2243,38 @@ fn artwork_record(
     } else {
         "needs-review"
     };
-    let duplicate_candidates = duplicate_candidate_frontmatter(duplicate_candidates);
     let import_source_folder = import_source_path
         .parent()
         .map(Path::display)
         .map(|display| display.to_string())
         .unwrap_or_default();
 
-    format!(
-        "---\n\
-id: {id}\n\
-item_type: artwork\n\
-home_subvault: {home_subvault}\n\
-title: {title}\n\
-creator: {creator}\n\
-year: \"{year}\"\n\
-primary_file: {primary_file}\n\
-import_original_filename: {import_original_filename}\n\
-import_source_path: {import_source_path}\n\
-import_source_folder: {import_source_folder}\n\
-imported_at: {imported_at}\n\
-file_fingerprint: {file_fingerprint}\n\
-duplicate_candidates: {duplicate_candidates}\n\
-review_status: {review_status}\n\
----\n\
-\n\
-# {title}\n\
-\n\
-## Saving Reason\n\
-\n\
-{saving_reason}\n",
-        home_subvault = item.home_subvault,
+    let frontmatter = ArtworkFrontmatter {
+        id,
+        item_type: "artwork",
+        home_subvault: &item.home_subvault,
+        title: &item.title,
+        creator,
+        year,
+        primary_file,
+        import_original_filename,
+        import_source_path: import_source_path.display().to_string(),
+        import_source_folder,
+        imported_at,
+        file_fingerprint,
+        duplicate_candidates: duplicate_candidates
+            .iter()
+            .map(|candidate| format!("{} | {}", candidate.item_id, candidate.signal))
+            .collect(),
+        review_status,
+    };
+    let yaml = serde_yaml::to_string(&frontmatter)
+        .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?;
+
+    Ok(format!(
+        "---\n{yaml}---\n\n# {title}\n\n## Saving Reason\n\n{saving_reason}\n",
         title = item.title,
-        import_source_path = import_source_path.display(),
-        import_source_folder = import_source_folder,
-    )
+    ))
 }
 
 fn idea_source_record(
@@ -2251,60 +2447,99 @@ fn required_frontmatter_value(
 }
 
 fn frontmatter_list(record: &str, key: &str) -> Vec<String> {
-    frontmatter_value(record, key)
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(value) = frontmatter_mapping(record).and_then(|mapping| {
+        mapping
+            .get(serde_yaml::Value::String(key.to_string()))
+            .cloned()
+    }) else {
+        return Vec::new();
+    };
+
+    match value {
+        serde_yaml::Value::Sequence(values) => {
+            values.into_iter().filter_map(yaml_scalar_string).collect()
+        }
+        value => yaml_scalar_string(value)
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 fn frontmatter_value(record: &str, key: &str) -> Option<String> {
-    let mut lines = record.lines();
-    if lines.next()? != "---" {
-        return None;
-    }
-
-    let prefix = format!("{key}: ");
-    for line in lines {
-        if line == "---" {
-            return None;
-        }
-
-        if let Some(value) = line.strip_prefix(&prefix) {
-            return Some(value.trim_matches('"').to_string());
-        }
-    }
-
-    None
+    let mapping = frontmatter_mapping(record)?;
+    mapping
+        .get(serde_yaml::Value::String(key.to_string()))
+        .cloned()
+        .and_then(yaml_scalar_string)
 }
 
-fn replace_or_insert_frontmatter_value(record: &str, key: &str, value: &str) -> String {
-    let prefix = format!("{key}: ");
-    let mut replaced = false;
-    let mut inserted = false;
-    let mut output = Vec::new();
+fn frontmatter_mapping(record: &str) -> Option<serde_yaml::Mapping> {
+    let frontmatter = record.strip_prefix("---\n")?.split_once("\n---\n")?.0;
+    serde_yaml::from_str(frontmatter).ok()
+}
 
-    for line in record.lines() {
-        if line.starts_with(&prefix) {
-            output.push(format!("{prefix}{value}"));
-            replaced = true;
-            continue;
-        }
-
-        if !replaced && !inserted && line == "---" && !output.is_empty() {
-            output.push(format!("{prefix}{value}"));
-            inserted = true;
-        }
-
-        output.push(line.to_string());
+fn update_frontmatter_values(
+    record: &str,
+    values: &[(&str, serde_yaml::Value)],
+) -> Result<String, VaultError> {
+    let without_opening = record
+        .strip_prefix("---\n")
+        .ok_or_else(|| VaultError::ItemRecordCodec("missing frontmatter opening".to_string()))?;
+    let (frontmatter, body) = without_opening
+        .split_once("\n---\n")
+        .ok_or_else(|| VaultError::ItemRecordCodec("missing frontmatter closing".to_string()))?;
+    let mut mapping = serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter)
+        .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?;
+    for (key, value) in values {
+        mapping.insert(serde_yaml::Value::String((*key).to_string()), value.clone());
     }
+    let yaml = serde_yaml::to_string(&mapping)
+        .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?;
+    Ok(format!("---\n{yaml}---\n{body}"))
+}
 
-    output.join("\n") + "\n"
+fn write_thumbnail_placeholder(path: &Path) -> Result<(), VaultError> {
+    let mut placeholder = image::RgbaImage::from_pixel(480, 320, image::Rgba([238, 240, 239, 255]));
+    for offset in 0..320_u32 {
+        let first_x = offset + 80;
+        let second_x = 399 - offset;
+        for thickness in 0..3_u32 {
+            if first_x + thickness < 480 {
+                placeholder.put_pixel(
+                    first_x + thickness,
+                    offset,
+                    image::Rgba([137, 147, 142, 255]),
+                );
+            }
+            if second_x + thickness < 480 {
+                placeholder.put_pixel(
+                    second_x + thickness,
+                    offset,
+                    image::Rgba([137, 147, 142, 255]),
+                );
+            }
+        }
+    }
+    placeholder
+        .save_with_format(path, image::ImageFormat::Png)
+        .map_err(|error| VaultError::PreviewGeneration(error.to_string()))
+}
+
+fn yaml_scalar_string(value: serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::Null => Some(String::new()),
+        serde_yaml::Value::Bool(value) => Some(value.to_string()),
+        serde_yaml::Value::Number(value) => Some(value.to_string()),
+        serde_yaml::Value::String(value) => Some(value),
+        _ => None,
+    }
 }
 
 fn markdown_section(record: &str, heading: &str) -> Option<String> {
@@ -2333,22 +2568,6 @@ fn markdown_section(record: &str, heading: &str) -> Option<String> {
     } else {
         Some(section)
     }
-}
-
-fn replace_frontmatter_value(record: &str, key: &str, value: &str) -> String {
-    let prefix = format!("{key}: ");
-    record
-        .lines()
-        .map(|line| {
-            if line.starts_with(&prefix) {
-                format!("{prefix}{value}")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n"
 }
 
 fn replace_markdown_section(record: &str, heading: &str, value: &str) -> String {
@@ -2555,14 +2774,6 @@ fn can_accept_metadata_suggestion(record: &str, suggestion: &AiMetadataSuggestio
 fn is_unknown_metadata_value(value: &str) -> bool {
     let value = value.trim();
     value.is_empty() || value.starts_with("Unknown") || value.starts_with("Untitled")
-}
-
-fn frontmatter_metadata_value(field: &str, value: &str) -> String {
-    if field == "year" {
-        format!("\"{value}\"")
-    } else {
-        value.to_string()
-    }
 }
 
 fn better_file_candidate_line(candidate: &BetterFileCandidate) -> String {

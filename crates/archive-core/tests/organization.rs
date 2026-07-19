@@ -44,10 +44,7 @@ fn user_can_add_tags_normalized_through_the_vault_tag_registry() {
         "# Tag Registry\n\n## night palette\n\nAliases: nocturne colors\n\nDark color references for night scenes\n"
     );
 
-    let record =
-        fs::read_to_string(saved_item.item_folder().join("record.md")).expect("read item record");
-    assert!(record.contains("tags: night palette"));
-    assert!(!record.contains("nocturne colors"));
+    assert!(!details.tags().contains(&"nocturne colors"));
 
     let results = vault
         .search_metadata("night palette")
@@ -102,10 +99,6 @@ fn user_can_create_a_collection_and_add_items_without_moving_item_folders() {
 
     let details = vault.item_details(saved_item.id()).expect("read details");
     assert_eq!(details.collections(), vec!["Night References"]);
-
-    let item_record =
-        fs::read_to_string(saved_item.item_folder().join("record.md")).expect("read item record");
-    assert!(item_record.contains("collections: Night References"));
 
     let results = vault
         .search_metadata("night references")

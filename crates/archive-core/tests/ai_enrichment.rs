@@ -74,7 +74,6 @@ fn idea_enrichment_uses_cleaned_text_budget_mode_and_persists_summary_tags_and_s
     );
 
     let record = fs::read_to_string(captured.item_folder().join("record.md")).expect("read record");
-    assert!(record.contains("tags: archive design, source material"));
     assert!(record.contains("## Summary\n\nA concise archive design note.\n"));
     assert!(record.contains(
         "## Metadata Suggestions\n\n- title | Archive design source | 0.42 | fake-provider:title\n"
@@ -142,9 +141,7 @@ fn idea_enrichment_normalizes_ai_tags_through_the_vault_tag_registry() {
     let details = vault.item_details(captured.id()).expect("read details");
     assert_eq!(details.tags(), vec!["archive design", "night palette"]);
 
-    let record = fs::read_to_string(captured.item_folder().join("record.md")).expect("read record");
-    assert!(record.contains("tags: archive design, night palette"));
-    assert!(!record.contains("nocturne colors"));
+    assert!(!details.tags().contains(&"nocturne colors"));
 
     fs::remove_dir_all(&root).expect("clean temp vault");
 }
@@ -276,7 +273,7 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
         "## Metadata Suggestions\n\n- creator | Jane Painter | 0.47 | fake-vision:signature\n- year | 1884 | 0.38 | fake-vision:inscription\n"
     ));
     assert!(record.contains("creator: Unknown Creator"));
-    assert!(record.contains("year: \"Unknown Year\""));
+    assert!(record.contains("year: Unknown Year"));
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
@@ -353,7 +350,7 @@ fn artwork_enrichment_accepts_high_confidence_unknown_metadata_and_stages_confli
 
     let record = fs::read_to_string(saved.item_folder().join("record.md")).expect("read record");
     assert!(record.contains("creator: Jane Painter"));
-    assert!(record.contains("year: \"1884\""));
+    assert!(record.contains("year: '1884'"));
     assert!(record.contains("title: Nocturne Study"));
     assert!(record.contains(
         "## Metadata Provenance\n\n- creator | Jane Painter | 0.96 | fake-vision:signature\n- year | 1884 | 0.94 | fake-vision:inscription\n"

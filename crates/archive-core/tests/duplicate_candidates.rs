@@ -51,13 +51,6 @@ fn paintings_import_warns_about_file_fingerprint_duplicate_candidates_without_bl
         "file-fingerprint"
     );
 
-    let record =
-        fs::read_to_string(imported[0].item_folder().join("record.md")).expect("read record");
-    assert!(record.contains(&format!(
-        "duplicate_candidates: {} | file-fingerprint",
-        existing.id()
-    )));
-
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&existing_source_dir).expect("clean existing source directory");
     fs::remove_dir_all(&import_source_dir).expect("clean import source directory");

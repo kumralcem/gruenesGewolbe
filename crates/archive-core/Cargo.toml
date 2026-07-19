@@ -10,4 +10,8 @@ name = "gruenes_gewolbe_core"
 path = "src/lib.rs"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 toml = "0.8"
+image = { version = "0.24.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+uuid = { version = "1", features = ["v4"] }

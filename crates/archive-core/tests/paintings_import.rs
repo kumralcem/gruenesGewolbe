@@ -55,7 +55,7 @@ fn user_can_import_a_paintings_folder_copying_supported_images_by_default() {
     assert!(known_record.contains("home_subvault: Paintings"));
     assert!(known_record.contains("title: Nocturne Study"));
     assert!(known_record.contains("creator: Jane Painter"));
-    assert!(known_record.contains("year: \"1884\""));
+    assert!(known_record.contains("year: '1884'"));
     assert!(
         known_record.contains("import_original_filename: Jane Painter - 1884 - Nocturne Study.jpg")
     );
@@ -71,7 +71,7 @@ fn user_can_import_a_paintings_folder_copying_supported_images_by_default() {
     let unknown_record =
         fs::read_to_string(unknown_folder.join("record.md")).expect("read unknown record");
     assert!(unknown_record.contains("creator: Unknown Creator"));
-    assert!(unknown_record.contains("year: \"Unknown Year\""));
+    assert!(unknown_record.contains("year: Unknown Year"));
     assert!(unknown_record.contains("title: mystery"));
     assert!(unknown_record.contains("review_status: needs-review"));
 

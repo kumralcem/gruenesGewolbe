@@ -24,7 +24,13 @@ fn user_can_add_a_local_image_as_an_artwork_saved_item() {
         })
         .expect("save artwork item");
 
-    assert!(!saved_item.id().is_empty());
+    uuid::Uuid::parse_str(
+        saved_item
+            .id()
+            .strip_prefix("item-")
+            .expect("stable item ID prefix"),
+    )
+    .expect("collision-resistant UUID item ID");
     assert_eq!(saved_item.home_subvault(), "Paintings");
     assert_eq!(
         saved_item.item_folder(),
@@ -50,7 +56,7 @@ fn user_can_add_a_local_image_as_an_artwork_saved_item() {
     assert!(item_record.contains("home_subvault: Paintings"));
     assert!(item_record.contains("title: Nocturne Study"));
     assert!(item_record.contains("creator: Jane Painter"));
-    assert!(item_record.contains("year: \"1884\""));
+    assert!(item_record.contains("year: '1884'"));
     assert!(item_record.contains("primary_file: files/source-image.jpg"));
     assert!(item_record.contains("import_original_filename: source-image.jpg"));
     assert!(item_record.contains(&format!("import_source_path: {}", source_file.display())));
@@ -97,6 +103,50 @@ fn saved_artwork_item_can_be_reopened_from_disk_by_stable_id() {
     );
 
     fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn artwork_item_record_has_parseable_structured_frontmatter() {
+    let root = temp_path("structured-artwork-record");
+    let source_dir = temp_path("structured-artwork-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("blue-study.png");
+    fs::write(&source_file, b"preserved bytes").expect("write source image");
+    let vault = Vault::create(&root).expect("create vault");
+
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Painter: Jane".to_string()),
+            year: Some("2024".to_string()),
+            title: "Blue #2: Study".to_string(),
+            saving_reason: Some("Compare blue: green relationships".to_string()),
+        })
+        .expect("save artwork");
+
+    let record = fs::read_to_string(saved.item_folder().join("record.md")).expect("read record");
+    let frontmatter = record
+        .strip_prefix("---\n")
+        .and_then(|record| record.split_once("\n---\n"))
+        .map(|(frontmatter, _)| frontmatter)
+        .expect("extract frontmatter");
+    let parsed: serde_yaml::Value = serde_yaml::from_str(frontmatter).expect("parse YAML");
+
+    assert_eq!(parsed["title"], "Blue #2: Study");
+    assert_eq!(parsed["creator"], "Painter: Jane");
+    assert_eq!(parsed["year"], "2024");
+    assert_eq!(parsed["home_subvault"], "Paintings");
+    assert_eq!(
+        vault
+            .item_details(saved.id())
+            .expect("read details")
+            .title(),
+        "Blue #2: Study"
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
 }
 
