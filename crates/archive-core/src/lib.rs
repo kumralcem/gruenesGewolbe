@@ -200,46 +200,44 @@ impl Vault {
             }
         }
 
-        source_files
-            .into_iter()
-            .map(|source_file| self.add_artwork_item(inferred_artwork_item(source_file, &metadata)))
-            .collect()
+        self.add_artwork_files_with_options(
+            source_files,
+            ImportRunOptions {
+                metadata,
+                exact_duplicate_policy: ExactDuplicatePolicy::Skip,
+            },
+        )
+        .map(|summary| summary.imported_items)
+    }
+
+    pub fn add_artwork_files_with_options(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+        options: ImportRunOptions,
+    ) -> Result<ImportRunSummary, VaultError> {
+        let source_files = source_files.into_iter().collect::<Vec<_>>();
+        for source_file in &source_files {
+            if !is_supported_image_file(source_file) {
+                return Err(VaultError::UnsupportedImageFile(source_file.clone()));
+            }
+        }
+
+        self.process_paintings_import(
+            "selected-files",
+            source_files,
+            Vec::new(),
+            Vec::new(),
+            options,
+            |_| ImportRunAction::Continue,
+        )
     }
 
     pub fn import_paintings_folder(
         &self,
         source_folder: impl AsRef<Path>,
     ) -> Result<Vec<SavedItem>, VaultError> {
-        let source_folder = source_folder.as_ref();
-        if !source_folder.is_dir() {
-            return Err(VaultError::MissingImportFolder(source_folder.to_path_buf()));
-        }
-
-        let mut imported = Vec::new();
-        for entry in fs::read_dir(source_folder)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-
-            let path = entry.path();
-            if !is_supported_image_file(&path) {
-                continue;
-            }
-
-            imported.push(self.add_artwork_item(inferred_artwork_item(
-                path,
-                &ArtworkImportMetadata::default(),
-            ))?);
-        }
-
-        self.append_activity_log(&format!(
-            "import-paintings\t{}\t{}",
-            source_folder.display(),
-            imported.len()
-        ))?;
-
-        Ok(imported)
+        self.run_paintings_import(source_folder, |_| ImportRunAction::Continue)
+            .map(|summary| summary.imported_items)
     }
 
     pub fn run_paintings_import<F>(
@@ -280,7 +278,7 @@ impl Vault {
         &self,
         source_folder: impl AsRef<Path>,
         options: ImportRunOptions,
-        mut on_progress: F,
+        on_progress: F,
     ) -> Result<ImportRunSummary, VaultError>
     where
         F: FnMut(&ImportProgress) -> ImportRunAction,
@@ -293,7 +291,6 @@ impl Vault {
         let mut source_files = Vec::new();
         let mut skipped_entries = Vec::new();
         let mut failed_entries = Vec::new();
-        let mut maintenance_errors = Vec::new();
         discover_import_entries(
             source_folder,
             &mut source_files,
@@ -302,6 +299,29 @@ impl Vault {
         );
         source_files.sort();
         skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
+        self.process_paintings_import(
+            &source_folder.display().to_string(),
+            source_files,
+            skipped_entries,
+            failed_entries,
+            options,
+            on_progress,
+        )
+    }
+
+    fn process_paintings_import<F>(
+        &self,
+        source_label: &str,
+        source_files: Vec<PathBuf>,
+        mut skipped_entries: Vec<ImportSkippedEntry>,
+        mut failed_entries: Vec<ImportFailedEntry>,
+        options: ImportRunOptions,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummary, VaultError>
+    where
+        F: FnMut(&ImportProgress) -> ImportRunAction,
+    {
+        let mut maintenance_errors = Vec::new();
         let mut imported_items = Vec::new();
         let mut duplicate_candidate_entries = Vec::new();
         let mut cancelled_files = Vec::new();
@@ -385,7 +405,7 @@ impl Vault {
             } else {
                 "completed"
             },
-            activity_log_field(&source_folder.display().to_string()),
+            activity_log_field(source_label),
             imported_items.len(),
             skipped_entries.len(),
             duplicate_candidate_entries.len(),
