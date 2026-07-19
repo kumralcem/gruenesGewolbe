@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
@@ -8,6 +9,8 @@ import type {
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
+  ImportProgress,
+  ImportRunSummary,
   OpenVaultResult,
   SavedItem,
   WorkbenchSnapshot,
@@ -44,6 +47,19 @@ export function createTauriAdapter(): DesktopAdapter {
         year: metadata.year,
         savingReason: metadata.savingReason,
       }),
+    selectImportFolder: () =>
+      open({ directory: true, multiple: false, title: "Import Paintings Folder" }),
+    runPaintingsImport: async (sourceFolder, onProgress) => {
+      const unlisten = await listen<ImportProgress>("import-progress", (event) => {
+        void onProgress(event.payload);
+      });
+      try {
+        return await invoke<ImportRunSummary>("run_paintings_import", { sourceFolder });
+      } finally {
+        unlisten();
+      }
+    },
+    cancelPaintingsImport: () => invoke<void>("cancel_paintings_import"),
     workbenchSnapshot: (artworkSort: ArtworkSort, selectedItemId: string | null) =>
       invoke<WorkbenchSnapshot>("workbench_snapshot", { artworkSort, selectedItemId }),
     fileUrl: convertFileSrc,

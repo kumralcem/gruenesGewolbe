@@ -37,6 +37,31 @@ export interface ArtworkImportMetadata {
   savingReason: string | null;
 }
 
+export interface ImportProgress {
+  processed: number;
+  total: number;
+  current_file: string;
+}
+
+export interface ImportRunEntry {
+  path: string;
+  detail: string;
+}
+
+export interface ImportRunSummary {
+  imported_count: number;
+  skipped_count: number;
+  duplicate_candidate_count: number;
+  cancelled_count: number;
+  failed_count: number;
+  cancelled: boolean;
+  imported_items: SavedItem[];
+  skipped_entries: ImportRunEntry[];
+  duplicate_candidate_entries: ImportRunEntry[];
+  cancelled_files: string[];
+  failed_entries: ImportRunEntry[];
+}
+
 export interface ArtworkGridItem {
   id: string;
   title: string;
@@ -88,6 +113,12 @@ export interface DesktopAdapter {
     sourceFiles: string[],
     metadata: ArtworkImportMetadata,
   ): Promise<SavedItem[]>;
+  selectImportFolder?(): Promise<string | null>;
+  runPaintingsImport?(
+    sourceFolder: string,
+    onProgress: (progress: ImportProgress) => void | Promise<void>,
+  ): Promise<ImportRunSummary>;
+  cancelPaintingsImport?(): Promise<void>;
   workbenchSnapshot?(
     sort: ArtworkSort,
     selectedItemId: string | null,

@@ -13,6 +13,8 @@ import type {
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
+  ImportProgress,
+  ImportRunSummary,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -21,6 +23,8 @@ interface AppState extends DesktopStartup {
   error: string | null;
   artwork_sort: ArtworkSort;
   workbench_snapshot: WorkbenchSnapshot | null;
+  import_progress: ImportProgress | null;
+  import_summary: ImportRunSummary | null;
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
@@ -33,6 +37,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     error: null,
     artwork_sort: "newest",
     workbench_snapshot: null,
+    import_progress: null,
+    import_summary: null,
   };
 
   const render = () => {
@@ -55,6 +61,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       error: null,
       artwork_sort: "newest",
       workbench_snapshot: null,
+      import_progress: null,
+      import_summary: null,
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -126,6 +134,52 @@ function bindActions(
     } catch (error) {
       await update({ ...state, busy: false, error: errorMessage(error) });
     }
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-import-folder]")?.addEventListener("click", async () => {
+    if (!adapter.selectImportFolder || !adapter.runPaintingsImport) return;
+    try {
+      const sourceFolder = await adapter.selectImportFolder();
+      if (!sourceFolder) return;
+      await update({
+        ...state,
+        busy: true,
+        error: null,
+        import_progress: { processed: 0, total: 0, current_file: sourceFolder },
+        import_summary: null,
+      });
+      const summary = await adapter.runPaintingsImport(sourceFolder, async (progress) => {
+        await update({
+          ...state,
+          busy: true,
+          error: null,
+          import_progress: progress,
+          import_summary: null,
+        });
+      });
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null)
+        : state.workbench_snapshot;
+      await update({
+        ...state,
+        busy: false,
+        error: null,
+        workbench_snapshot: snapshot,
+        import_progress: null,
+        import_summary: summary,
+      });
+    } catch (error) {
+      await update({
+        ...state,
+        busy: false,
+        error: errorMessage(error),
+        import_progress: null,
+      });
+    }
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-cancel-import]")?.addEventListener("click", async () => {
+    await adapter.cancelPaintingsImport?.();
   });
 
   root.querySelector<HTMLSelectElement>("[data-artwork-sort]")?.addEventListener("change", async (event) => {
@@ -360,8 +414,13 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           <button class="primary-button" type="button" data-add-artwork ${state.busy || !adapter.addArtworkFiles || !adapter.selectArtworkFiles ? "disabled" : ""}>
             <i data-lucide="folder-plus"></i>Add Artwork
           </button>
+          <button class="secondary-button" type="button" data-import-folder ${state.busy || !adapter.selectImportFolder || !adapter.runPaintingsImport ? "disabled" : ""}>
+            <i data-lucide="folder-open"></i>Import Folder
+          </button>
         </div>
       </header>
+
+      ${importRunTemplate(state, adapter)}
 
       <div class="artwork-content ${selected ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
@@ -407,6 +466,66 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
         }
       </div>
     </section>
+  `;
+}
+
+function importRunTemplate(state: AppState, adapter: DesktopAdapter): string {
+  if (state.import_progress) {
+    const progress = state.import_progress;
+    return `
+      <section class="import-run-status" aria-label="Import progress">
+        <div>
+          <p class="eyebrow">Import Run</p>
+          <strong>${progress.processed} of ${progress.total || "?"} files processed</strong>
+          <small>${escapeHtml(displayName(progress.current_file))}</small>
+        </div>
+        <button class="secondary-button" type="button" data-cancel-import ${adapter.cancelPaintingsImport ? "" : "disabled"}>Cancel Import</button>
+      </section>
+    `;
+  }
+  if (!state.import_summary) return "";
+  const summary = state.import_summary;
+  return `
+    <section class="import-run-status is-summary" aria-label="Import summary">
+      <div>
+        <p class="eyebrow">Import Run</p>
+        <h3>${summary.cancelled ? "Import cancelled" : "Import complete"}</h3>
+        <div class="summary-counts">
+          <span>${summary.imported_count} imported</span>
+          <span>${summary.skipped_count} skipped</span>
+          <span>${summary.duplicate_candidate_count} duplicate-candidate</span>
+          <span>${summary.cancelled_count} cancelled</span>
+          <span>${summary.failed_count} failed</span>
+        </div>
+        <div class="summary-details">
+          ${summaryGroup(
+            "Skipped",
+            summary.skipped_entries.map((entry) => `${displayName(entry.path)} — ${entry.detail}`),
+          )}
+          ${summaryGroup(
+            "Duplicate candidates",
+            summary.duplicate_candidate_entries.map(
+              (entry) => `${displayName(entry.path)} — ${entry.detail}`,
+            ),
+          )}
+          ${summaryGroup("Cancelled", summary.cancelled_files.map(displayName))}
+          ${summaryGroup(
+            "Failed",
+            summary.failed_entries.map((entry) => `${displayName(entry.path)} — ${entry.detail}`),
+          )}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function summaryGroup(label: string, entries: string[]): string {
+  if (entries.length === 0) return "";
+  return `
+    <div>
+      <strong>${label}</strong>
+      <ul>${entries.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>
+    </div>
   `;
 }
 
