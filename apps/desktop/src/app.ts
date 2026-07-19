@@ -9,12 +9,12 @@ import {
 
 import type {
   ActiveVault,
+  ArtworkImportOutcome,
   ArtworkSort,
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
   ImportProgress,
-  ImportRunSummary,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -24,7 +24,7 @@ interface AppState extends DesktopStartup {
   artwork_sort: ArtworkSort;
   workbench_snapshot: WorkbenchSnapshot | null;
   import_progress: ImportProgress | null;
-  import_summary: ImportRunSummary | null;
+  import_summary: ArtworkImportOutcome | null;
   import_summary_kind: "folder" | "selected" | null;
 }
 

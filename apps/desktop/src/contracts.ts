@@ -37,7 +37,7 @@ export interface ArtworkImportMetadata {
   savingReason: string | null;
 }
 
-export interface PaintingsImportOptions {
+export interface ArtworkImportOptions {
   metadata: ArtworkImportMetadata;
   importExactDuplicates: boolean;
 }
@@ -70,7 +70,7 @@ export interface ImportVaultProblem {
   error: string;
 }
 
-export interface ImportRunSummary {
+export interface ArtworkImportOutcome {
   imported_count: number;
   skipped_count: number;
   duplicate_candidate_count: number;
@@ -86,6 +86,9 @@ export interface ImportRunSummary {
   maintenance_errors: string[];
   vault_problems: ImportVaultProblem[];
 }
+
+export type ImportRunSummary = ArtworkImportOutcome;
+export type SelectedFileImportSummary = ArtworkImportOutcome;
 
 export interface ArtworkGridItem {
   id: string;
@@ -136,12 +139,12 @@ export interface DesktopAdapter {
   selectArtworkFiles?(): Promise<string[]>;
   addArtworkFiles?(
     sourceFiles: string[],
-    options: PaintingsImportOptions,
-  ): Promise<ImportRunSummary>;
+    options: ArtworkImportOptions,
+  ): Promise<SelectedFileImportSummary>;
   selectImportFolder?(): Promise<string | null>;
   runPaintingsImport?(
     sourceFolder: string,
-    options: PaintingsImportOptions,
+    options: ArtworkImportOptions,
     onProgress: (progress: ImportProgress) => void | Promise<void>,
   ): Promise<ImportRunSummary>;
   cancelPaintingsImport?(): Promise<void>;

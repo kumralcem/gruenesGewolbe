@@ -706,7 +706,7 @@ impl TauriCommandState {
     pub fn add_artwork_files(
         &self,
         command: AddArtworkFilesCommand,
-    ) -> Result<ImportRunSummaryView, DesktopShellError> {
+    ) -> Result<SelectedFileImportSummaryView, DesktopShellError> {
         self.shell
             .add_artwork_files_with_options(
                 command.source_files.into_iter().map(PathBuf::from),
@@ -721,7 +721,7 @@ impl TauriCommandState {
                     ExactDuplicatePolicy::Skip
                 },
             )
-            .map(ImportRunSummaryView::from)
+            .map(ArtworkImportOutcomeView::from)
     }
 
     pub fn capture_idea(
@@ -813,7 +813,7 @@ pub struct ImportVaultProblemView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ImportRunSummaryView {
+pub struct ArtworkImportOutcomeView {
     pub imported_count: usize,
     pub skipped_count: usize,
     pub duplicate_candidate_count: usize,
@@ -830,19 +830,22 @@ pub struct ImportRunSummaryView {
     pub vault_problems: Vec<ImportVaultProblemView>,
 }
 
-impl From<ImportRunSummary> for ImportRunSummaryView {
+pub type ImportRunSummaryView = ArtworkImportOutcomeView;
+pub type SelectedFileImportSummaryView = ArtworkImportOutcomeView;
+
+impl From<ImportRunSummary> for ArtworkImportOutcomeView {
     fn from(summary: ImportRunSummary) -> Self {
         Self::from_outcome(&summary)
     }
 }
 
-impl From<SelectedFileImportSummary> for ImportRunSummaryView {
+impl From<SelectedFileImportSummary> for ArtworkImportOutcomeView {
     fn from(summary: SelectedFileImportSummary) -> Self {
         Self::from_outcome(&summary)
     }
 }
 
-impl ImportRunSummaryView {
+impl ArtworkImportOutcomeView {
     fn from_outcome(summary: &ArtworkImportOutcome) -> Self {
         Self {
             imported_count: summary.imported_count(),

@@ -230,6 +230,7 @@ impl Vault {
 
         self.process_paintings_import(
             "selected-files",
+            ImportActivityKind::SelectedFiles,
             supported_files,
             skipped_entries,
             Vec::new(),
@@ -317,6 +318,7 @@ impl Vault {
         skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
         self.process_paintings_import(
             &source_folder.display().to_string(),
+            ImportActivityKind::FolderRun,
             source_files,
             skipped_entries,
             failed_entries,
@@ -329,6 +331,7 @@ impl Vault {
     fn process_paintings_import<F>(
         &self,
         source_label: &str,
+        activity_kind: ImportActivityKind,
         source_files: Vec<PathBuf>,
         mut skipped_entries: Vec<ImportSkippedEntry>,
         mut failed_entries: Vec<ImportFailedEntry>,
@@ -415,13 +418,14 @@ impl Vault {
         if let Err(error) = self.rebuild_metadata_index() {
             maintenance_errors.push(format!("metadata-index: {error}"));
         }
+        let event_name = match (activity_kind, cancelled_files.is_empty()) {
+            (ImportActivityKind::FolderRun, true) => "import-run-completed",
+            (ImportActivityKind::FolderRun, false) => "import-run-cancelled",
+            (ImportActivityKind::SelectedFiles, true) => "selected-files-import-completed",
+            (ImportActivityKind::SelectedFiles, false) => "selected-files-import-cancelled",
+        };
         let summary_event = format!(
-            "import-run-{}\t{}\timported={}\tskipped={}\tduplicate-candidates={}\tcancelled={}\tfailed={}",
-            if !cancelled_files.is_empty() {
-                "cancelled"
-            } else {
-                "completed"
-            },
+            "{event_name}\t{}\timported={}\tskipped={}\tduplicate-candidates={}\tcancelled={}\tfailed={}",
             activity_log_field(source_label),
             imported_items.len(),
             skipped_entries.len(),
@@ -1710,6 +1714,12 @@ struct PreservedArtwork {
 struct ExactDuplicateCheck {
     existing_item_ids: Vec<String>,
     vault_problems: Vec<ImportVaultProblem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportActivityKind {
+    FolderRun,
+    SelectedFiles,
 }
 
 impl VaultRepairProposal {

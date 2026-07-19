@@ -112,6 +112,10 @@ fn unsupported_selected_file_does_not_block_supported_selected_file() {
     assert_eq!(summary.skipped_count(), 1);
     assert_eq!(summary.skipped_entries()[0].path(), unsupported);
     assert_eq!(summary.skipped_entries()[0].reason(), "unsupported-file");
+    let activity_log = fs::read_to_string(root.join(".gruenesgewolbe/activity-log.tsv"))
+        .expect("read activity log");
+    assert!(activity_log.contains("\tselected-files-import-completed\tselected-files\t"));
+    assert!(!activity_log.contains("\timport-run-completed\tselected-files\t"));
 
     fs::remove_dir_all(root).expect("clean vault");
     fs::remove_dir_all(source).expect("clean source");

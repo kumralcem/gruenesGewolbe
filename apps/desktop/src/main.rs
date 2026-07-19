@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_desktop::{
     ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, ImportRunSummaryView,
-    OpenVaultView, RunPaintingsImportCommand, TauriCommandState, WorkbenchSnapshotCommand,
-    WorkbenchSnapshotView,
+    OpenVaultView, RunPaintingsImportCommand, SelectedFileImportSummaryView, TauriCommandState,
+    WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -67,7 +67,7 @@ fn add_artwork_files(
     saving_reason: Option<String>,
     import_exact_duplicates: bool,
     state: State<'_, CommandState>,
-) -> Result<ImportRunSummaryView, String> {
+) -> Result<SelectedFileImportSummaryView, String> {
     state
         .lock()
         .map_err(|_| "desktop state is unavailable".to_string())?

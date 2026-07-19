@@ -11,6 +11,7 @@ import type {
   ImportProgress,
   ImportRunSummary,
   OpenVaultResult,
+  SelectedFileImportSummary,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -39,7 +40,7 @@ export function createTauriAdapter(): DesktopAdapter {
       return Array.isArray(selected) ? selected : [selected];
     },
     addArtworkFiles: (sourceFiles, options) =>
-      invoke<ImportRunSummary>("add_artwork_files", {
+      invoke<SelectedFileImportSummary>("add_artwork_files", {
         sourceFiles,
         creator: options.metadata.creator,
         year: options.metadata.year,
