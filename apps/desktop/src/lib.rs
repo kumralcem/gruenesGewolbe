@@ -15,9 +15,10 @@ fn non_empty(value: Option<String>) -> Option<String> {
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
     ArtworkImportMetadata, ArtworkSort, Collection, CollectionDefinition, ExtractedTextCapture,
-    IdeaSourceListItem, ItemDetails, ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem,
-    SavedItem, SearchResult, SourceCaptureResult, SourceExtractor, SourceLinkCapture,
-    TagDefinition, UpdateItemRecord, Vault, VaultError, VaultOpen, VaultRepairProposal,
+    IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails,
+    ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
+    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
+    Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -184,6 +185,29 @@ impl DesktopShell {
 
         vault
             .import_paintings_folder(source_folder)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn run_paintings_import<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummary, DesktopShellError>
+    where
+        F: FnMut(&ImportProgress) -> bool,
+    {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .run_paintings_import(source_folder, |progress| {
+                if on_progress(progress) {
+                    ImportRunAction::Cancel
+                } else {
+                    ImportRunAction::Continue
+                }
+            })
             .map_err(DesktopShellError::Vault)
     }
 
@@ -611,6 +635,21 @@ impl TauriCommandState {
             .map(|items| items.into_iter().map(SavedItemView::from).collect())
     }
 
+    pub fn run_paintings_import<F>(
+        &self,
+        command: ImportPaintingsCommand,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummaryView, DesktopShellError>
+    where
+        F: FnMut(&ImportProgressView) -> bool,
+    {
+        self.shell
+            .run_paintings_import(command.source_folder, |progress| {
+                on_progress(&ImportProgressView::from(progress))
+            })
+            .map(ImportRunSummaryView::from)
+    }
+
     pub fn add_artwork_files(
         &self,
         command: AddArtworkFilesCommand,
@@ -661,6 +700,96 @@ impl TauriCommandState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportPaintingsCommand {
     pub source_folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportProgressView {
+    pub processed: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
+impl From<&ImportProgress> for ImportProgressView {
+    fn from(progress: &ImportProgress) -> Self {
+        Self {
+            processed: progress.processed(),
+            total: progress.total(),
+            current_file: progress.current_file().display().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportRunEntryView {
+    pub path: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportRunSummaryView {
+    pub imported_count: usize,
+    pub skipped_count: usize,
+    pub duplicate_candidate_count: usize,
+    pub cancelled_count: usize,
+    pub failed_count: usize,
+    pub cancelled: bool,
+    pub imported_items: Vec<SavedItemView>,
+    pub skipped_entries: Vec<ImportRunEntryView>,
+    pub duplicate_candidate_entries: Vec<ImportRunEntryView>,
+    pub cancelled_files: Vec<String>,
+    pub failed_entries: Vec<ImportRunEntryView>,
+}
+
+impl From<ImportRunSummary> for ImportRunSummaryView {
+    fn from(summary: ImportRunSummary) -> Self {
+        Self {
+            imported_count: summary.imported_count(),
+            skipped_count: summary.skipped_count(),
+            duplicate_candidate_count: summary.duplicate_candidate_count(),
+            cancelled_count: summary.cancelled_count(),
+            failed_count: summary.failed_count(),
+            cancelled: summary.was_cancelled(),
+            imported_items: summary
+                .imported_items()
+                .iter()
+                .cloned()
+                .map(SavedItemView::from)
+                .collect(),
+            skipped_entries: summary
+                .skipped_entries()
+                .iter()
+                .map(|entry| ImportRunEntryView {
+                    path: entry.path().display().to_string(),
+                    detail: entry.reason().to_string(),
+                })
+                .collect(),
+            duplicate_candidate_entries: summary
+                .duplicate_candidate_entries()
+                .iter()
+                .map(|entry| ImportRunEntryView {
+                    path: entry.path().display().to_string(),
+                    detail: format!(
+                        "item={} candidates={}",
+                        entry.item_id(),
+                        entry.candidate_count()
+                    ),
+                })
+                .collect(),
+            cancelled_files: summary
+                .cancelled_files()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            failed_entries: summary
+                .failed_entries()
+                .iter()
+                .map(|entry| ImportRunEntryView {
+                    path: entry.path().display().to_string(),
+                    detail: entry.error().to_string(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

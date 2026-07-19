@@ -1,12 +1,15 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_desktop::{
-    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, OpenVaultView, SavedItemView,
-    TauriCommandState, WorkbenchSnapshotCommand, WorkbenchSnapshotView,
+    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, ImportPaintingsCommand,
+    ImportRunSummaryView, OpenVaultView, SavedItemView, TauriCommandState,
+    WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
-type CommandState = Mutex<TauriCommandState>;
+type CommandState = Arc<Mutex<TauriCommandState>>;
+type ImportCancellation = Arc<AtomicBool>;
 
 #[tauri::command]
 fn startup(state: State<'_, CommandState>) -> Result<DesktopStartupView, String> {
@@ -77,6 +80,35 @@ fn add_artwork_files(
 }
 
 #[tauri::command]
+async fn run_paintings_import(
+    source_folder: String,
+    app: tauri::AppHandle,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ImportCancellation>,
+) -> Result<ImportRunSummaryView, String> {
+    let state = Arc::clone(state.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    cancellation.store(false, Ordering::Release);
+    tauri::async_runtime::spawn_blocking(move || {
+        state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .run_paintings_import(ImportPaintingsCommand { source_folder }, |progress| {
+                let _ = app.emit("import-progress", progress);
+                cancellation.load(Ordering::Acquire)
+            })
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("import task failed: {error}"))?
+}
+
+#[tauri::command]
+fn cancel_paintings_import(cancellation: State<'_, ImportCancellation>) {
+    cancellation.store(true, Ordering::Release);
+}
+
+#[tauri::command]
 fn workbench_snapshot(
     artwork_sort: String,
     selected_item_id: Option<String>,
@@ -99,9 +131,10 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_state_dir = app.path().app_data_dir()?;
-            app.manage(Mutex::new(TauriCommandState::with_app_state_dir(
+            app.manage(Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
                 app_state_dir,
-            )));
+            ))));
+            app.manage(Arc::new(AtomicBool::new(false)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -111,6 +144,8 @@ fn main() {
             confirm_vault_repair,
             cancel_vault_repair,
             add_artwork_files,
+            run_paintings_import,
+            cancel_paintings_import,
             workbench_snapshot
         ])
         .run(tauri::generate_context!())

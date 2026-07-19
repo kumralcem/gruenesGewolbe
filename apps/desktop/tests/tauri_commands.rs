@@ -70,6 +70,43 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
 }
 
 #[test]
+fn tauri_import_command_reports_progress_and_a_cancelled_summary() {
+    let root = temp_path("tauri-import-run-vault");
+    let source = temp_path("tauri-import-run-source");
+    let nested = source.join("nested");
+    fs::create_dir_all(&nested).expect("create nested source");
+    for path in [source.join("one.png"), nested.join("two.png")] {
+        fs::write(path, b"image fixture").expect("write image");
+    }
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+    let mut updates = Vec::new();
+
+    let summary = state
+        .run_paintings_import(
+            ImportPaintingsCommand {
+                source_folder: source.display().to_string(),
+            },
+            |progress| {
+                updates.push(progress.clone());
+                progress.processed == 1
+            },
+        )
+        .expect("run import command");
+
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0].total, 2);
+    assert_eq!(summary.imported_count, 1);
+    assert_eq!(summary.cancelled_count, 1);
+    assert!(summary.cancelled);
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+}
+
+#[test]
 fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
     let root = temp_path("tauri-add-artwork-vault");
     let source_dir = temp_path("tauri-add-artwork-source");
