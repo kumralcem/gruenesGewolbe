@@ -259,6 +259,25 @@ impl Vault {
         &self,
         source_folder: impl AsRef<Path>,
         metadata: ArtworkImportMetadata,
+        on_progress: F,
+    ) -> Result<ImportRunSummary, VaultError>
+    where
+        F: FnMut(&ImportProgress) -> ImportRunAction,
+    {
+        self.run_paintings_import_with_options(
+            source_folder,
+            ImportRunOptions {
+                metadata,
+                exact_duplicate_policy: ExactDuplicatePolicy::Skip,
+            },
+            on_progress,
+        )
+    }
+
+    pub fn run_paintings_import_with_options<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        options: ImportRunOptions,
         mut on_progress: F,
     ) -> Result<ImportRunSummary, VaultError>
     where
@@ -284,6 +303,7 @@ impl Vault {
         let mut imported_items = Vec::new();
         let mut duplicate_candidate_entries = Vec::new();
         let mut cancelled_files = Vec::new();
+        let mut vault_problems = Vec::new();
         for failure in &failed_entries {
             if let Err(error) = self.append_import_file_failure(failure) {
                 maintenance_errors.push(format!("activity-log: {error}"));
@@ -299,16 +319,8 @@ impl Vault {
                 cancelled_files.extend_from_slice(&source_files[processed..]);
                 break;
             }
-            match self.exact_file_duplicate_item_id(source_file) {
-                Ok(Some(existing_item_id)) => {
-                    skipped_entries.push(ImportSkippedEntry {
-                        path: source_file.clone(),
-                        reason: "exact-file-duplicate",
-                        existing_item_id: Some(existing_item_id),
-                    });
-                    continue;
-                }
-                Ok(None) => {}
+            let duplicate_check = match self.exact_file_duplicate_check(source_file) {
+                Ok(check) => check,
                 Err(error) => {
                     let failure = ImportFailedEntry {
                         path: source_file.clone(),
@@ -320,10 +332,21 @@ impl Vault {
                     failed_entries.push(failure);
                     continue;
                 }
+            };
+            vault_problems.extend(duplicate_check.vault_problems);
+            if options.exact_duplicate_policy == ExactDuplicatePolicy::Skip {
+                if let Some(existing_item_id) = duplicate_check.existing_item_id {
+                    skipped_entries.push(ImportSkippedEntry {
+                        path: source_file.clone(),
+                        reason: ImportSkipReason::ExactFileDuplicate { existing_item_id },
+                    });
+                    continue;
+                }
             }
-            match self
-                .preserve_artwork_item(inferred_artwork_item(source_file.clone(), &metadata), false)
-            {
+            match self.preserve_artwork_item(
+                inferred_artwork_item(source_file.clone(), &options.metadata),
+                false,
+            ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
                         duplicate_candidate_entries.push(ImportDuplicateCandidateEntry {
@@ -375,6 +398,7 @@ impl Vault {
             duplicate_candidate_entries,
             cancelled_files,
             maintenance_errors,
+            vault_problems,
         })
     }
 
@@ -1163,8 +1187,12 @@ impl Vault {
     ) -> Result<Vec<DuplicateCandidate>, VaultError> {
         let mut candidates = Vec::new();
         for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
-            let id = required_frontmatter_value(&record.record_path, &text, "id")?;
+            let Ok(text) = fs::read_to_string(&record.record_path) else {
+                continue;
+            };
+            let Some(id) = frontmatter_value(&text, "id") else {
+                continue;
+            };
 
             if let Some(file_fingerprint) = file_fingerprint {
                 if frontmatter_value(&text, "file_fingerprint").as_deref() == Some(file_fingerprint)
@@ -1202,20 +1230,69 @@ impl Vault {
         Ok(candidates)
     }
 
-    fn exact_file_duplicate_item_id(
+    fn exact_file_duplicate_check(
         &self,
         source_file: &Path,
-    ) -> Result<Option<String>, VaultError> {
+    ) -> Result<ExactDuplicateCheck, VaultError> {
         let incoming_fingerprint = file_fingerprint(source_file)?;
+        let incoming_bytes = fs::read(source_file)?;
+        let mut vault_problems = Vec::new();
         for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+            let text = match fs::read_to_string(&record.record_path) {
+                Ok(text) => text,
+                Err(error) => {
+                    vault_problems.push(ImportVaultProblem {
+                        path: record.record_path.clone(),
+                        error: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if frontmatter_mapping(&text).is_none() {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "malformed item record frontmatter".to_string(),
+                });
+                continue;
+            }
             if frontmatter_value(&text, "file_fingerprint").as_deref()
-                == Some(incoming_fingerprint.as_str())
+                != Some(incoming_fingerprint.as_str())
             {
-                return required_frontmatter_value(&record.record_path, &text, "id").map(Some);
+                continue;
+            }
+            let Some(id) = frontmatter_value(&text, "id") else {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "missing item id".to_string(),
+                });
+                continue;
+            };
+            let Some(primary_file) = frontmatter_value(&text, "primary_file") else {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "missing primary file".to_string(),
+                });
+                continue;
+            };
+            let preserved_path = record.item_folder.join(primary_file);
+            match fs::read(&preserved_path) {
+                Ok(existing_bytes) if existing_bytes == incoming_bytes => {
+                    return Ok(ExactDuplicateCheck {
+                        existing_item_id: Some(id),
+                        vault_problems,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => vault_problems.push(ImportVaultProblem {
+                    path: preserved_path,
+                    error: error.to_string(),
+                }),
             }
         }
-        Ok(None)
+        Ok(ExactDuplicateCheck {
+            existing_item_id: None,
+            vault_problems,
+        })
     }
 
     fn append_import_file_failure(&self, failure: &ImportFailedEntry) -> Result<(), VaultError> {
@@ -1550,6 +1627,12 @@ struct PreservedArtwork {
     duplicate_candidate_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactDuplicateCheck {
+    existing_item_id: Option<String>,
+    vault_problems: Vec<ImportVaultProblem>,
+}
+
 impl VaultRepairProposal {
     pub fn root(&self) -> &Path {
         &self.root
@@ -1835,6 +1918,19 @@ pub struct ArtworkImportMetadata {
     pub saving_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExactDuplicatePolicy {
+    #[default]
+    Skip,
+    ImportAnyway,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportRunOptions {
+    pub metadata: ArtworkImportMetadata,
+    pub exact_duplicate_policy: ExactDuplicatePolicy,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportRunAction {
     Continue,
@@ -1870,13 +1966,46 @@ pub struct ImportRunSummary {
     duplicate_candidate_entries: Vec<ImportDuplicateCandidateEntry>,
     cancelled_files: Vec<PathBuf>,
     maintenance_errors: Vec<String>,
+    vault_problems: Vec<ImportVaultProblem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportSkippedEntry {
     path: PathBuf,
-    reason: &'static str,
-    existing_item_id: Option<String>,
+    reason: ImportSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportSkipReason {
+    SymbolicLink,
+    UnsupportedFile,
+    ExactFileDuplicate { existing_item_id: String },
+}
+
+impl ImportSkipReason {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::SymbolicLink => "symbolic-link",
+            Self::UnsupportedFile => "unsupported-file",
+            Self::ExactFileDuplicate { .. } => "exact-file-duplicate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportVaultProblem {
+    path: PathBuf,
+    error: String,
+}
+
+impl ImportVaultProblem {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn error(&self) -> &str {
+        &self.error
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1922,11 +2051,14 @@ impl ImportSkippedEntry {
     }
 
     pub fn reason(&self) -> &str {
-        self.reason
+        self.reason.code()
     }
 
     pub fn existing_item_id(&self) -> Option<&str> {
-        self.existing_item_id.as_deref()
+        match &self.reason {
+            ImportSkipReason::ExactFileDuplicate { existing_item_id } => Some(existing_item_id),
+            _ => None,
+        }
     }
 }
 
@@ -1978,12 +2110,16 @@ impl ImportRunSummary {
     pub fn exact_duplicate_count(&self) -> usize {
         self.skipped_entries
             .iter()
-            .filter(|entry| entry.reason == "exact-file-duplicate")
+            .filter(|entry| matches!(entry.reason, ImportSkipReason::ExactFileDuplicate { .. }))
             .count()
     }
 
     pub fn maintenance_errors(&self) -> &[String] {
         &self.maintenance_errors
+    }
+
+    pub fn vault_problems(&self) -> &[ImportVaultProblem] {
+        &self.vault_problems
     }
 }
 
@@ -2610,8 +2746,7 @@ fn discover_import_entries(
         if file_type.is_symlink() {
             skipped_entries.push(ImportSkippedEntry {
                 path: entry.path(),
-                reason: "symbolic-link",
-                existing_item_id: None,
+                reason: ImportSkipReason::SymbolicLink,
             });
             continue;
         }
@@ -2623,8 +2758,7 @@ fn discover_import_entries(
         } else if file_type.is_file() {
             skipped_entries.push(ImportSkippedEntry {
                 path,
-                reason: "unsupported-file",
-                existing_item_id: None,
+                reason: ImportSkipReason::UnsupportedFile,
             });
         }
     }

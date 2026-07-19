@@ -2,7 +2,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, ImportRunAction, Vault};
+use gruenes_gewolbe_core::{
+    AddArtworkItem, ExactDuplicatePolicy, ImportRunAction, ImportRunOptions, Vault,
+};
 
 #[test]
 fn import_run_recursively_preserves_supported_images_and_returns_a_summary() {
@@ -375,6 +377,142 @@ fn exact_file_duplicates_are_skipped_before_creating_an_item_folder() {
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");
     fs::remove_dir_all(&existing_source).expect("clean existing source");
+}
+
+#[test]
+fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
+    let root = temp_path("exact-override-import-vault");
+    let source = temp_path("exact-override-import-source");
+    let existing_source = temp_path("exact-override-existing-source");
+    fs::create_dir_all(&source).expect("create import source");
+    fs::create_dir_all(&existing_source).expect("create existing source");
+    let existing_file = existing_source.join("existing.png");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+        .save(&existing_file)
+        .expect("write existing image");
+    fs::copy(&existing_file, source.join("intentional-copy.png")).expect("copy duplicate");
+    let vault = Vault::create(&root).expect("create vault");
+    vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: existing_file,
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Existing".to_string(),
+            saving_reason: None,
+        })
+        .expect("save existing item");
+
+    let summary = vault
+        .run_paintings_import_with_options(
+            &source,
+            ImportRunOptions {
+                exact_duplicate_policy: ExactDuplicatePolicy::ImportAnyway,
+                ..ImportRunOptions::default()
+            },
+            |_| ImportRunAction::Continue,
+        )
+        .expect("import exact duplicate intentionally");
+
+    assert_eq!(summary.imported_count(), 1);
+    assert_eq!(summary.exact_duplicate_count(), 0);
+    assert_eq!(
+        vault
+            .browse_artwork_items("Paintings")
+            .expect("browse paintings")
+            .len(),
+        2
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+    fs::remove_dir_all(&existing_source).expect("clean existing source");
+}
+
+#[test]
+fn matching_fingerprint_text_requires_equal_bytes_and_malformed_records_are_localized() {
+    let root = temp_path("fingerprint-verification-vault");
+    let source = temp_path("fingerprint-verification-source");
+    let existing_source = temp_path("fingerprint-verification-existing");
+    let probe_root = temp_path("fingerprint-verification-probe");
+    fs::create_dir_all(&source).expect("create import source");
+    fs::create_dir_all(&existing_source).expect("create existing source");
+    let incoming = source.join("incoming.png");
+    let existing_file = existing_source.join("existing.png");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
+        .save(&incoming)
+        .expect("write incoming image");
+    image::RgbImage::from_pixel(4, 4, image::Rgb([30, 20, 10]))
+        .save(&existing_file)
+        .expect("write different existing image");
+    let probe = Vault::create(&probe_root).expect("create probe vault");
+    let probe_item = probe
+        .add_artwork_item(AddArtworkItem {
+            source_file: incoming.clone(),
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Probe".to_string(),
+            saving_reason: None,
+        })
+        .expect("save probe");
+    let probe_record =
+        fs::read_to_string(probe_item.item_folder().join("record.md")).expect("read probe record");
+    let incoming_fingerprint = frontmatter_line_value(&probe_record, "file_fingerprint");
+
+    let vault = Vault::create(&root).expect("create vault");
+    let existing = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: existing_file,
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Existing".to_string(),
+            saving_reason: None,
+        })
+        .expect("save existing item");
+    let existing_record_path = existing.item_folder().join("record.md");
+    let existing_record = fs::read_to_string(&existing_record_path).expect("read existing record");
+    let old_fingerprint = frontmatter_line_value(&existing_record, "file_fingerprint");
+    fs::write(
+        &existing_record_path,
+        existing_record.replace(&old_fingerprint, &incoming_fingerprint),
+    )
+    .expect("simulate a fingerprint collision");
+    let malformed_folder = root.join("subvaults/Paintings/items/malformed");
+    fs::create_dir_all(&malformed_folder).expect("create malformed item folder");
+    fs::write(
+        malformed_folder.join("record.md"),
+        format!(
+            "---\nfile_fingerprint: {incoming_fingerprint}\nprimary_file: files/missing.png\n---\n"
+        ),
+    )
+    .expect("write malformed record");
+
+    let summary = vault
+        .run_paintings_import(&source, |_| ImportRunAction::Continue)
+        .expect("import around malformed record");
+
+    assert_eq!(summary.imported_count(), 1);
+    assert_eq!(summary.exact_duplicate_count(), 0);
+    assert_eq!(summary.vault_problems().len(), 1);
+    assert_eq!(
+        summary.vault_problems()[0].path(),
+        malformed_folder.join("record.md")
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+    fs::remove_dir_all(&existing_source).expect("clean existing source");
+    fs::remove_dir_all(&probe_root).expect("clean probe vault");
+}
+
+fn frontmatter_line_value(record: &str, key: &str) -> String {
+    record
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}: ")))
+        .expect("frontmatter value")
+        .to_string()
 }
 
 fn temp_path(name: &str) -> PathBuf {

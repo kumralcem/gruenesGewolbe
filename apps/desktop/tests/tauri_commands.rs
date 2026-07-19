@@ -91,6 +91,7 @@ fn tauri_import_command_reports_progress_and_a_cancelled_summary() {
                 creator: Some("Batch Artist".to_string()),
                 year: Some("2024".to_string()),
                 saving_reason: Some("Folder study".to_string()),
+                import_exact_duplicates: false,
             },
             |progress| {
                 updates.push(progress.clone());

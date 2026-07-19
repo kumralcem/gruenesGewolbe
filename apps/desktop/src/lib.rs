@@ -14,11 +14,11 @@ fn non_empty(value: Option<String>) -> Option<String> {
 
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
-    ArtworkImportMetadata, ArtworkSort, Collection, CollectionDefinition, ExtractedTextCapture,
-    IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails,
-    ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
-    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    Vault, VaultError, VaultOpen, VaultRepairProposal,
+    ArtworkImportMetadata, ArtworkSort, Collection, CollectionDefinition, ExactDuplicatePolicy,
+    ExtractedTextCapture, IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunOptions,
+    ImportRunSummary, ItemDetails, ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem,
+    SavedItem, SearchResult, SourceCaptureResult, SourceExtractor, SourceLinkCapture,
+    TagDefinition, UpdateItemRecord, Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -199,6 +199,7 @@ impl DesktopShell {
         self.run_paintings_import_with_metadata(
             source_folder,
             ArtworkImportMetadata::default(),
+            ExactDuplicatePolicy::Skip,
             on_progress,
         )
     }
@@ -207,6 +208,7 @@ impl DesktopShell {
         &self,
         source_folder: impl AsRef<Path>,
         metadata: ArtworkImportMetadata,
+        exact_duplicate_policy: ExactDuplicatePolicy,
         mut on_progress: F,
     ) -> Result<ImportRunSummary, DesktopShellError>
     where
@@ -217,13 +219,20 @@ impl DesktopShell {
             .as_ref()
             .ok_or(DesktopShellError::NoActiveVault)?;
         vault
-            .run_paintings_import_with_metadata(source_folder, metadata, |progress| {
-                if on_progress(progress) {
-                    ImportRunAction::Cancel
-                } else {
-                    ImportRunAction::Continue
-                }
-            })
+            .run_paintings_import_with_options(
+                source_folder,
+                ImportRunOptions {
+                    metadata,
+                    exact_duplicate_policy,
+                },
+                |progress| {
+                    if on_progress(progress) {
+                        ImportRunAction::Cancel
+                    } else {
+                        ImportRunAction::Continue
+                    }
+                },
+            )
             .map_err(DesktopShellError::Vault)
     }
 
@@ -667,6 +676,11 @@ impl TauriCommandState {
                     year: non_empty(command.year),
                     saving_reason: non_empty(command.saving_reason),
                 },
+                if command.import_exact_duplicates {
+                    ExactDuplicatePolicy::ImportAnyway
+                } else {
+                    ExactDuplicatePolicy::Skip
+                },
                 |progress| on_progress(&ImportProgressView::from(progress)),
             )
             .map(ImportRunSummaryView::from)
@@ -730,6 +744,7 @@ pub struct RunPaintingsImportCommand {
     pub creator: Option<String>,
     pub year: Option<String>,
     pub saving_reason: Option<String>,
+    pub import_exact_duplicates: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -770,6 +785,12 @@ pub struct ImportFailedEntryView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportVaultProblemView {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ImportRunSummaryView {
     pub imported_count: usize,
     pub skipped_count: usize,
@@ -784,6 +805,7 @@ pub struct ImportRunSummaryView {
     pub cancelled_files: Vec<String>,
     pub failed_entries: Vec<ImportFailedEntryView>,
     pub maintenance_errors: Vec<String>,
+    pub vault_problems: Vec<ImportVaultProblemView>,
 }
 
 impl From<ImportRunSummary> for ImportRunSummaryView {
@@ -834,6 +856,14 @@ impl From<ImportRunSummary> for ImportRunSummaryView {
                 })
                 .collect(),
             maintenance_errors: summary.maintenance_errors().to_vec(),
+            vault_problems: summary
+                .vault_problems()
+                .iter()
+                .map(|problem| ImportVaultProblemView {
+                    path: problem.path().display().to_string(),
+                    error: problem.error().to_string(),
+                })
+                .collect(),
         }
     }
 }

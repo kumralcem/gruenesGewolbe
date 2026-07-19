@@ -85,6 +85,7 @@ async fn run_paintings_import(
     creator: Option<String>,
     year: Option<String>,
     saving_reason: Option<String>,
+    import_exact_duplicates: bool,
     app: tauri::AppHandle,
     state: State<'_, CommandState>,
     cancellation: State<'_, ImportCancellation>,
@@ -102,6 +103,7 @@ async fn run_paintings_import(
                     creator,
                     year,
                     saving_reason,
+                    import_exact_duplicates,
                 },
                 |progress| {
                     let _ = app.emit("import-progress", progress);

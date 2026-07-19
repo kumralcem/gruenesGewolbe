@@ -143,6 +143,7 @@ function bindActions(
       year: inputValue(root, "[data-import-year]"),
       savingReason: inputValue(root, "[data-import-reason]"),
     };
+    const importExactDuplicates = inputChecked(root, "[data-import-exact]");
     try {
       const sourceFolder = await adapter.selectImportFolder();
       if (!sourceFolder) return;
@@ -153,7 +154,10 @@ function bindActions(
         import_progress: { processed: 0, total: 0, current_file: sourceFolder },
         import_summary: null,
       });
-      const summary = await adapter.runPaintingsImport(sourceFolder, metadata, async (progress) => {
+      const summary = await adapter.runPaintingsImport(sourceFolder, {
+        metadata,
+        importExactDuplicates,
+      }, async (progress) => {
         await update({
           ...state,
           busy: true,
@@ -404,6 +408,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
               <label>Creator<input type="text" data-import-creator></label>
               <label>Year<input type="text" inputmode="numeric" data-import-year></label>
               <label>Saving Reason<input type="text" data-import-reason></label>
+              <label><input type="checkbox" data-import-exact>Import exact duplicates anyway</label>
             </div>
           </details>
           <label class="sort-control">
@@ -521,6 +526,10 @@ function importRunTemplate(state: AppState, adapter: DesktopAdapter): string {
             summary.failed_entries.map((entry) => `${displayName(entry.path)} — ${entry.error}`),
           )}
           ${summaryGroup("Maintenance", summary.maintenance_errors)}
+          ${summaryGroup(
+            "Vault problems",
+            summary.vault_problems.map((problem) => `${displayName(problem.path)} — ${problem.error}`),
+          )}
         </div>
       </div>
     </section>
@@ -548,6 +557,10 @@ function metadataLine(creator: string, year: string): string {
 function inputValue(root: HTMLElement, selector: string): string | null {
   const value = root.querySelector<HTMLInputElement>(selector)?.value.trim();
   return value || null;
+}
+
+function inputChecked(root: HTMLElement, selector: string): boolean {
+  return root.querySelector<HTMLInputElement>(selector)?.checked ?? false;
 }
 
 function knownVaultTemplate(state: AppState): string {

@@ -50,7 +50,8 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
       cancelVaultRepair: async () => {},
       workbenchSnapshot: async () => snapshot(),
       selectImportFolder: async () => "/imports/paintings",
-      runPaintingsImport: async (_sourceFolder, _metadata, onProgress) => {
+      runPaintingsImport: async (_sourceFolder, options, onProgress) => {
+        if (!options.importExactDuplicates) throw new Error("override was not forwarded");
         await onProgress({ processed: 1, total: 3, current_file: "/imports/paintings/two.png" });
         return new Promise((resolve) => {
           finishImport = resolve;
@@ -80,6 +81,7 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
           cancelled_files: ["/imports/paintings/three.png"],
           failed_entries: [],
           maintenance_errors: [],
+          vault_problems: [],
         });
       },
       fileUrl: (path) => path,
@@ -87,6 +89,8 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
   });
 
   await page.goto("/");
+  await page.getByText("Optional metadata").click();
+  await page.getByRole("checkbox", { name: "Import exact duplicates anyway" }).check();
   await page.getByRole("button", { name: "Import Folder" }).click();
   await expect(page.getByText("1 of 3 files processed")).toBeVisible();
   await expect(page.getByText("two.png")).toBeVisible();
