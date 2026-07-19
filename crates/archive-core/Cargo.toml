@@ -8,3 +8,6 @@ rust-version.workspace = true
 [lib]
 name = "gruenes_gewolbe_core"
 path = "src/lib.rs"
+
+[dependencies]
+toml = "0.8"

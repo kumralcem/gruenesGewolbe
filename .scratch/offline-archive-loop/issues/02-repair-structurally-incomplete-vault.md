@@ -12,14 +12,18 @@ Build a safe recovery path for a recognizable format-version-2 Vault whose requi
 
 ## Acceptance criteria
 
-- [ ] Opening a Vault with a valid configuration but missing required structural directories produces a repair proposal instead of silently changing the Vault or reporting it as wholly unusable.
-- [ ] The repair screen lists each directory that would be created and requires explicit confirmation.
-- [ ] Confirmed repair creates only missing safe empty directories and then opens the repaired Vault.
-- [ ] Repair never overwrites existing files or directories and never rewrites malformed Item Records.
-- [ ] Invalid configuration and unsafe structural conflicts remain clear errors rather than being treated as repairable automatically.
-- [ ] Cancelling repair leaves the selected folder unchanged.
-- [ ] Archive-core, Tauri-command, and browser-level tests cover repairable, cancelled, non-repairable, and successful-open outcomes.
+- [x] Opening a Vault with a valid configuration but missing required structural directories produces a repair proposal instead of silently changing the Vault or reporting it as wholly unusable.
+- [x] The repair screen lists each directory that would be created and requires explicit confirmation.
+- [x] Confirmed repair creates only missing safe empty directories and then opens the repaired Vault.
+- [x] Repair never overwrites existing files or directories and never rewrites malformed Item Records.
+- [x] Invalid configuration and unsafe structural conflicts remain clear errors rather than being treated as repairable automatically.
+- [x] Cancelling repair leaves the selected folder unchanged.
+- [x] Archive-core, Tauri-command, and browser-level tests cover repairable, cancelled, non-repairable, and successful-open outcomes.
 
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/01-launch-and-reopen-format-v2-vault.md
+
+## Comments
+
+Implemented with TDD. Evidence: `crates/archive-core/tests/vault_lifecycle.rs`, `apps/desktop/tests/active_vault.rs`, `apps/desktop/tests/tauri_commands.rs`, and `apps/desktop/tests/browser/startup.spec.ts`. Opening a recognizable incomplete format-version-2 Vault now returns an exact repair proposal without mutation; explicit confirmation recreates only missing safe directories and opens the Vault, while cancellation is non-mutating. TOML parsing rejects malformed configuration, structural file conflicts remain errors, and malformed Item Records are preserved byte-for-byte.

@@ -1800,6 +1800,7 @@ pub enum VaultError {
     MissingCollections(PathBuf),
     StructuralConflict(PathBuf),
     RepairProposalChanged(PathBuf),
+    MalformedConfig { path: PathBuf, reason: String },
     UnsupportedFormat(PathBuf),
     MissingSourceFile(PathBuf),
     MissingFileName(PathBuf),
@@ -1836,6 +1837,9 @@ impl fmt::Display for VaultError {
                 "vault structure changed after repair was proposed: {}",
                 path.display()
             ),
+            Self::MalformedConfig { path, reason } => {
+                write!(f, "vault config is malformed: {}: {reason}", path.display())
+            }
             Self::UnsupportedFormat(path) => {
                 write!(
                     f,
@@ -1902,10 +1906,17 @@ fn validate_vault_config(root: &Path) -> Result<(), VaultError> {
         return Err(VaultError::MissingConfig(config_path));
     }
 
-    let config = fs::read_to_string(&config_path)?;
-    if !config
-        .lines()
-        .any(|line| line.trim() == "format_version = 2")
+    let config_text = fs::read_to_string(&config_path)?;
+    let config = toml::from_str::<toml::Value>(&config_text).map_err(|error| {
+        VaultError::MalformedConfig {
+            path: config_path.clone(),
+            reason: error.to_string(),
+        }
+    })?;
+    if config
+        .get("format_version")
+        .and_then(toml::Value::as_integer)
+        != Some(2)
     {
         return Err(VaultError::UnsupportedFormat(config_path));
     }

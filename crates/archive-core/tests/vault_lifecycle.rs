@@ -201,6 +201,25 @@ fn opening_rejects_invalid_configuration_without_proposing_or_creating_structure
     fs::remove_dir_all(&root).expect("clean invalid vault");
 }
 
+#[test]
+fn opening_rejects_malformed_toml_even_when_it_contains_the_supported_version() {
+    let root = temp_path("malformed-config-repair");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(root.join("vault.toml"), "format_version = 2\nbroken = [\n")
+        .expect("write malformed config");
+
+    let error = Vault::open_or_repair(&root).expect_err("malformed config should fail");
+
+    assert!(error.to_string().starts_with(&format!(
+        "vault config is malformed: {}:",
+        root.join("vault.toml").display()
+    )));
+    assert!(!root.join("subvaults").exists());
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean malformed vault");
+}
+
 fn temp_path(name: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)

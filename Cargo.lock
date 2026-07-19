@@ -1127,6 +1127,9 @@ dependencies = [
 [[package]]
 name = "gruenes-gewolbe-core"
 version = "0.1.0"
+dependencies = [
+ "toml 0.8.2",
+]
 
 [[package]]
 name = "gruenes-gewolbe-desktop"
