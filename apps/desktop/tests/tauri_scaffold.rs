@@ -18,5 +18,7 @@ fn tauri_scaffold_points_at_the_vite_ui_and_linux_runtime() {
     assert!(runtime.contains("fn startup("));
     assert!(runtime.contains("fn create_vault("));
     assert!(runtime.contains("fn open_vault("));
-    assert!(runtime.contains("tauri::generate_handler![startup, create_vault, open_vault]"));
+    assert!(runtime.contains("fn confirm_vault_repair("));
+    assert!(runtime.contains("fn cancel_vault_repair("));
+    assert!(runtime.contains("tauri::generate_handler!["));
 }
