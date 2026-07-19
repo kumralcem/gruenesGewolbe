@@ -136,8 +136,8 @@ export interface DesktopAdapter {
   selectArtworkFiles?(): Promise<string[]>;
   addArtworkFiles?(
     sourceFiles: string[],
-    metadata: ArtworkImportMetadata,
-  ): Promise<SavedItem[]>;
+    options: PaintingsImportOptions,
+  ): Promise<ImportRunSummary>;
   selectImportFolder?(): Promise<string | null>;
   runPaintingsImport?(
     sourceFolder: string,

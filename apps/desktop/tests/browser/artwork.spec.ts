@@ -28,13 +28,35 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
         throw new Error("not used");
       },
       selectArtworkFiles: async () => ["/imports/nocturne.jpg", "/imports/garden.png"],
-      addArtworkFiles: async (sourceFiles, metadata) => {
-        calls.push(`add:${sourceFiles.join("|")}:${metadata.creator}:${metadata.year}`);
+      addArtworkFiles: async (sourceFiles, options) => {
+        calls.push(
+          `add:${sourceFiles.join("|")}:${options.metadata.creator}:${options.metadata.year}:${options.importExactDuplicates}`,
+        );
         loaded = true;
-        return [
-          { id: "item-nocturne", home_subvault: "Paintings", item_folder: "/items/nocturne" },
-          { id: "item-garden", home_subvault: "Paintings", item_folder: "/items/garden" },
-        ];
+        return {
+          imported_count: 1,
+          skipped_count: 1,
+          duplicate_candidate_count: 0,
+          exact_duplicate_count: 1,
+          cancelled_count: 0,
+          failed_count: 0,
+          cancelled: false,
+          imported_items: [
+            { id: "item-garden", home_subvault: "Paintings", item_folder: "/items/garden" },
+          ],
+          skipped_entries: [
+            {
+              path: "/imports/nocturne.jpg",
+              reason: "exact-file-duplicate",
+              existing_item_id: "existing-nocturne",
+            },
+          ],
+          duplicate_candidate_entries: [],
+          cancelled_files: [],
+          failed_entries: [],
+          maintenance_errors: [],
+          vault_problems: [],
+        };
       },
       workbenchSnapshot: async (sort, selectedItemId) => {
         calls.push(`snapshot:${sort}:${selectedItemId ?? "none"}`);
@@ -101,6 +123,9 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
   await page.getByLabel("Year").fill("2024");
   await page.getByRole("button", { name: "Add Artwork" }).click();
 
+  await expect(page.getByText("1 exact duplicate")).toBeVisible();
+  await expect(page.getByText("nocturne.jpg")).toBeVisible();
+
   await expect(page.getByRole("img", { name: "Nocturne" })).toHaveAttribute(
     "src",
     "https://asset.localhost/nocturne.png",
@@ -117,7 +142,7 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
     "https://asset.localhost/garden.png",
   );
   await expect.poll(() => readCalls(page)).toContain(
-    "add:/imports/nocturne.jpg|/imports/garden.png:Amy Artist:2024",
+    "add:/imports/nocturne.jpg|/imports/garden.png:Amy Artist:2024:false",
   );
   await expect.poll(() => readCalls(page)).toContain("snapshot:title:item-garden");
 });

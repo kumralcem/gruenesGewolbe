@@ -142,16 +142,17 @@ fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
             creator: Some("Batch Artist".to_string()),
             year: None,
             saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: false,
         })
         .expect("add selected artwork files");
-    assert_eq!(added.len(), 2);
+    assert_eq!(added.imported_count, 2);
 
     let snapshot = state
         .workbench_snapshot(WorkbenchSnapshotCommand {
             home_subvault: "Paintings".to_string(),
             artwork_sort: "title".to_string(),
             search_query: None,
-            selected_item_id: Some(added[1].id.clone()),
+            selected_item_id: Some(added.imported_items[1].id.clone()),
         })
         .expect("load sorted gallery");
 
@@ -175,6 +176,30 @@ fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
             .saving_reason,
         Some("Palette references".to_string())
     );
+
+    let skipped = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: false,
+        })
+        .expect("skip selected exact duplicates");
+    assert_eq!(skipped.imported_count, 0);
+    assert_eq!(skipped.exact_duplicate_count, 2);
+
+    let overridden = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: true,
+        })
+        .expect("override selected exact duplicates");
+    assert_eq!(overridden.imported_count, 2);
+    assert_eq!(overridden.duplicate_candidate_count, 0);
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");

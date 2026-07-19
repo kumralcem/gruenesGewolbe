@@ -165,12 +165,28 @@ impl DesktopShell {
         source_files: impl IntoIterator<Item = PathBuf>,
         metadata: ArtworkImportMetadata,
     ) -> Result<Vec<SavedItem>, DesktopShellError> {
+        self.add_artwork_files_with_options(source_files, metadata, ExactDuplicatePolicy::Skip)
+            .map(|summary| summary.imported_items().to_vec())
+    }
+
+    pub fn add_artwork_files_with_options(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+        metadata: ArtworkImportMetadata,
+        exact_duplicate_policy: ExactDuplicatePolicy,
+    ) -> Result<ImportRunSummary, DesktopShellError> {
         let vault = self
             .active_vault
             .as_ref()
             .ok_or(DesktopShellError::NoActiveVault)?;
         vault
-            .add_artwork_files_with_metadata(source_files, metadata)
+            .add_artwork_files_with_options(
+                source_files,
+                ImportRunOptions {
+                    metadata,
+                    exact_duplicate_policy,
+                },
+            )
             .map_err(DesktopShellError::Vault)
     }
 
@@ -689,17 +705,22 @@ impl TauriCommandState {
     pub fn add_artwork_files(
         &self,
         command: AddArtworkFilesCommand,
-    ) -> Result<Vec<SavedItemView>, DesktopShellError> {
+    ) -> Result<ImportRunSummaryView, DesktopShellError> {
         self.shell
-            .add_artwork_files(
+            .add_artwork_files_with_options(
                 command.source_files.into_iter().map(PathBuf::from),
                 ArtworkImportMetadata {
                     creator: non_empty(command.creator),
                     year: non_empty(command.year),
                     saving_reason: non_empty(command.saving_reason),
                 },
+                if command.import_exact_duplicates {
+                    ExactDuplicatePolicy::ImportAnyway
+                } else {
+                    ExactDuplicatePolicy::Skip
+                },
             )
-            .map(|items| items.into_iter().map(SavedItemView::from).collect())
+            .map(ImportRunSummaryView::from)
     }
 
     pub fn capture_idea(
@@ -874,6 +895,7 @@ pub struct AddArtworkFilesCommand {
     pub creator: Option<String>,
     pub year: Option<String>,
     pub saving_reason: Option<String>,
+    pub import_exact_duplicates: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

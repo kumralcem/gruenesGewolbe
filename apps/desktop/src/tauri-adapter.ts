@@ -4,7 +4,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   ActiveVault,
-  ArtworkImportMetadata,
   ArtworkSort,
   DesktopAdapter,
   DesktopStartup,
@@ -12,7 +11,6 @@ import type {
   ImportProgress,
   ImportRunSummary,
   OpenVaultResult,
-  SavedItem,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -40,12 +38,13 @@ export function createTauriAdapter(): DesktopAdapter {
       if (!selected) return [];
       return Array.isArray(selected) ? selected : [selected];
     },
-    addArtworkFiles: (sourceFiles: string[], metadata: ArtworkImportMetadata) =>
-      invoke<SavedItem[]>("add_artwork_files", {
+    addArtworkFiles: (sourceFiles, options) =>
+      invoke<ImportRunSummary>("add_artwork_files", {
         sourceFiles,
-        creator: metadata.creator,
-        year: metadata.year,
-        savingReason: metadata.savingReason,
+        creator: options.metadata.creator,
+        year: options.metadata.year,
+        savingReason: options.metadata.savingReason,
+        importExactDuplicates: options.importExactDuplicates,
       }),
     selectImportFolder: () =>
       open({ directory: true, multiple: false, title: "Import Paintings Folder" }),

@@ -122,6 +122,7 @@ function bindActions(
       year: inputValue(root, "[data-import-year]"),
       savingReason: inputValue(root, "[data-import-reason]"),
     };
+    const importExactDuplicates = inputChecked(root, "[data-import-exact]");
     await update({ ...state, busy: true, error: null });
     try {
       const sourceFiles = await adapter.selectArtworkFiles();
@@ -129,8 +130,20 @@ function bindActions(
         await update({ ...state, busy: false, error: null });
         return;
       }
-      await adapter.addArtworkFiles(sourceFiles, metadata);
-      await refreshWorkbench(adapter, state, update, state.artwork_sort, null);
+      const summary = await adapter.addArtworkFiles(sourceFiles, {
+        metadata,
+        importExactDuplicates,
+      });
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null)
+        : state.workbench_snapshot;
+      await update({
+        ...state,
+        busy: false,
+        error: null,
+        workbench_snapshot: snapshot,
+        import_summary: summary,
+      });
     } catch (error) {
       await update({ ...state, busy: false, error: errorMessage(error) });
     }
