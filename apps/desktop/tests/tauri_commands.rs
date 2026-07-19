@@ -71,6 +71,7 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
 fn tauri_commands_return_restart_safe_desktop_startup_state() {
     let root = temp_path("tauri-startup-vault");
     let app_state = temp_path("tauri-startup-app-state");
+    let open_app_state = temp_path("tauri-open-app-state");
 
     let mut state = TauriCommandState::with_app_state_dir(&app_state);
     let initial = state.startup().expect("initial startup state");
@@ -101,8 +102,15 @@ fn tauri_commands_return_restart_safe_desktop_startup_state() {
         })
     );
 
+    let mut opening_state = TauriCommandState::with_app_state_dir(&open_app_state);
+    let opened = opening_state
+        .open_vault(root.display().to_string())
+        .expect("open existing vault through command state");
+    assert_eq!(opened.root, root.display().to_string());
+
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&app_state).expect("clean app state");
+    fs::remove_dir_all(&open_app_state).expect("clean open app state");
 }
 
 fn temp_path(name: &str) -> PathBuf {

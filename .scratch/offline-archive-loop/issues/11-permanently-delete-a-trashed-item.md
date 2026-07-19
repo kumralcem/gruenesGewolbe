@@ -23,4 +23,3 @@ Build the deliberately destructive end of the Vault Trash lifecycle. Permanent d
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/09-move-items-to-vault-trash-and-restore.md
-

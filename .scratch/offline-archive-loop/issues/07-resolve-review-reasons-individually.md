@@ -26,4 +26,3 @@ Replace the prototype's manually clearable Review Status with individually resol
 
 - .scratch/offline-archive-loop/issues/04-run-recursive-paintings-import.md
 - .scratch/offline-archive-loop/issues/06-edit-item-records-without-losing-file-changes.md
-

@@ -103,6 +103,59 @@ test("opens a known vault from the navigation", async ({ page }) => {
   await expect.poll(() => readCalls(page)).toEqual(["open:/vaults/Archive"]);
 });
 
+test("opens a selected vault through the native-dialog boundary", async ({ page }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, { __testCalls: calls });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      selectFolder: async (purpose) => {
+        calls.push(`select:${purpose}`);
+        return "/vaults/Selected";
+      },
+      createVault: async () => {
+        throw new Error("not used");
+      },
+      openVault: async (root) => {
+        calls.push(`open:${root}`);
+        return { root };
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("main").getByRole("button", { name: "Open Vault" }).click();
+
+  await expect(page.getByTestId("active-vault")).toHaveText("/vaults/Selected");
+  await expect.poll(() => readCalls(page)).toEqual([
+    "select:open",
+    "open:/vaults/Selected",
+  ]);
+});
+
+test("shows a native-dialog failure as a visible error", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      selectFolder: async () => {
+        throw new Error("folder dialog is unavailable");
+      },
+      createVault: async () => {
+        throw new Error("not used");
+      },
+      openVault: async () => {
+        throw new Error("not used");
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("main").getByRole("button", { name: "Open Vault" }).click();
+
+  await expect(page.getByRole("alert")).toHaveText("folder dialog is unavailable");
+  await expect(page.getByTestId("active-vault")).toHaveText("No vault open");
+});
+
 test("renders a restored last-active vault on restart", async ({ page }) => {
   await page.addInitScript(() => {
     window.__GG_TEST_ADAPTER__ = {

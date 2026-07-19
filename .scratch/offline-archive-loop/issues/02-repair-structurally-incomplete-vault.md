@@ -23,4 +23,3 @@ Build a safe recovery path for a recognizable format-version-2 Vault whose requi
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/01-launch-and-reopen-format-v2-vault.md
-

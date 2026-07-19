@@ -1,6 +1,6 @@
 Status: ready-for-agent
 
-# Add and Browse the First Painting
+# Add and Browse the First Artwork Saved Item
 
 ## Parent
 
@@ -12,7 +12,7 @@ Build the first complete Saved Item path in the real workbench: select one or mo
 
 ## Acceptance criteria
 
-- [ ] A native file dialog accepts one or several JPEG, PNG, WebP, or GIF files and adds each as a Paintings Saved Item.
+- [ ] A native file dialog accepts one or several JPEG, PNG, WebP, or GIF files and adds each as an Artwork Saved Item in the Paintings Subvault.
 - [ ] Each selected file is copied without changing its original bytes or format and receives one Home Subvault, readable Item Folder, and collision-resistant stable ID.
 - [ ] Each Item Record is one Markdown document with parsed structured frontmatter and readable body sections rather than ad hoc line handling.
 - [ ] Initial metadata uses filename parsing, basic file facts, and optional user input while ignoring EXIF, XMP, and IPTC metadata.
@@ -26,4 +26,3 @@ Build the first complete Saved Item path in the real workbench: select one or mo
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/01-launch-and-reopen-format-v2-vault.md
-

@@ -25,5 +25,4 @@ Build the structured Item Record editing path for common cleanup while keeping d
 
 ## Blocked by
 
-- .scratch/offline-archive-loop/issues/03-add-and-browse-first-painting.md
-
+- .scratch/offline-archive-loop/issues/03-add-and-browse-first-artwork-saved-item.md

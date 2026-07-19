@@ -25,4 +25,3 @@ Build recoverable removal through visible canonical Vault Trash. A user or agent
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/08-keep-vault-usable-around-malformed-records.md
-

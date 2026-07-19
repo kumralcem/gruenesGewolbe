@@ -24,5 +24,4 @@ Build the resilient browsing and search path for a file-first Vault where one ca
 
 ## Blocked by
 
-- .scratch/offline-archive-loop/issues/03-add-and-browse-first-painting.md
-
+- .scratch/offline-archive-loop/issues/03-add-and-browse-first-artwork-saved-item.md

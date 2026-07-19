@@ -13,7 +13,7 @@ Complete and verify the milestone as one uninterrupted personal workflow rather 
 ## Acceptance criteria
 
 - [ ] The documented Linux launch script opens the real workbench and the build script produces a runnable local release binary.
-- [ ] A manual smoke run creates a Vault, adds selected files, imports nested paintings, shows actual previews, searches, edits, resolves review, uses Vault Trash, restores an item, closes, relaunches, and reopens the same canonical state.
+- [ ] A manual smoke run creates a Vault, adds selected files, imports nested image files into the Paintings Subvault, shows actual previews, searches, edits, resolves review, uses Vault Trash, restores an item, closes, relaunches, and reopens the same canonical state.
 - [ ] The smoke run includes an Exact File Duplicate, ambiguous Duplicate Candidate, preview failure, malformed record, cancelled Import Run, and recoverable repair path.
 - [ ] Browser-level Playwright tests cover the complete workbench through controlled typed command responses, including loading, empty, progress, conflict, error, Problems, review, and Vault Trash states.
 - [ ] Playwright screenshots at desktop and constrained viewports show rendered media, readable text, stable controls, and no incoherent overlap.

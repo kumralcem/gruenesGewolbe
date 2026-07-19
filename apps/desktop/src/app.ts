@@ -77,7 +77,13 @@ async function chooseVault(
   state: AppState,
   update: (state: AppState) => Promise<void>,
 ): Promise<void> {
-  const selected = await adapter.selectFolder(purpose);
+  let selected: string | null;
+  try {
+    selected = await adapter.selectFolder(purpose);
+  } catch (error) {
+    await update({ ...state, busy: false, error: errorMessage(error) });
+    return;
+  }
   if (!selected) return;
 
   await activateVault(

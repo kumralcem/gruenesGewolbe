@@ -23,4 +23,3 @@ Make repeated Import Runs low-maintenance by recognizing exact content already p
 ## Blocked by
 
 - .scratch/offline-archive-loop/issues/04-run-recursive-paintings-import.md
-

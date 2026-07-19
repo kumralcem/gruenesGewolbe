@@ -26,4 +26,3 @@ Complete the ambiguous duplicate review path without introducing record merging.
 - .scratch/offline-archive-loop/issues/05-skip-exact-file-duplicates-during-import.md
 - .scratch/offline-archive-loop/issues/07-resolve-review-reasons-individually.md
 - .scratch/offline-archive-loop/issues/09-move-items-to-vault-trash-and-restore.md
-

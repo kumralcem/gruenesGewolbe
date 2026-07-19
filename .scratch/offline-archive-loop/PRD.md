@@ -4,7 +4,7 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-The repository has a well-tested archive core, CLI paths, desktop-facing adapters, and a static workbench scaffold, but it does not yet provide a functional desktop application. The user cannot launch a real window and complete the basic local archive workflow: create or open a Vault, add paintings, see the preserved images, correct metadata, resolve Review Reasons, close the application, and reopen the same Vault later.
+The repository has a well-tested archive core, CLI paths, desktop-facing adapters, and a static workbench scaffold, but it does not yet provide a functional desktop application. The user cannot launch a real window and complete the basic local archive workflow: create or open a Vault, add Artwork Saved Items, see the preserved images, correct metadata, resolve Review Reasons, close the application, and reopen the same Vault later.
 
 The current prototype also treats several domain behaviors as completed even though they exist only behind Rust APIs or test fakes. Import is shallow and synchronous, thumbnail files are renamed copies rather than bounded previews, Review Status can be cleared without resolving individual concerns, direct file errors can affect broader operations, and the on-disk format is implemented with ad hoc parsing. There are no existing real Vaults, so this is the right point to establish a coherent format and usable Offline Archive Loop before compatibility obligations or external integrations make changes expensive.
 
