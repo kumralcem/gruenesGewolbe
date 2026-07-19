@@ -24,6 +24,10 @@ pub struct Vault {
 impl Vault {
     pub fn create(root: impl AsRef<Path>) -> Result<Self, VaultError> {
         let root = root.as_ref();
+        if root.exists() && fs::read_dir(root)?.next().is_some() {
+            return Err(VaultError::NonEmptyRoot(root.to_path_buf()));
+        }
+
         fs::create_dir_all(root)?;
         fs::create_dir_all(root.join(SUBVAULTS_DIR))?;
         fs::create_dir_all(root.join(COLLECTIONS_DIR))?;
@@ -1739,6 +1743,7 @@ struct ItemRecordEntry {
 pub enum VaultError {
     Io(io::Error),
     MissingRoot(PathBuf),
+    NonEmptyRoot(PathBuf),
     MissingConfig(PathBuf),
     MissingSubvaults(PathBuf),
     MissingCollections(PathBuf),
@@ -1756,6 +1761,9 @@ impl fmt::Display for VaultError {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::MissingRoot(path) => write!(f, "vault root does not exist: {}", path.display()),
+            Self::NonEmptyRoot(path) => {
+                write!(f, "vault folder is not empty: {}", path.display())
+            }
             Self::MissingConfig(path) => {
                 write!(f, "vault config is missing: {}", path.display())
             }
@@ -1818,7 +1826,7 @@ fn validate_vault_root(root: &Path) -> Result<(), VaultError> {
     let config = fs::read_to_string(&config_path)?;
     if !config
         .lines()
-        .any(|line| line.trim() == "format_version = 1")
+        .any(|line| line.trim() == "format_version = 2")
     {
         return Err(VaultError::UnsupportedFormat(config_path));
     }
@@ -1837,7 +1845,7 @@ fn validate_vault_root(root: &Path) -> Result<(), VaultError> {
 }
 
 fn default_config() -> String {
-    format!("format_version = 1\nname = \"{DEFAULT_VAULT_NAME}\"\n")
+    format!("format_version = 2\nname = \"{DEFAULT_VAULT_NAME}\"\n")
 }
 
 fn artwork_folder_name(creator: Option<&str>, year: Option<&str>, title: &str) -> String {

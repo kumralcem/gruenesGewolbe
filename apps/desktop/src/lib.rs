@@ -2,7 +2,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 const KNOWN_VAULTS_FILE: &str = "known-vaults.tsv";
+const LAST_ACTIVE_VAULT_FILE: &str = "last-active-vault.txt";
 const OPENAI_PROVIDER_FILE: &str = "openai-provider.toml";
 
 use gruenes_gewolbe_core::{
@@ -18,16 +21,35 @@ pub struct DesktopShell {
     active_vault: Option<Vault>,
     app_state_dir: Option<PathBuf>,
     known_vault_roots: Vec<PathBuf>,
+    startup_notice: Option<String>,
 }
 
 impl DesktopShell {
     pub fn with_app_state_dir(app_state_dir: impl AsRef<Path>) -> Self {
         let app_state_dir = app_state_dir.as_ref().to_path_buf();
         let known_vault_roots = read_known_vault_roots(&app_state_dir).unwrap_or_default();
+        let (active_vault, startup_notice) = match read_last_active_vault_root(&app_state_dir) {
+            Ok(Some(root)) => match Vault::open(&root) {
+                Ok(vault) => (Some(vault), None),
+                Err(_) => (
+                    None,
+                    Some(format!(
+                        "last active vault is unavailable: {}",
+                        root.display()
+                    )),
+                ),
+            },
+            Ok(None) => (None, None),
+            Err(error) => (
+                None,
+                Some(format!("last active vault could not be read: {error}")),
+            ),
+        };
         Self {
-            active_vault: None,
+            active_vault,
             app_state_dir: Some(app_state_dir),
             known_vault_roots,
+            startup_notice,
         }
     }
 
@@ -62,6 +84,14 @@ impl DesktopShell {
         };
 
         Ok(roots.into_iter().map(|root| KnownVault { root }).collect())
+    }
+
+    pub fn startup_state(&self) -> Result<DesktopStartup, DesktopShellError> {
+        Ok(DesktopStartup {
+            active_vault: self.active_vault(),
+            known_vaults: self.known_vaults()?,
+            notice: self.startup_notice.clone(),
+        })
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, DesktopShellError> {
@@ -385,7 +415,11 @@ impl DesktopShell {
     fn set_active_vault(&mut self, vault: Vault) -> Result<ActiveVault, VaultError> {
         let active_vault = ActiveVault::from(vault.root());
         self.remember_vault_root(vault.root())?;
+        if let Some(app_state_dir) = self.app_state_dir.as_ref() {
+            write_last_active_vault_root(app_state_dir, vault.root())?;
+        }
         self.active_vault = Some(vault);
+        self.startup_notice = None;
         Ok(active_vault)
     }
 
@@ -461,6 +495,16 @@ pub struct TauriCommandState {
 }
 
 impl TauriCommandState {
+    pub fn with_app_state_dir(app_state_dir: impl AsRef<Path>) -> Self {
+        Self {
+            shell: DesktopShell::with_app_state_dir(app_state_dir),
+        }
+    }
+
+    pub fn startup(&self) -> Result<DesktopStartupView, DesktopShellError> {
+        self.shell.startup_state().map(DesktopStartupView::from)
+    }
+
     pub fn create_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
         self.shell
             .create_vault(root)
@@ -533,7 +577,7 @@ pub struct WorkbenchSnapshotCommand {
     pub selected_item_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActiveVaultView {
     pub root: String,
 }
@@ -542,6 +586,40 @@ impl From<ActiveVault> for ActiveVaultView {
     fn from(vault: ActiveVault) -> Self {
         Self {
             root: path_string(vault.root()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KnownVaultView {
+    pub root: String,
+}
+
+impl From<&KnownVault> for KnownVaultView {
+    fn from(vault: &KnownVault) -> Self {
+        Self {
+            root: path_string(vault.root()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DesktopStartupView {
+    pub active_vault: Option<ActiveVaultView>,
+    pub known_vaults: Vec<KnownVaultView>,
+    pub notice: Option<String>,
+}
+
+impl From<DesktopStartup> for DesktopStartupView {
+    fn from(startup: DesktopStartup) -> Self {
+        Self {
+            active_vault: startup.active_vault().cloned().map(ActiveVaultView::from),
+            known_vaults: startup
+                .known_vaults()
+                .iter()
+                .map(KnownVaultView::from)
+                .collect(),
+            notice: startup.notice().map(str::to_string),
         }
     }
 }
@@ -778,6 +856,27 @@ pub struct KnownVault {
     root: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopStartup {
+    active_vault: Option<ActiveVault>,
+    known_vaults: Vec<KnownVault>,
+    notice: Option<String>,
+}
+
+impl DesktopStartup {
+    pub fn active_vault(&self) -> Option<&ActiveVault> {
+        self.active_vault.as_ref()
+    }
+
+    pub fn known_vaults(&self) -> &[KnownVault] {
+        &self.known_vaults
+    }
+
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+}
+
 impl KnownVault {
     pub fn root(&self) -> &Path {
         &self.root
@@ -892,5 +991,29 @@ fn write_known_vault_roots(app_state_dir: &Path, roots: &[PathBuf]) -> Result<()
         contents.push('\n');
     }
     fs::write(app_state_dir.join(KNOWN_VAULTS_FILE), contents)?;
+    Ok(())
+}
+
+fn read_last_active_vault_root(app_state_dir: &Path) -> io::Result<Option<PathBuf>> {
+    let path = app_state_dir.join(LAST_ACTIVE_VAULT_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let root = fs::read_to_string(path)?;
+    let root = root.trim_end();
+    if root.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(PathBuf::from(root)))
+}
+
+fn write_last_active_vault_root(app_state_dir: &Path, root: &Path) -> Result<(), VaultError> {
+    fs::create_dir_all(app_state_dir)?;
+    fs::write(
+        app_state_dir.join(LAST_ACTIVE_VAULT_FILE),
+        root.display().to_string(),
+    )?;
     Ok(())
 }

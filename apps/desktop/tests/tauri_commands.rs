@@ -67,6 +67,44 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
     fs::remove_dir_all(&source_dir).expect("clean source directory");
 }
 
+#[test]
+fn tauri_commands_return_restart_safe_desktop_startup_state() {
+    let root = temp_path("tauri-startup-vault");
+    let app_state = temp_path("tauri-startup-app-state");
+
+    let mut state = TauriCommandState::with_app_state_dir(&app_state);
+    let initial = state.startup().expect("initial startup state");
+    assert!(initial.active_vault.is_none());
+    assert!(initial.known_vaults.is_empty());
+    assert!(initial.notice.is_none());
+
+    state
+        .create_vault(root.display().to_string())
+        .expect("create through command state");
+    drop(state);
+
+    let restored = TauriCommandState::with_app_state_dir(&app_state)
+        .startup()
+        .expect("restored startup state");
+    assert_eq!(
+        restored.active_vault.as_ref().expect("active vault").root,
+        root.display().to_string()
+    );
+    assert_eq!(restored.known_vaults[0].root, root.display().to_string());
+    assert!(restored.notice.is_none());
+    assert_eq!(
+        serde_json::to_value(&restored).expect("serialize startup state"),
+        serde_json::json!({
+            "active_vault": { "root": root.display().to_string() },
+            "known_vaults": [{ "root": root.display().to_string() }],
+            "notice": null
+        })
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&app_state).expect("clean app state");
+}
+
 fn temp_path(name: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Gruenes Gewoelbe">
+  <rect width="512" height="512" rx="80" fill="#176b4d"/>
+  <path d="M112 390V226c0-96 62-154 144-154s144 58 144 154v164" fill="none" stroke="#f5f7f4" stroke-width="34" stroke-linecap="round"/>
+  <path d="M144 258h224M144 326h224M224 258v132M304 258v132" fill="none" stroke="#f5f7f4" stroke-width="24" stroke-linecap="round"/>
+</svg>

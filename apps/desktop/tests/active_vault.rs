@@ -73,6 +73,57 @@ fn desktop_shell_remembers_multiple_vault_roots_and_switches_the_active_vault() 
     fs::remove_dir_all(&app_state).expect("clean app state");
 }
 
+#[test]
+fn desktop_shell_reopens_the_last_valid_active_vault() {
+    let root = temp_path("desktop-last-active-vault");
+    let app_state = temp_path("desktop-last-active-app-state");
+
+    let mut shell = DesktopShell::with_app_state_dir(&app_state);
+    shell.create_vault(&root).expect("create active vault");
+    drop(shell);
+
+    let restored_shell = DesktopShell::with_app_state_dir(&app_state);
+
+    assert_eq!(
+        restored_shell
+            .active_vault()
+            .expect("restored active vault")
+            .root(),
+        root.as_path()
+    );
+    assert!(!root.join("last-active-vault.txt").exists());
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&app_state).expect("clean app state");
+}
+
+#[test]
+fn desktop_shell_reports_an_unavailable_last_active_vault_without_switching() {
+    let root = temp_path("desktop-missing-last-active-vault");
+    let app_state = temp_path("desktop-missing-last-active-app-state");
+
+    let mut shell = DesktopShell::with_app_state_dir(&app_state);
+    shell.create_vault(&root).expect("create active vault");
+    drop(shell);
+    fs::remove_dir_all(&root).expect("remove remembered vault");
+
+    let restored_shell = DesktopShell::with_app_state_dir(&app_state);
+    let startup = restored_shell.startup_state().expect("startup state");
+
+    assert!(startup.active_vault().is_none());
+    assert_eq!(roots(startup.known_vaults().to_vec()), vec![root.clone()]);
+    assert_eq!(
+        startup.notice(),
+        Some(format!(
+            "last active vault is unavailable: {}",
+            root.display()
+        ))
+        .as_deref()
+    );
+
+    fs::remove_dir_all(&app_state).expect("clean app state");
+}
+
 fn roots(vaults: Vec<gruenes_gewolbe_desktop::KnownVault>) -> Vec<PathBuf> {
     vaults
         .into_iter()

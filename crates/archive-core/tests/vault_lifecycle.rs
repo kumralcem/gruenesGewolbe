@@ -16,7 +16,7 @@ fn user_can_create_a_vault_as_ordinary_files_and_reopen_it() {
     assert!(root.join("collections").is_dir());
 
     let visible_config = fs::read_to_string(root.join("vault.toml")).expect("read vault config");
-    assert!(visible_config.contains("format_version = 1"));
+    assert!(visible_config.contains("format_version = 2"));
     assert!(visible_config.contains("name = \"Personal Archive\""));
 
     let reopened = Vault::open(&root).expect("reopen vault");
@@ -43,6 +43,29 @@ fn user_can_open_a_copied_vault_without_hidden_app_state() {
 
     fs::remove_dir_all(&original).expect("clean original vault");
     fs::remove_dir_all(&copied).expect("clean copied vault");
+}
+
+#[test]
+fn vault_creation_refuses_an_unrelated_non_empty_folder() {
+    let root = temp_path("non-empty");
+    fs::create_dir_all(&root).expect("create non-empty root");
+    fs::write(root.join("unrelated.txt"), "keep me").expect("write unrelated file");
+
+    let error = Vault::create(&root).expect_err("non-empty folder should be refused");
+
+    assert_eq!(
+        error.to_string(),
+        format!("vault folder is not empty: {}", root.display())
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("unrelated.txt")).expect("read unrelated file"),
+        "keep me"
+    );
+    assert!(!root.join("vault.toml").exists());
+    assert!(!root.join("subvaults").exists());
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean non-empty root");
 }
 
 #[test]
