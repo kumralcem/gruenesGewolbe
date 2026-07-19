@@ -207,29 +207,36 @@ impl Vault {
                 exact_duplicate_policy: ExactDuplicatePolicy::Skip,
             },
         )
-        .map(|summary| summary.imported_items)
+        .map(|summary| summary.0.imported_items)
     }
 
     pub fn add_artwork_files_with_options(
         &self,
         source_files: impl IntoIterator<Item = PathBuf>,
         options: ImportRunOptions,
-    ) -> Result<ImportRunSummary, VaultError> {
-        let source_files = source_files.into_iter().collect::<Vec<_>>();
-        for source_file in &source_files {
-            if !is_supported_image_file(source_file) {
-                return Err(VaultError::UnsupportedImageFile(source_file.clone()));
+    ) -> Result<SelectedFileImportSummary, VaultError> {
+        let mut supported_files = Vec::new();
+        let mut skipped_entries = Vec::new();
+        for source_file in source_files {
+            if is_supported_image_file(&source_file) {
+                supported_files.push(source_file);
+            } else {
+                skipped_entries.push(ImportSkippedEntry {
+                    path: source_file,
+                    reason: ImportSkipReason::UnsupportedFile,
+                });
             }
         }
 
         self.process_paintings_import(
             "selected-files",
-            source_files,
-            Vec::new(),
+            supported_files,
+            skipped_entries,
             Vec::new(),
             options,
             |_| ImportRunAction::Continue,
         )
+        .map(SelectedFileImportSummary)
     }
 
     pub fn import_paintings_folder(
@@ -239,6 +246,7 @@ impl Vault {
         let source_folder = source_folder.as_ref();
         let imported = self
             .run_paintings_import(source_folder, |_| ImportRunAction::Continue)?
+            .0
             .imported_items;
         self.append_activity_log(&format!(
             "import-paintings\t{}\t{}",
@@ -315,6 +323,7 @@ impl Vault {
             options,
             on_progress,
         )
+        .map(ImportRunSummary)
     }
 
     fn process_paintings_import<F>(
@@ -325,7 +334,7 @@ impl Vault {
         mut failed_entries: Vec<ImportFailedEntry>,
         options: ImportRunOptions,
         mut on_progress: F,
-    ) -> Result<ImportRunSummary, VaultError>
+    ) -> Result<ArtworkImportOutcome, VaultError>
     where
         F: FnMut(&ImportProgress) -> ImportRunAction,
     {
@@ -424,7 +433,7 @@ impl Vault {
             maintenance_errors.push(format!("activity-log: {error}"));
         }
 
-        Ok(ImportRunSummary {
+        Ok(ArtworkImportOutcome {
             imported_items,
             skipped_entries,
             failed_entries,
@@ -1243,6 +1252,13 @@ impl Vault {
             }
 
             if let Some(source_path) = source_path {
+                if source_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    == frontmatter_value(&text, "import_original_filename")
+                {
+                    push_duplicate_candidate(&mut candidates, id.clone(), "filename");
+                }
                 if frontmatter_value(&text, "import_source_path")
                     .map(PathBuf::from)
                     .as_deref()
@@ -2022,7 +2038,7 @@ impl ImportProgress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportRunSummary {
+pub struct ArtworkImportOutcome {
     imported_items: Vec<SavedItem>,
     skipped_entries: Vec<ImportSkippedEntry>,
     failed_entries: Vec<ImportFailedEntry>,
@@ -2030,6 +2046,34 @@ pub struct ImportRunSummary {
     cancelled_files: Vec<PathBuf>,
     maintenance_errors: Vec<String>,
     vault_problems: Vec<ImportVaultProblem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRunSummary(ArtworkImportOutcome);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedFileImportSummary(ArtworkImportOutcome);
+
+impl std::ops::Deref for ImportRunSummary {
+    type Target = ArtworkImportOutcome;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SelectedFileImportSummary {
+    type Target = ArtworkImportOutcome;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl SelectedFileImportSummary {
+    pub fn into_outcome(self) -> ArtworkImportOutcome {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2125,7 +2169,7 @@ impl ImportSkippedEntry {
     }
 }
 
-impl ImportRunSummary {
+impl ArtworkImportOutcome {
     pub fn imported_count(&self) -> usize {
         self.imported_items.len()
     }

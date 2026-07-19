@@ -25,6 +25,7 @@ interface AppState extends DesktopStartup {
   workbench_snapshot: WorkbenchSnapshot | null;
   import_progress: ImportProgress | null;
   import_summary: ImportRunSummary | null;
+  import_summary_kind: "folder" | "selected" | null;
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
@@ -39,6 +40,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     workbench_snapshot: null,
     import_progress: null,
     import_summary: null,
+    import_summary_kind: null,
   };
 
   const render = () => {
@@ -63,6 +65,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       workbench_snapshot: null,
       import_progress: null,
       import_summary: null,
+      import_summary_kind: null,
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -143,6 +146,7 @@ function bindActions(
         error: null,
         workbench_snapshot: snapshot,
         import_summary: summary,
+        import_summary_kind: "selected",
       });
     } catch (error) {
       await update({ ...state, busy: false, error: errorMessage(error) });
@@ -166,6 +170,7 @@ function bindActions(
         error: null,
         import_progress: { processed: 0, total: 0, current_file: sourceFolder },
         import_summary: null,
+        import_summary_kind: "folder",
       });
       const summary = await adapter.runPaintingsImport(sourceFolder, {
         metadata,
@@ -177,6 +182,7 @@ function bindActions(
           error: null,
           import_progress: progress,
           import_summary: null,
+          import_summary_kind: "folder",
         });
       });
       const snapshot = adapter.workbenchSnapshot
@@ -189,6 +195,7 @@ function bindActions(
         workbench_snapshot: snapshot,
         import_progress: null,
         import_summary: summary,
+        import_summary_kind: "folder",
       });
     } catch (error) {
       await update({
@@ -508,10 +515,11 @@ function importRunTemplate(state: AppState, adapter: DesktopAdapter): string {
   }
   if (!state.import_summary) return "";
   const summary = state.import_summary;
+  const summaryLabel = state.import_summary_kind === "selected" ? "Selected Files" : "Import Run";
   return `
     <section class="import-run-status is-summary" aria-label="Import summary">
       <div>
-        <p class="eyebrow">Import Run</p>
+        <p class="eyebrow">${summaryLabel}</p>
         <h3>${summary.cancelled ? "Import cancelled" : "Import complete"}</h3>
         <div class="summary-counts">
           <span>${summary.imported_count} imported</span>

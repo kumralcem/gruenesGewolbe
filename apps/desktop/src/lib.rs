@@ -14,11 +14,12 @@ fn non_empty(value: Option<String>) -> Option<String> {
 
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
-    ArtworkImportMetadata, ArtworkSort, Collection, CollectionDefinition, ExactDuplicatePolicy,
-    ExtractedTextCapture, IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunOptions,
-    ImportRunSummary, ItemDetails, ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem,
-    SavedItem, SearchResult, SourceCaptureResult, SourceExtractor, SourceLinkCapture,
-    TagDefinition, UpdateItemRecord, Vault, VaultError, VaultOpen, VaultRepairProposal,
+    ArtworkImportMetadata, ArtworkImportOutcome, ArtworkSort, Collection, CollectionDefinition,
+    ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem, ImportProgress,
+    ImportRunAction, ImportRunOptions, ImportRunSummary, ItemDetails, ItemLinkDefinition,
+    ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult, SelectedFileImportSummary,
+    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
+    Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -174,7 +175,7 @@ impl DesktopShell {
         source_files: impl IntoIterator<Item = PathBuf>,
         metadata: ArtworkImportMetadata,
         exact_duplicate_policy: ExactDuplicatePolicy,
-    ) -> Result<ImportRunSummary, DesktopShellError> {
+    ) -> Result<SelectedFileImportSummary, DesktopShellError> {
         let vault = self
             .active_vault
             .as_ref()
@@ -831,6 +832,18 @@ pub struct ImportRunSummaryView {
 
 impl From<ImportRunSummary> for ImportRunSummaryView {
     fn from(summary: ImportRunSummary) -> Self {
+        Self::from_outcome(&summary)
+    }
+}
+
+impl From<SelectedFileImportSummary> for ImportRunSummaryView {
+    fn from(summary: SelectedFileImportSummary) -> Self {
+        Self::from_outcome(&summary)
+    }
+}
+
+impl ImportRunSummaryView {
+    fn from_outcome(summary: &ArtworkImportOutcome) -> Self {
         Self {
             imported_count: summary.imported_count(),
             skipped_count: summary.skipped_count(),

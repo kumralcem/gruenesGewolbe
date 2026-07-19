@@ -123,6 +123,7 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
   await page.getByLabel("Year").fill("2024");
   await page.getByRole("button", { name: "Add Artwork" }).click();
 
+  await expect(page.getByText("Selected Files")).toBeVisible();
   await expect(page.getByText("1 exact duplicate")).toBeVisible();
   await expect(page.getByText("nocturne.jpg")).toBeVisible();
 

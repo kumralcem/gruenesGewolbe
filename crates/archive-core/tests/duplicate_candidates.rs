@@ -8,7 +8,7 @@ use gruenes_gewolbe_core::{
 };
 
 #[test]
-fn paintings_import_warns_about_file_fingerprint_duplicate_candidates_without_blocking_save() {
+fn paintings_import_skips_byte_identical_files_instead_of_creating_review_work() {
     let root = temp_path("duplicate-file-vault");
     let existing_source_dir = temp_path("duplicate-file-existing");
     let import_source_dir = temp_path("duplicate-file-import");
@@ -34,21 +34,14 @@ fn paintings_import_warns_about_file_fingerprint_duplicate_candidates_without_bl
     let imported = vault
         .import_paintings_folder(&import_source_dir)
         .expect("import duplicate candidate");
-    assert_eq!(imported.len(), 1);
-    assert!(imported[0].item_folder().is_dir());
-
-    let duplicate_details = vault
-        .item_details(imported[0].id())
-        .expect("read duplicate details");
-    assert_eq!(duplicate_details.review_status(), "needs-review");
-    assert_eq!(duplicate_details.duplicate_candidates().len(), 1);
+    assert!(imported.is_empty());
+    assert!(vault.item_details(existing.id()).is_ok());
     assert_eq!(
-        duplicate_details.duplicate_candidates()[0].item_id(),
-        existing.id()
-    );
-    assert_eq!(
-        duplicate_details.duplicate_candidates()[0].signal(),
-        "file-fingerprint"
+        vault
+            .browse_artwork_items("Paintings")
+            .expect("browse paintings")
+            .len(),
+        1
     );
 
     fs::remove_dir_all(&root).expect("clean temp vault");
@@ -160,7 +153,7 @@ fn successful_url_capture_warns_about_exact_source_link_duplicate_candidates_wit
 }
 
 #[test]
-fn paintings_import_warns_about_import_provenance_duplicate_candidates_without_blocking_save() {
+fn repeated_paintings_import_does_not_create_exact_duplicate_review_work() {
     let root = temp_path("duplicate-provenance-vault");
     let import_source_dir = temp_path("duplicate-provenance-source");
     fs::create_dir_all(&import_source_dir).expect("create import source directory");
@@ -175,16 +168,14 @@ fn paintings_import_warns_about_import_provenance_duplicate_candidates_without_b
         .import_paintings_folder(&import_source_dir)
         .expect("second import");
 
-    assert_eq!(second_import.len(), 1);
-    let duplicate_details = vault
-        .item_details(second_import[0].id())
-        .expect("read duplicate details");
-    assert_eq!(duplicate_details.review_status(), "needs-review");
-    assert!(duplicate_details
-        .duplicate_candidates()
-        .iter()
-        .any(|candidate| candidate.item_id() == first_import[0].id()
-            && candidate.signal() == "import-provenance"));
+    assert!(second_import.is_empty());
+    assert_eq!(
+        vault
+            .browse_artwork_items("Paintings")
+            .expect("browse paintings")
+            .len(),
+        first_import.len()
+    );
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&import_source_dir).expect("clean import source directory");
