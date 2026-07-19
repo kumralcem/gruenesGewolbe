@@ -383,22 +383,19 @@ fn exact_file_duplicates_are_skipped_before_creating_an_item_folder() {
 fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
     let root = temp_path("exact-override-import-vault");
     let source = temp_path("exact-override-import-source");
-    let existing_source = temp_path("exact-override-existing-source");
     fs::create_dir_all(&source).expect("create import source");
-    fs::create_dir_all(&existing_source).expect("create existing source");
-    let existing_file = existing_source.join("existing.png");
+    let existing_file = source.join("Artist - 2024 - Work.png");
     image::RgbImage::from_pixel(4, 4, image::Rgb([10, 20, 30]))
         .save(&existing_file)
         .expect("write existing image");
-    fs::copy(&existing_file, source.join("intentional-copy.png")).expect("copy duplicate");
     let vault = Vault::create(&root).expect("create vault");
     vault
         .add_artwork_item(AddArtworkItem {
             source_file: existing_file,
             home_subvault: "Paintings".to_string(),
-            creator: None,
-            year: None,
-            title: "Existing".to_string(),
+            creator: Some("Artist".to_string()),
+            year: Some("2024".to_string()),
+            title: "Work".to_string(),
             saving_reason: None,
         })
         .expect("save existing item");
@@ -427,7 +424,6 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");
-    fs::remove_dir_all(&existing_source).expect("clean existing source");
 }
 
 #[test]

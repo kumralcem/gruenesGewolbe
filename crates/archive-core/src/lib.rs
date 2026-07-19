@@ -107,7 +107,7 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
-        self.preserve_artwork_item(item, true, false)
+        self.preserve_artwork_item(item, true, None)
             .map(|outcome| outcome.saved_item)
     }
 
@@ -115,7 +115,7 @@ impl Vault {
         &self,
         item: AddArtworkItem,
         refresh_metadata_index: bool,
-        suppress_fingerprint_candidates: bool,
+        excluded_duplicate_candidate_id: Option<&str>,
     ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
@@ -147,12 +147,13 @@ impl Vault {
         let id = new_item_id();
         let file_fingerprint = file_fingerprint(&item.source_file)?;
         let duplicate_candidates = self.duplicate_candidates_for_artwork(
-            (!suppress_fingerprint_candidates).then_some(file_fingerprint.as_str()),
+            Some(&file_fingerprint),
             item.creator.as_deref(),
             item.year.as_deref(),
             Some(item.title.as_str()),
             Some(&item.source_file),
             None,
+            excluded_duplicate_candidate_id,
         )?;
         let primary_file = format!("files/{}", file_name.to_string_lossy());
         let record = artwork_record(
@@ -335,12 +336,13 @@ impl Vault {
                 }
             };
             vault_problems.extend(duplicate_check.vault_problems);
-            let is_exact_duplicate = duplicate_check.existing_item_id.is_some();
             if options.exact_duplicate_policy == ExactDuplicatePolicy::Skip {
-                if let Some(existing_item_id) = duplicate_check.existing_item_id {
+                if let Some(existing_item_id) = duplicate_check.existing_item_id.as_ref() {
                     skipped_entries.push(ImportSkippedEntry {
                         path: source_file.clone(),
-                        reason: ImportSkipReason::ExactFileDuplicate { existing_item_id },
+                        reason: ImportSkipReason::ExactFileDuplicate {
+                            existing_item_id: existing_item_id.clone(),
+                        },
                     });
                     continue;
                 }
@@ -348,7 +350,7 @@ impl Vault {
             match self.preserve_artwork_item(
                 inferred_artwork_item(source_file.clone(), &options.metadata),
                 false,
-                is_exact_duplicate,
+                duplicate_check.existing_item_id.as_deref(),
             ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
@@ -502,6 +504,7 @@ impl Vault {
             Some(capture.title.as_str()),
             None,
             Some(capture.source_link.as_str()),
+            None,
         )?;
         let id = new_item_id();
         let record = idea_source_record(
@@ -1187,6 +1190,7 @@ impl Vault {
         title: Option<&str>,
         source_path: Option<&Path>,
         source_link: Option<&str>,
+        excluded_candidate_id: Option<&str>,
     ) -> Result<Vec<DuplicateCandidate>, VaultError> {
         let mut candidates = Vec::new();
         for record in self.item_record_entries()? {
@@ -1196,6 +1200,9 @@ impl Vault {
             let Some(id) = frontmatter_value(&text, "id") else {
                 continue;
             };
+            if excluded_candidate_id == Some(id.as_str()) {
+                continue;
+            }
 
             if let Some(file_fingerprint) = file_fingerprint {
                 if frontmatter_value(&text, "file_fingerprint").as_deref() == Some(file_fingerprint)
@@ -1240,6 +1247,7 @@ impl Vault {
         let incoming_fingerprint = file_fingerprint(source_file)?;
         let incoming_bytes = fs::read(source_file)?;
         let mut vault_problems = Vec::new();
+        let mut existing_item_id = None;
         for record in self.item_record_entries()? {
             let text = match fs::read_to_string(&record.record_path) {
                 Ok(text) => text,
@@ -1258,15 +1266,27 @@ impl Vault {
                 });
                 continue;
             }
-            if frontmatter_value(&text, "file_fingerprint").as_deref()
-                != Some(incoming_fingerprint.as_str())
-            {
+            let Some(item_type) = frontmatter_value(&text, "item_type") else {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "missing item type".to_string(),
+                });
+                continue;
+            };
+            if item_type != "artwork" {
                 continue;
             }
             let Some(id) = frontmatter_value(&text, "id") else {
                 vault_problems.push(ImportVaultProblem {
                     path: record.record_path.clone(),
                     error: "missing item id".to_string(),
+                });
+                continue;
+            };
+            let Some(stored_fingerprint) = frontmatter_value(&text, "file_fingerprint") else {
+                vault_problems.push(ImportVaultProblem {
+                    path: record.record_path.clone(),
+                    error: "missing file fingerprint".to_string(),
                 });
                 continue;
             };
@@ -1287,12 +1307,14 @@ impl Vault {
                 continue;
             }
             let preserved_path = record.item_folder.join("files").join(original_path);
+            if stored_fingerprint != incoming_fingerprint {
+                continue;
+            }
             match fs::read(&preserved_path) {
                 Ok(existing_bytes) if existing_bytes == incoming_bytes => {
-                    return Ok(ExactDuplicateCheck {
-                        existing_item_id: Some(id),
-                        vault_problems,
-                    });
+                    if existing_item_id.is_none() {
+                        existing_item_id = Some(id);
+                    }
                 }
                 Ok(_) => {}
                 Err(error) => vault_problems.push(ImportVaultProblem {
@@ -1302,7 +1324,7 @@ impl Vault {
             }
         }
         Ok(ExactDuplicateCheck {
-            existing_item_id: None,
+            existing_item_id,
             vault_problems,
         })
     }
