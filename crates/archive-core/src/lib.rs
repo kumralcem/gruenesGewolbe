@@ -236,8 +236,16 @@ impl Vault {
         &self,
         source_folder: impl AsRef<Path>,
     ) -> Result<Vec<SavedItem>, VaultError> {
-        self.run_paintings_import(source_folder, |_| ImportRunAction::Continue)
-            .map(|summary| summary.imported_items)
+        let source_folder = source_folder.as_ref();
+        let imported = self
+            .run_paintings_import(source_folder, |_| ImportRunAction::Continue)?
+            .imported_items;
+        self.append_activity_log(&format!(
+            "import-paintings\t{}\t{}",
+            source_folder.display(),
+            imported.len()
+        ))?;
+        Ok(imported)
     }
 
     pub fn run_paintings_import<F>(
