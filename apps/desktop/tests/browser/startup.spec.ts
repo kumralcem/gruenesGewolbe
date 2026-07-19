@@ -6,6 +6,7 @@ test("first launch offers only functional vault actions", async ({ page }) => {
       startup: async () => ({
         active_vault: null,
         known_vaults: [],
+        repair_proposal: null,
         notice: null,
       }),
       selectFolder: async () => null,
@@ -13,6 +14,12 @@ test("first launch offers only functional vault actions", async ({ page }) => {
         throw new Error("not used");
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -32,13 +39,24 @@ test("creates a format-v2 vault in the selected folder", async ({ page }) => {
     const calls: string[] = [];
     Object.assign(window, { __testCalls: calls });
     window.__GG_TEST_ADAPTER__ = {
-      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
       selectFolder: async () => "/home/cem/Archive",
       createVault: async (root) => {
         calls.push(`create:${root}`);
         return { root };
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -55,12 +73,23 @@ test("creates a format-v2 vault in the selected folder", async ({ page }) => {
 test("shows a creation refusal without activating the folder", async ({ page }) => {
   await page.addInitScript(() => {
     window.__GG_TEST_ADAPTER__ = {
-      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
       selectFolder: async () => "/home/cem/Documents",
       createVault: async (root) => {
         throw new Error(`vault folder is not empty: ${root}`);
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -83,6 +112,7 @@ test("opens a known vault from the navigation", async ({ page }) => {
       startup: async () => ({
         active_vault: null,
         known_vaults: [{ root: "/vaults/Archive" }],
+        repair_proposal: null,
         notice: null,
       }),
       selectFolder: async () => null,
@@ -91,7 +121,13 @@ test("opens a known vault from the navigation", async ({ page }) => {
       },
       openVault: async (root) => {
         calls.push(`open:${root}`);
-        return { root };
+        return { status: "opened" as const, vault: { root } };
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
+        throw new Error("not used");
       },
     };
   });
@@ -108,7 +144,12 @@ test("opens a selected vault through the native-dialog boundary", async ({ page 
     const calls: string[] = [];
     Object.assign(window, { __testCalls: calls });
     window.__GG_TEST_ADAPTER__ = {
-      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
       selectFolder: async (purpose) => {
         calls.push(`select:${purpose}`);
         return "/vaults/Selected";
@@ -118,7 +159,13 @@ test("opens a selected vault through the native-dialog boundary", async ({ page 
       },
       openVault: async (root) => {
         calls.push(`open:${root}`);
-        return { root };
+        return { status: "opened" as const, vault: { root } };
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
+        throw new Error("not used");
       },
     };
   });
@@ -136,7 +183,12 @@ test("opens a selected vault through the native-dialog boundary", async ({ page 
 test("shows a native-dialog failure as a visible error", async ({ page }) => {
   await page.addInitScript(() => {
     window.__GG_TEST_ADAPTER__ = {
-      startup: async () => ({ active_vault: null, known_vaults: [], notice: null }),
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
       selectFolder: async () => {
         throw new Error("folder dialog is unavailable");
       },
@@ -144,6 +196,12 @@ test("shows a native-dialog failure as a visible error", async ({ page }) => {
         throw new Error("not used");
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -162,6 +220,7 @@ test("renders a restored last-active vault on restart", async ({ page }) => {
       startup: async () => ({
         active_vault: { root: "/vaults/Restored" },
         known_vaults: [{ root: "/vaults/Restored" }],
+        repair_proposal: null,
         notice: null,
       }),
       selectFolder: async () => null,
@@ -169,6 +228,12 @@ test("renders a restored last-active vault on restart", async ({ page }) => {
         throw new Error("not used");
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -187,6 +252,7 @@ test("keeps a missing last-active vault visible and explains the fallback", asyn
       startup: async () => ({
         active_vault: null,
         known_vaults: [{ root: "/media/offline/Archive" }],
+        repair_proposal: null,
         notice: "last active vault is unavailable: /media/offline/Archive",
       }),
       selectFolder: async () => null,
@@ -194,6 +260,12 @@ test("keeps a missing last-active vault visible and explains the fallback", asyn
         throw new Error("not used");
       },
       openVault: async () => {
+        throw new Error("not used");
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
         throw new Error("not used");
       },
     };
@@ -205,6 +277,127 @@ test("keeps a missing last-active vault visible and explains the fallback", asyn
     "last active vault is unavailable: /media/offline/Archive",
   );
   await expect(page.locator('[data-known-vault="/media/offline/Archive"]')).toBeVisible();
+  await expect(page.getByTestId("active-vault")).toHaveText("No vault open");
+});
+
+test("lists proposed repair directories and cancellation leaves the vault unopened", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, { __testCalls: calls });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
+      selectFolder: async () => "/vaults/Damaged",
+      createVault: async () => {
+        throw new Error("not used");
+      },
+      openVault: async (root) => ({
+        status: "repair_required" as const,
+        proposal: {
+          root,
+          directories: [`${root}/subvaults`, `${root}/collections`],
+        },
+      }),
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async (root) => {
+        calls.push(`cancel:${root}`);
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("main").getByRole("button", { name: "Open Vault" }).click();
+
+  await expect(page.getByRole("heading", { name: "Repair Damaged" })).toBeVisible();
+  await expect(page.getByText("/vaults/Damaged/subvaults", { exact: true })).toBeVisible();
+  await expect(page.getByText("/vaults/Damaged/collections", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await expect(page.getByRole("heading", { name: "No vault open" })).toBeVisible();
+  await expect(page.getByTestId("active-vault")).toHaveText("No vault open");
+  await expect.poll(() => readCalls(page)).toEqual(["cancel:/vaults/Damaged"]);
+});
+
+test("confirmed repair opens the repaired vault", async ({ page }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    Object.assign(window, { __testCalls: calls });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
+      selectFolder: async () => "/vaults/Repairable",
+      createVault: async () => {
+        throw new Error("not used");
+      },
+      openVault: async (root) => ({
+        status: "repair_required" as const,
+        proposal: { root, directories: [`${root}/collections`] },
+      }),
+      confirmVaultRepair: async (root) => {
+        calls.push(`confirm:${root}`);
+        return { root };
+      },
+      cancelVaultRepair: async () => {
+        throw new Error("not used");
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("main").getByRole("button", { name: "Open Vault" }).click();
+  await page.getByRole("button", { name: "Repair and Open" }).click();
+
+  await expect(page.getByTestId("active-vault")).toHaveText("/vaults/Repairable");
+  await expect(page.getByRole("heading", { name: "Repairable" })).toBeVisible();
+  await expect.poll(() => readCalls(page)).toEqual(["confirm:/vaults/Repairable"]);
+});
+
+test("unsafe structural conflicts remain visible errors", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({
+        active_vault: null,
+        known_vaults: [],
+        repair_proposal: null,
+        notice: null,
+      }),
+      selectFolder: async () => "/vaults/Unsafe",
+      createVault: async () => {
+        throw new Error("not used");
+      },
+      openVault: async () => {
+        throw new Error(
+          "required vault directory conflicts with an existing file: /vaults/Unsafe/subvaults",
+        );
+      },
+      confirmVaultRepair: async () => {
+        throw new Error("not used");
+      },
+      cancelVaultRepair: async () => {
+        throw new Error("not used");
+      },
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("main").getByRole("button", { name: "Open Vault" }).click();
+
+  await expect(page.getByRole("alert")).toHaveText(
+    "required vault directory conflicts with an existing file: /vaults/Unsafe/subvaults",
+  );
   await expect(page.getByTestId("active-vault")).toHaveText("No vault open");
 });
 

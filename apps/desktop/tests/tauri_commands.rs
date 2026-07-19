@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_desktop::{
-    CaptureIdeaCommand, ImportPaintingsCommand, TauriCommandState, WorkbenchSnapshotCommand,
+    CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView, TauriCommandState,
+    WorkbenchSnapshotCommand,
 };
 
 #[test]
@@ -98,6 +99,7 @@ fn tauri_commands_return_restart_safe_desktop_startup_state() {
         serde_json::json!({
             "active_vault": { "root": root.display().to_string() },
             "known_vaults": [{ "root": root.display().to_string() }],
+            "repair_proposal": null,
             "notice": null
         })
     );
@@ -106,11 +108,92 @@ fn tauri_commands_return_restart_safe_desktop_startup_state() {
     let opened = opening_state
         .open_vault(root.display().to_string())
         .expect("open existing vault through command state");
-    assert_eq!(opened.root, root.display().to_string());
+    assert_eq!(
+        opened,
+        OpenVaultView::Opened {
+            vault: gruenes_gewolbe_desktop::ActiveVaultView {
+                root: root.display().to_string()
+            }
+        }
+    );
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&app_state).expect("clean app state");
     fs::remove_dir_all(&open_app_state).expect("clean open app state");
+}
+
+#[test]
+fn tauri_commands_serialize_cancel_and_confirm_a_vault_repair() {
+    let root = temp_path("tauri-repair-vault");
+    fs::create_dir_all(root.join("subvaults")).expect("create existing structure");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write vault config");
+    let mut state = TauriCommandState::default();
+
+    let proposed = state
+        .open_vault(root.display().to_string())
+        .expect("propose repair through command state");
+    assert_eq!(
+        serde_json::to_value(&proposed).expect("serialize repair proposal"),
+        serde_json::json!({
+            "status": "repair_required",
+            "proposal": {
+                "root": root.display().to_string(),
+                "directories": [root.join("collections").display().to_string()]
+            }
+        })
+    );
+
+    state
+        .cancel_vault_repair(root.display().to_string())
+        .expect("cancel repair through command state");
+    assert!(!root.join("collections").exists());
+
+    state
+        .open_vault(root.display().to_string())
+        .expect("propose repair again");
+    let repaired = state
+        .confirm_vault_repair(root.display().to_string())
+        .expect("confirm repair through command state");
+    assert_eq!(repaired.root, root.display().to_string());
+    assert!(root.join("collections").is_dir());
+
+    fs::remove_dir_all(&root).expect("clean repaired vault");
+}
+
+#[test]
+fn tauri_open_command_rejects_a_non_repairable_structural_conflict() {
+    let root = temp_path("tauri-unsafe-repair");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write vault config");
+    fs::write(root.join("subvaults"), b"do not overwrite").expect("write conflicting file");
+    let mut state = TauriCommandState::default();
+
+    let error = state
+        .open_vault(root.display().to_string())
+        .expect_err("unsafe conflict should fail through command state");
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "required vault directory conflicts with an existing file: {}",
+            root.join("subvaults").display()
+        )
+    );
+    assert_eq!(
+        fs::read(root.join("subvaults")).expect("read conflicting file"),
+        b"do not overwrite"
+    );
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean conflicting vault");
 }
 
 fn temp_path(name: &str) -> PathBuf {

@@ -13,12 +13,13 @@ use gruenes_gewolbe_core::{
     CollectionDefinition, ExtractedTextCapture, IdeaSourceListItem, ItemDetails,
     ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    Vault, VaultError,
+    Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
 pub struct DesktopShell {
     active_vault: Option<Vault>,
+    pending_vault_repair: Option<VaultRepairProposal>,
     app_state_dir: Option<PathBuf>,
     known_vault_roots: Vec<PathBuf>,
     startup_notice: Option<String>,
@@ -28,25 +29,30 @@ impl DesktopShell {
     pub fn with_app_state_dir(app_state_dir: impl AsRef<Path>) -> Self {
         let app_state_dir = app_state_dir.as_ref().to_path_buf();
         let known_vault_roots = read_known_vault_roots(&app_state_dir).unwrap_or_default();
-        let (active_vault, startup_notice) = match read_last_active_vault_root(&app_state_dir) {
-            Ok(Some(root)) => match Vault::open(&root) {
-                Ok(vault) => (Some(vault), None),
-                Err(_) => (
+        let (active_vault, pending_vault_repair, startup_notice) =
+            match read_last_active_vault_root(&app_state_dir) {
+                Ok(Some(root)) => match Vault::open_or_repair(&root) {
+                    Ok(VaultOpen::Opened(vault)) => (Some(vault), None, None),
+                    Ok(VaultOpen::RepairRequired(proposal)) => (None, Some(proposal), None),
+                    Err(_) => (
+                        None,
+                        None,
+                        Some(format!(
+                            "last active vault is unavailable: {}",
+                            root.display()
+                        )),
+                    ),
+                },
+                Ok(None) => (None, None, None),
+                Err(error) => (
                     None,
-                    Some(format!(
-                        "last active vault is unavailable: {}",
-                        root.display()
-                    )),
+                    None,
+                    Some(format!("last active vault could not be read: {error}")),
                 ),
-            },
-            Ok(None) => (None, None),
-            Err(error) => (
-                None,
-                Some(format!("last active vault could not be read: {error}")),
-            ),
-        };
+            };
         Self {
             active_vault,
+            pending_vault_repair,
             app_state_dir: Some(app_state_dir),
             known_vault_roots,
             startup_notice,
@@ -61,6 +67,49 @@ impl DesktopShell {
     pub fn open_vault(&mut self, root: impl AsRef<Path>) -> Result<ActiveVault, VaultError> {
         let vault = Vault::open(root)?;
         self.set_active_vault(vault)
+    }
+
+    pub fn request_open_vault(
+        &mut self,
+        root: impl AsRef<Path>,
+    ) -> Result<OpenVaultResult, VaultError> {
+        match Vault::open_or_repair(root)? {
+            VaultOpen::Opened(vault) => self.set_active_vault(vault).map(OpenVaultResult::Opened),
+            VaultOpen::RepairRequired(proposal) => {
+                self.pending_vault_repair = Some(proposal.clone());
+                Ok(OpenVaultResult::RepairRequired(proposal))
+            }
+        }
+    }
+
+    pub fn cancel_vault_repair(&mut self, root: impl AsRef<Path>) -> Result<(), DesktopShellError> {
+        let root = root.as_ref();
+        if self
+            .pending_vault_repair
+            .as_ref()
+            .is_some_and(|proposal| proposal.root() == root)
+        {
+            self.pending_vault_repair = None;
+            return Ok(());
+        }
+
+        Err(DesktopShellError::NoPendingVaultRepair(root.to_path_buf()))
+    }
+
+    pub fn confirm_vault_repair(
+        &mut self,
+        root: impl AsRef<Path>,
+    ) -> Result<ActiveVault, DesktopShellError> {
+        let root = root.as_ref();
+        let proposal = self
+            .pending_vault_repair
+            .as_ref()
+            .filter(|proposal| proposal.root() == root)
+            .cloned()
+            .ok_or_else(|| DesktopShellError::NoPendingVaultRepair(root.to_path_buf()))?;
+        let vault = proposal.confirm().map_err(DesktopShellError::Vault)?;
+        self.set_active_vault(vault)
+            .map_err(DesktopShellError::Vault)
     }
 
     pub fn switch_active_vault(
@@ -90,6 +139,7 @@ impl DesktopShell {
         Ok(DesktopStartup {
             active_vault: self.active_vault(),
             known_vaults: self.known_vaults()?,
+            repair_proposal: self.pending_vault_repair.clone(),
             notice: self.startup_notice.clone(),
         })
     }
@@ -419,6 +469,7 @@ impl DesktopShell {
             write_last_active_vault_root(app_state_dir, vault.root())?;
         }
         self.active_vault = Some(vault);
+        self.pending_vault_repair = None;
         self.startup_notice = None;
         Ok(active_vault)
     }
@@ -512,11 +563,24 @@ impl TauriCommandState {
             .map_err(DesktopShellError::Vault)
     }
 
-    pub fn open_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
+    pub fn open_vault(&mut self, root: String) -> Result<OpenVaultView, DesktopShellError> {
         self.shell
-            .open_vault(root)
-            .map(ActiveVaultView::from)
+            .request_open_vault(root)
+            .map(OpenVaultView::from)
             .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn confirm_vault_repair(
+        &mut self,
+        root: String,
+    ) -> Result<ActiveVaultView, DesktopShellError> {
+        self.shell
+            .confirm_vault_repair(root)
+            .map(ActiveVaultView::from)
+    }
+
+    pub fn cancel_vault_repair(&mut self, root: String) -> Result<(), DesktopShellError> {
+        self.shell.cancel_vault_repair(root)
     }
 
     pub fn import_paintings(
@@ -591,6 +655,45 @@ impl From<ActiveVault> for ActiveVaultView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VaultRepairProposalView {
+    pub root: String,
+    pub directories: Vec<String>,
+}
+
+impl From<&VaultRepairProposal> for VaultRepairProposalView {
+    fn from(proposal: &VaultRepairProposal) -> Self {
+        Self {
+            root: path_string(proposal.root()),
+            directories: proposal
+                .directories()
+                .iter()
+                .map(|path| path_string(path))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OpenVaultView {
+    Opened { vault: ActiveVaultView },
+    RepairRequired { proposal: VaultRepairProposalView },
+}
+
+impl From<OpenVaultResult> for OpenVaultView {
+    fn from(result: OpenVaultResult) -> Self {
+        match result {
+            OpenVaultResult::Opened(vault) => Self::Opened {
+                vault: ActiveVaultView::from(vault),
+            },
+            OpenVaultResult::RepairRequired(proposal) => Self::RepairRequired {
+                proposal: VaultRepairProposalView::from(&proposal),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KnownVaultView {
     pub root: String,
 }
@@ -607,6 +710,7 @@ impl From<&KnownVault> for KnownVaultView {
 pub struct DesktopStartupView {
     pub active_vault: Option<ActiveVaultView>,
     pub known_vaults: Vec<KnownVaultView>,
+    pub repair_proposal: Option<VaultRepairProposalView>,
     pub notice: Option<String>,
 }
 
@@ -619,6 +723,7 @@ impl From<DesktopStartup> for DesktopStartupView {
                 .iter()
                 .map(KnownVaultView::from)
                 .collect(),
+            repair_proposal: startup.repair_proposal().map(VaultRepairProposalView::from),
             notice: startup.notice().map(str::to_string),
         }
     }
@@ -833,6 +938,12 @@ impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenVaultResult {
+    Opened(ActiveVault),
+    RepairRequired(VaultRepairProposal),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveVault {
     root: PathBuf,
 }
@@ -860,6 +971,7 @@ pub struct KnownVault {
 pub struct DesktopStartup {
     active_vault: Option<ActiveVault>,
     known_vaults: Vec<KnownVault>,
+    repair_proposal: Option<VaultRepairProposal>,
     notice: Option<String>,
 }
 
@@ -870,6 +982,10 @@ impl DesktopStartup {
 
     pub fn known_vaults(&self) -> &[KnownVault] {
         &self.known_vaults
+    }
+
+    pub fn repair_proposal(&self) -> Option<&VaultRepairProposal> {
+        self.repair_proposal.as_ref()
     }
 
     pub fn notice(&self) -> Option<&str> {
@@ -902,6 +1018,7 @@ impl OpenAiProviderConfig {
 #[derive(Debug)]
 pub enum DesktopShellError {
     NoActiveVault,
+    NoPendingVaultRepair(PathBuf),
     AppStateNotConfigured,
     MalformedProviderConfig(PathBuf),
     Io(io::Error),
@@ -912,6 +1029,9 @@ impl std::fmt::Display for DesktopShellError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoActiveVault => write!(f, "no active vault is open"),
+            Self::NoPendingVaultRepair(path) => {
+                write!(f, "no vault repair is pending for: {}", path.display())
+            }
             Self::AppStateNotConfigured => write!(f, "app state directory is not configured"),
             Self::MalformedProviderConfig(path) => {
                 write!(f, "provider config is malformed: {}", path.display())
@@ -926,6 +1046,7 @@ impl std::error::Error for DesktopShellError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NoActiveVault => None,
+            Self::NoPendingVaultRepair(_) => None,
             Self::AppStateNotConfigured => None,
             Self::MalformedProviderConfig(_) => None,
             Self::Io(error) => Some(error),

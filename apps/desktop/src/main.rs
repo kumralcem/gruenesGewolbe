@@ -1,6 +1,8 @@
 use std::sync::Mutex;
 
-use gruenes_gewolbe_desktop::{ActiveVaultView, DesktopStartupView, TauriCommandState};
+use gruenes_gewolbe_desktop::{
+    ActiveVaultView, DesktopStartupView, OpenVaultView, TauriCommandState,
+};
 use tauri::{Manager, State};
 
 type CommandState = Mutex<TauriCommandState>;
@@ -24,11 +26,32 @@ fn create_vault(root: String, state: State<'_, CommandState>) -> Result<ActiveVa
 }
 
 #[tauri::command]
-fn open_vault(root: String, state: State<'_, CommandState>) -> Result<ActiveVaultView, String> {
+fn open_vault(root: String, state: State<'_, CommandState>) -> Result<OpenVaultView, String> {
     state
         .lock()
         .map_err(|_| "desktop state is unavailable".to_string())?
         .open_vault(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_vault_repair(
+    root: String,
+    state: State<'_, CommandState>,
+) -> Result<ActiveVaultView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .confirm_vault_repair(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_vault_repair(root: String, state: State<'_, CommandState>) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .cancel_vault_repair(root)
         .map_err(|error| error.to_string())
 }
 
@@ -42,7 +65,13 @@ fn main() {
             )));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![startup, create_vault, open_vault])
+        .invoke_handler(tauri::generate_handler![
+            startup,
+            create_vault,
+            open_vault,
+            confirm_vault_repair,
+            cancel_vault_repair
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run Gruenes Gewoelbe");
 }

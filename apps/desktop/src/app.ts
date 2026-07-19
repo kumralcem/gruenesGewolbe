@@ -23,6 +23,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
   let state: AppState = {
     active_vault: null,
     known_vaults: [],
+    repair_proposal: null,
     notice: null,
     busy: true,
     error: null,
@@ -66,8 +67,26 @@ function bindActions(
     button.addEventListener("click", async () => {
       const vaultRoot = button.dataset.knownVault;
       if (!vaultRoot) return;
-      await activateVault(() => adapter.openVault(vaultRoot), state, update);
+      await openVault(vaultRoot, adapter, state, update);
     });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-repair-confirm]")?.addEventListener("click", async () => {
+    const proposal = state.repair_proposal;
+    if (!proposal) return;
+    await activateVault(() => adapter.confirmVaultRepair(proposal.root), state, update);
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-repair-cancel]")?.addEventListener("click", async () => {
+    const proposal = state.repair_proposal;
+    if (!proposal) return;
+    await update({ ...state, busy: true, error: null });
+    try {
+      await adapter.cancelVaultRepair(proposal.root);
+      await update({ ...state, repair_proposal: null, busy: false, error: null });
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
   });
 }
 
@@ -86,11 +105,35 @@ async function chooseVault(
   }
   if (!selected) return;
 
-  await activateVault(
-    () => (purpose === "create" ? adapter.createVault(selected) : adapter.openVault(selected)),
-    state,
-    update,
-  );
+  if (purpose === "create") {
+    await activateVault(() => adapter.createVault(selected), state, update);
+  } else {
+    await openVault(selected, adapter, state, update);
+  }
+}
+
+async function openVault(
+  root: string,
+  adapter: DesktopAdapter,
+  state: AppState,
+  update: (state: AppState) => Promise<void>,
+): Promise<void> {
+  await update({ ...state, busy: true, error: null });
+  try {
+    const result = await adapter.openVault(root);
+    if (result.status === "repair_required") {
+      await update({
+        ...state,
+        repair_proposal: result.proposal,
+        busy: false,
+        error: null,
+      });
+      return;
+    }
+    await activateOpenedVault(result.vault, state, update);
+  } catch (error) {
+    await update({ ...state, busy: false, error: errorMessage(error) });
+  }
 }
 
 async function activateVault(
@@ -101,20 +144,29 @@ async function activateVault(
   await update({ ...state, busy: true, error: null });
   try {
     const activeVault = await operation();
-    const knownVaults = state.known_vaults.some((vault) => vault.root === activeVault.root)
-      ? state.known_vaults
-      : [...state.known_vaults, activeVault];
-    await update({
-      ...state,
-      active_vault: activeVault,
-      known_vaults: knownVaults,
-      notice: null,
-      busy: false,
-      error: null,
-    });
+    await activateOpenedVault(activeVault, state, update);
   } catch (error) {
     await update({ ...state, busy: false, error: errorMessage(error) });
   }
+}
+
+async function activateOpenedVault(
+  activeVault: ActiveVault,
+  state: AppState,
+  update: (state: AppState) => Promise<void>,
+): Promise<void> {
+  const knownVaults = state.known_vaults.some((vault) => vault.root === activeVault.root)
+    ? state.known_vaults
+    : [...state.known_vaults, activeVault];
+  await update({
+    ...state,
+    active_vault: activeVault,
+    known_vaults: knownVaults,
+    repair_proposal: null,
+    notice: null,
+    busy: false,
+    error: null,
+  });
 }
 
 function pageTemplate(state: AppState): string {
@@ -154,10 +206,30 @@ function pageTemplate(state: AppState): string {
 
         <main class="workspace" aria-live="polite">
           ${messageTemplate(state)}
-          ${state.active_vault ? activeVaultTemplate(state.active_vault) : emptyVaultTemplate(state.busy)}
+          ${state.repair_proposal ? repairVaultTemplate(state) : state.active_vault ? activeVaultTemplate(state.active_vault) : emptyVaultTemplate(state.busy)}
         </main>
       </div>
     </div>
+  `;
+}
+
+function repairVaultTemplate(state: AppState): string {
+  const proposal = state.repair_proposal;
+  if (!proposal) return "";
+  return `
+    <section class="repair-workspace">
+      <div class="workspace-icon"><i data-lucide="circle-alert"></i></div>
+      <p class="eyebrow">Repair required</p>
+      <h2>Repair ${escapeHtml(displayName(proposal.root))}</h2>
+      <p class="repair-copy">The Vault configuration is valid, but required directories are missing. Confirm to create only this empty structure:</p>
+      <ul class="repair-paths">
+        ${proposal.directories.map((directory) => `<li>${escapeHtml(directory)}</li>`).join("")}
+      </ul>
+      <div class="empty-actions">
+        <button class="secondary-button" type="button" data-repair-cancel ${state.busy ? "disabled" : ""}>Cancel</button>
+        <button class="primary-button" type="button" data-repair-confirm ${state.busy ? "disabled" : ""}>Repair and Open</button>
+      </div>
+    </section>
   `;
 }
 

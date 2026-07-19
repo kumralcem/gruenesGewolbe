@@ -259,9 +259,37 @@ button:disabled {
 }
 
 .empty-workspace,
-.active-workspace {
+.active-workspace,
+.repair-workspace {
   width: min(100%, 560px);
   text-align: center;
+}
+
+.repair-copy {
+  margin: 14px auto 0;
+  color: #59645f;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.repair-paths {
+  display: grid;
+  gap: 7px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.repair-paths li {
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  color: #39443f;
+  background: #f4f6f5;
+  border: 1px solid #d8dfdb;
+  border-radius: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .workspace-icon {
