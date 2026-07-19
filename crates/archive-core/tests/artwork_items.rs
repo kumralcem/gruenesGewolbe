@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, Vault};
+use gruenes_gewolbe_core::{AddArtworkItem, ArtworkImportMetadata, Vault};
 
 #[test]
 fn user_can_add_a_local_image_as_an_artwork_saved_item() {
@@ -166,7 +166,14 @@ fn user_can_add_several_selected_image_files_with_filename_metadata() {
     let vault = Vault::create(&root).expect("create vault");
 
     let saved = vault
-        .add_artwork_files([first.clone(), second.clone()])
+        .add_artwork_files_with_metadata(
+            [first.clone(), second.clone()],
+            ArtworkImportMetadata {
+                creator: None,
+                year: None,
+                saving_reason: Some("Batch reference".to_string()),
+            },
+        )
         .expect("add selected files");
 
     assert_eq!(saved.len(), 2);
@@ -175,6 +182,7 @@ fn user_can_add_several_selected_image_files_with_filename_metadata() {
     assert_eq!(known.year(), "1884");
     assert_eq!(known.title(), "Nocturne");
     assert_eq!(known.import_source_path(), Some(first.as_path()));
+    assert_eq!(known.saving_reason(), Some("Batch reference"));
     let mystery = vault
         .item_details(saved[1].id())
         .expect("read mystery item");

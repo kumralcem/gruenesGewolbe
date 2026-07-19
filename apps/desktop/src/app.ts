@@ -109,6 +109,11 @@ function bindActions(
 
   root.querySelector<HTMLButtonElement>("[data-add-artwork]")?.addEventListener("click", async () => {
     if (!adapter.selectArtworkFiles || !adapter.addArtworkFiles) return;
+    const metadata = {
+      creator: inputValue(root, "[data-import-creator]"),
+      year: inputValue(root, "[data-import-year]"),
+      savingReason: inputValue(root, "[data-import-reason]"),
+    };
     await update({ ...state, busy: true, error: null });
     try {
       const sourceFiles = await adapter.selectArtworkFiles();
@@ -116,7 +121,7 @@ function bindActions(
         await update({ ...state, busy: false, error: null });
         return;
       }
-      await adapter.addArtworkFiles(sourceFiles);
+      await adapter.addArtworkFiles(sourceFiles, metadata);
       await refreshWorkbench(adapter, state, update, state.artwork_sort, null);
     } catch (error) {
       await update({ ...state, busy: false, error: errorMessage(error) });
@@ -334,6 +339,14 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           <h2>Paintings</h2>
         </div>
         <div class="artwork-actions">
+          <details class="import-metadata">
+            <summary>Optional metadata</summary>
+            <div>
+              <label>Creator<input type="text" data-import-creator></label>
+              <label>Year<input type="text" inputmode="numeric" data-import-year></label>
+              <label>Saving Reason<input type="text" data-import-reason></label>
+            </div>
+          </details>
           <label class="sort-control">
             <span>Sort artwork</span>
             <select aria-label="Sort artwork" data-artwork-sort ${state.busy ? "disabled" : ""}>
@@ -403,6 +416,11 @@ function sortOption(value: ArtworkSort, label: string, selected: ArtworkSort): s
 
 function metadataLine(creator: string, year: string): string {
   return [creator, year].filter(Boolean).join(" · ") || "Unknown creator";
+}
+
+function inputValue(root: HTMLElement, selector: string): string | null {
+  const value = root.querySelector<HTMLInputElement>(selector)?.value.trim();
+  return value || null;
 }
 
 function knownVaultTemplate(state: AppState): string {

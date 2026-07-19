@@ -59,12 +59,20 @@ fn cancel_vault_repair(root: String, state: State<'_, CommandState>) -> Result<(
 #[tauri::command]
 fn add_artwork_files(
     source_files: Vec<String>,
+    creator: Option<String>,
+    year: Option<String>,
+    saving_reason: Option<String>,
     state: State<'_, CommandState>,
 ) -> Result<Vec<SavedItemView>, String> {
     state
         .lock()
         .map_err(|_| "desktop state is unavailable".to_string())?
-        .add_artwork_files(AddArtworkFilesCommand { source_files })
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files,
+            creator,
+            year,
+            saving_reason,
+        })
         .map_err(|error| error.to_string())
 }
 

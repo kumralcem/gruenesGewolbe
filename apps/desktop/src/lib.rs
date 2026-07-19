@@ -8,12 +8,16 @@ const KNOWN_VAULTS_FILE: &str = "known-vaults.tsv";
 const LAST_ACTIVE_VAULT_FILE: &str = "last-active-vault.txt";
 const OPENAI_PROVIDER_FILE: &str = "openai-provider.toml";
 
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
 use gruenes_gewolbe_core::{
-    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem, ArtworkSort,
-    Collection, CollectionDefinition, ExtractedTextCapture, IdeaSourceListItem, ItemDetails,
-    ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult,
-    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    Vault, VaultError, VaultOpen, VaultRepairProposal,
+    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
+    ArtworkImportMetadata, ArtworkSort, Collection, CollectionDefinition, ExtractedTextCapture,
+    IdeaSourceListItem, ItemDetails, ItemLinkDefinition, ManualFallbackCapture, ReviewQueueItem,
+    SavedItem, SearchResult, SourceCaptureResult, SourceExtractor, SourceLinkCapture,
+    TagDefinition, UpdateItemRecord, Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -158,13 +162,14 @@ impl DesktopShell {
     pub fn add_artwork_files(
         &self,
         source_files: impl IntoIterator<Item = PathBuf>,
+        metadata: ArtworkImportMetadata,
     ) -> Result<Vec<SavedItem>, DesktopShellError> {
         let vault = self
             .active_vault
             .as_ref()
             .ok_or(DesktopShellError::NoActiveVault)?;
         vault
-            .add_artwork_files(source_files)
+            .add_artwork_files_with_metadata(source_files, metadata)
             .map_err(DesktopShellError::Vault)
     }
 
@@ -611,7 +616,14 @@ impl TauriCommandState {
         command: AddArtworkFilesCommand,
     ) -> Result<Vec<SavedItemView>, DesktopShellError> {
         self.shell
-            .add_artwork_files(command.source_files.into_iter().map(PathBuf::from))
+            .add_artwork_files(
+                command.source_files.into_iter().map(PathBuf::from),
+                ArtworkImportMetadata {
+                    creator: non_empty(command.creator),
+                    year: non_empty(command.year),
+                    saving_reason: non_empty(command.saving_reason),
+                },
+            )
             .map(|items| items.into_iter().map(SavedItemView::from).collect())
     }
 
@@ -654,6 +666,9 @@ pub struct ImportPaintingsCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddArtworkFilesCommand {
     pub source_files: Vec<String>,
+    pub creator: Option<String>,
+    pub year: Option<String>,
+    pub saving_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

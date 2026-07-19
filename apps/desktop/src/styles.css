@@ -384,6 +384,53 @@ button:disabled {
   gap: 10px;
 }
 
+.import-metadata {
+  position: relative;
+  align-self: center;
+}
+
+.import-metadata summary {
+  color: #176b4d;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.import-metadata > div {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 260px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid #c5cec9;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(25 46 37 / 15%);
+}
+
+.import-metadata label {
+  display: grid;
+  gap: 4px;
+  color: #59645f;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.import-metadata input {
+  height: 34px;
+  padding: 0 9px;
+  color: #202724;
+  border: 1px solid #c5cec9;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  text-transform: none;
+}
+
 .sort-control {
   display: grid;
   gap: 5px;
@@ -614,6 +661,12 @@ button:disabled {
   .artwork-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .import-metadata > div {
+    position: static;
+    width: 100%;
+    margin-top: 8px;
   }
 
   .artwork-content.has-selection {

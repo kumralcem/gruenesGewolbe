@@ -86,6 +86,9 @@ fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
     let added = state
         .add_artwork_files(AddArtworkFilesCommand {
             source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
         })
         .expect("add selected artwork files");
     assert_eq!(added.len(), 2);
@@ -108,9 +111,16 @@ fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
         vec!["Amber", "Zebra"]
     );
     assert!(snapshot.artwork_items[0].thumbnail_is_placeholder);
+    assert!(snapshot
+        .artwork_items
+        .iter()
+        .all(|item| item.creator == "Batch Artist"));
     assert_eq!(
-        snapshot.selected_item.expect("selected details").title,
-        "Zebra"
+        snapshot
+            .selected_item
+            .expect("selected details")
+            .saving_reason,
+        Some("Palette references".to_string())
     );
 
     fs::remove_dir_all(&root).expect("clean vault");

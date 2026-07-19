@@ -31,6 +31,12 @@ export interface SavedItem {
   item_folder: string;
 }
 
+export interface ArtworkImportMetadata {
+  creator: string | null;
+  year: string | null;
+  savingReason: string | null;
+}
+
 export interface ArtworkGridItem {
   id: string;
   title: string;
@@ -78,7 +84,10 @@ export interface DesktopAdapter {
   confirmVaultRepair(root: string): Promise<ActiveVault>;
   cancelVaultRepair(root: string): Promise<void>;
   selectArtworkFiles?(): Promise<string[]>;
-  addArtworkFiles?(sourceFiles: string[]): Promise<SavedItem[]>;
+  addArtworkFiles?(
+    sourceFiles: string[],
+    metadata: ArtworkImportMetadata,
+  ): Promise<SavedItem[]>;
   workbenchSnapshot?(
     sort: ArtworkSort,
     selectedItemId: string | null,

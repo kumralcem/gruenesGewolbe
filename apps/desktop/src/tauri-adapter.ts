@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   ActiveVault,
+  ArtworkImportMetadata,
   ArtworkSort,
   DesktopAdapter,
   DesktopStartup,
@@ -36,8 +37,13 @@ export function createTauriAdapter(): DesktopAdapter {
       if (!selected) return [];
       return Array.isArray(selected) ? selected : [selected];
     },
-    addArtworkFiles: (sourceFiles: string[]) =>
-      invoke<SavedItem[]>("add_artwork_files", { sourceFiles }),
+    addArtworkFiles: (sourceFiles: string[], metadata: ArtworkImportMetadata) =>
+      invoke<SavedItem[]>("add_artwork_files", {
+        sourceFiles,
+        creator: metadata.creator,
+        year: metadata.year,
+        savingReason: metadata.savingReason,
+      }),
     workbenchSnapshot: (artworkSort: ArtworkSort, selectedItemId: string | null) =>
       invoke<WorkbenchSnapshot>("workbench_snapshot", { artworkSort, selectedItemId }),
     fileUrl: convertFileSrc,

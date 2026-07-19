@@ -201,6 +201,16 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
             saving_reason: None,
         })
         .expect("preserve undecodable artwork");
+    let record_path = saved.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).expect("read record");
+    fs::write(
+        &record_path,
+        record.replace(
+            "review_status: reviewed",
+            "review_status: reviewed\nreview_reasons:\n- attribution-uncertain",
+        ),
+    )
+    .expect("add existing review reason");
 
     assert_eq!(
         fs::read(saved.item_folder().join("files/damaged.jpg")).expect("read preserved file"),
@@ -215,6 +225,9 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
         .item_details(saved.id())
         .expect("open damaged item details");
     assert_eq!(details.review_status(), "needs-review");
+    assert!(details
+        .review_reasons()
+        .contains(&"attribution-uncertain".to_string()));
     assert!(details
         .review_reasons()
         .iter()
@@ -393,6 +406,21 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
             saving_reason: Some("Needs cleanup".to_string()),
         })
         .expect("save draft");
+    let record_path = saved_item.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).expect("read draft record");
+    fs::write(
+        &record_path,
+        record
+            .replace(
+                "title: draft",
+                "title: draft\n# Keep this curator note\ncustom_context:\n  shelf: west",
+            )
+            .replace(
+                "## Saving Reason\n\nNeeds cleanup\n",
+                "## Saving Reason\n\nNeeds cleanup\n\n## Curator Notes\n\nKeep this prose exactly.\n",
+            ),
+    )
+    .expect("add unknown record content");
 
     vault
         .update_item_record(UpdateItemRecord {
@@ -417,13 +445,14 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
         Some("Palette reference for night scenes")
     );
 
-    let record = fs::read_to_string(saved_item.item_folder().join("record.md"))
-        .expect("read updated record");
+    let record = fs::read_to_string(record_path).expect("read updated record");
     assert!(record.contains("title: Nocturne Study"));
     assert!(record.contains("creator: Jane Painter"));
     assert!(record.contains("year: '1884'"));
     assert!(record.contains("review_status: reviewed"));
     assert!(record.contains("## Saving Reason\n\nPalette reference for night scenes\n"));
+    assert!(record.contains("# Keep this curator note\ncustom_context:\n  shelf: west"));
+    assert!(record.contains("## Curator Notes\n\nKeep this prose exactly.\n"));
 
     vault
         .rebuild_metadata_index()

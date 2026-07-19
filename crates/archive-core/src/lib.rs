@@ -169,6 +169,14 @@ impl Vault {
         &self,
         source_files: impl IntoIterator<Item = PathBuf>,
     ) -> Result<Vec<SavedItem>, VaultError> {
+        self.add_artwork_files_with_metadata(source_files, ArtworkImportMetadata::default())
+    }
+
+    pub fn add_artwork_files_with_metadata(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+        metadata: ArtworkImportMetadata,
+    ) -> Result<Vec<SavedItem>, VaultError> {
         let source_files = source_files.into_iter().collect::<Vec<_>>();
         for source_file in &source_files {
             if !is_supported_image_file(source_file) {
@@ -178,17 +186,7 @@ impl Vault {
 
         source_files
             .into_iter()
-            .map(|source_file| {
-                let inferred = infer_artwork_metadata(&source_file);
-                self.add_artwork_item(AddArtworkItem {
-                    source_file,
-                    home_subvault: "Paintings".to_string(),
-                    creator: inferred.creator,
-                    year: inferred.year,
-                    title: inferred.title,
-                    saving_reason: None,
-                })
-            })
+            .map(|source_file| self.add_artwork_item(inferred_artwork_item(source_file, &metadata)))
             .collect()
     }
 
@@ -213,15 +211,10 @@ impl Vault {
                 continue;
             }
 
-            let inferred = infer_artwork_metadata(&path);
-            imported.push(self.add_artwork_item(AddArtworkItem {
-                source_file: path,
-                home_subvault: "Paintings".to_string(),
-                creator: inferred.creator,
-                year: inferred.year,
-                title: inferred.title,
-                saving_reason: None,
-            })?);
+            imported.push(self.add_artwork_item(inferred_artwork_item(
+                path,
+                &ArtworkImportMetadata::default(),
+            ))?);
         }
 
         self.append_activity_log(&format!(
@@ -467,9 +460,9 @@ impl Vault {
                 primary_file,
                 thumbnail_file: thumbnail.path,
                 thumbnail_is_placeholder: thumbnail.is_placeholder,
-                added_at: required_frontmatter_value(&record.record_path, &text, "imported_at")?
-                    .parse()
-                    .map_err(|_| VaultError::MalformedItemRecord(record.record_path.clone()))?,
+                added_at: frontmatter_value(&text, "imported_at")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or_default(),
                 review_status: required_frontmatter_value(
                     &record.record_path,
                     &text,
@@ -1152,12 +1145,19 @@ impl Vault {
             return Ok(());
         }
 
+        let mut review_reasons = frontmatter_list(&record, "review_reasons");
+        review_reasons.push(review_reason);
         let updated = update_frontmatter_values(
             &record,
             &[
                 (
                     "review_reasons",
-                    serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(review_reason)]),
+                    serde_yaml::Value::Sequence(
+                        review_reasons
+                            .into_iter()
+                            .map(serde_yaml::Value::String)
+                            .collect(),
+                    ),
                 ),
                 (
                     "review_status",
@@ -1643,6 +1643,13 @@ pub struct AddArtworkItem {
     pub creator: Option<String>,
     pub year: Option<String>,
     pub title: String,
+    pub saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArtworkImportMetadata {
+    pub creator: Option<String>,
+    pub year: Option<String>,
     pub saving_reason: Option<String>,
 }
 
@@ -2217,12 +2224,24 @@ fn new_item_id() -> String {
     format!("item-{}", uuid::Uuid::new_v4())
 }
 
+fn inferred_artwork_item(source_file: PathBuf, metadata: &ArtworkImportMetadata) -> AddArtworkItem {
+    let inferred = infer_artwork_metadata(&source_file);
+    AddArtworkItem {
+        source_file,
+        home_subvault: "Paintings".to_string(),
+        creator: metadata.creator.clone().or(inferred.creator),
+        year: metadata.year.clone().or(inferred.year),
+        title: inferred.title,
+        saving_reason: metadata.saving_reason.clone(),
+    }
+}
+
 fn imported_at() -> String {
-    let seconds = SystemTime::now()
+    let nanoseconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
+        .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    seconds.to_string()
+    nanoseconds.to_string()
 }
 
 fn file_fingerprint(path: &Path) -> Result<String, VaultError> {
@@ -2526,14 +2545,60 @@ fn update_frontmatter_values(
     let (frontmatter, body) = without_opening
         .split_once("\n---\n")
         .ok_or_else(|| VaultError::ItemRecordCodec("missing frontmatter closing".to_string()))?;
-    let mut mapping = serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter)
+    serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter)
         .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?;
+    let mut lines = frontmatter
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
     for (key, value) in values {
-        mapping.insert(serde_yaml::Value::String((*key).to_string()), value.clone());
+        let mut replacement = serde_yaml::Mapping::new();
+        replacement.insert(serde_yaml::Value::String((*key).to_string()), value.clone());
+        let replacement = serde_yaml::to_string(&replacement)
+            .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?
+            .lines()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if let Some(start) = lines
+            .iter()
+            .position(|line| top_level_yaml_key(line).as_deref() == Some(*key))
+        {
+            let end = lines[start + 1..]
+                .iter()
+                .position(|line| top_level_yaml_key(line).is_some())
+                .map(|offset| start + 1 + offset)
+                .unwrap_or(lines.len());
+            let comments = lines[start..end]
+                .iter()
+                .filter(|line| line.trim_start().starts_with('#'))
+                .cloned()
+                .collect::<Vec<_>>();
+            lines.splice(start..end, replacement.into_iter().chain(comments));
+        } else {
+            lines.extend(replacement);
+        }
     }
-    let yaml = serde_yaml::to_string(&mapping)
-        .map_err(|error| VaultError::ItemRecordCodec(error.to_string()))?;
-    Ok(format!("---\n{yaml}---\n{body}"))
+    Ok(format!("---\n{}\n---\n{body}", lines.join("\n")))
+}
+
+fn top_level_yaml_key(line: &str) -> Option<String> {
+    if line.is_empty()
+        || line.chars().next().is_some_and(char::is_whitespace)
+        || line.starts_with('-')
+        || line.starts_with('#')
+    {
+        return None;
+    }
+    let mapping = serde_yaml::from_str::<serde_yaml::Mapping>(line).ok()?;
+    if mapping.len() != 1 {
+        return None;
+    }
+    mapping
+        .into_iter()
+        .next()?
+        .0
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 fn write_thumbnail_placeholder(path: &Path) -> Result<(), VaultError> {

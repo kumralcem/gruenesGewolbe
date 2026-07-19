@@ -28,8 +28,8 @@ test("adds selected artwork files, sorts the gallery, and opens preserved-file d
         throw new Error("not used");
       },
       selectArtworkFiles: async () => ["/imports/nocturne.jpg", "/imports/garden.png"],
-      addArtworkFiles: async (sourceFiles) => {
-        calls.push(`add:${sourceFiles.join("|")}`);
+      addArtworkFiles: async (sourceFiles, metadata) => {
+        calls.push(`add:${sourceFiles.join("|")}:${metadata.creator}:${metadata.year}`);
         loaded = true;
         return [
           { id: "item-nocturne", home_subvault: "Paintings", item_folder: "/items/nocturne" },
@@ -96,6 +96,9 @@ test("adds selected artwork files, sorts the gallery, and opens preserved-file d
   });
 
   await page.goto("/");
+  await page.getByText("Optional metadata").click();
+  await page.getByLabel("Creator").fill("Amy Artist");
+  await page.getByLabel("Year").fill("2024");
   await page.getByRole("button", { name: "Add Artwork" }).click();
 
   await expect(page.getByRole("img", { name: "Nocturne" })).toHaveAttribute(
@@ -114,7 +117,7 @@ test("adds selected artwork files, sorts the gallery, and opens preserved-file d
     "https://asset.localhost/garden.png",
   );
   await expect.poll(() => readCalls(page)).toContain(
-    "add:/imports/nocturne.jpg|/imports/garden.png",
+    "add:/imports/nocturne.jpg|/imports/garden.png:Amy Artist:2024",
   );
   await expect.poll(() => readCalls(page)).toContain("snapshot:title:item-garden");
 });
