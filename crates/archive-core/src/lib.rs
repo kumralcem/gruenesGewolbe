@@ -107,6 +107,15 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
+        self.preserve_artwork_item(item, true)
+            .map(|outcome| outcome.saved_item)
+    }
+
+    fn preserve_artwork_item(
+        &self,
+        item: AddArtworkItem,
+        refresh_metadata_index: bool,
+    ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
             .file_name()
@@ -156,12 +165,17 @@ impl Vault {
             &duplicate_candidates,
         )?;
         fs::write(item_folder.join("record.md"), record)?;
-        self.rebuild_metadata_index()?;
+        if refresh_metadata_index {
+            self.rebuild_metadata_index()?;
+        }
 
-        Ok(SavedItem {
-            id,
-            home_subvault: item.home_subvault,
-            item_folder,
+        Ok(PreservedArtwork {
+            duplicate_candidate_count: duplicate_candidates.len(),
+            saved_item: SavedItem {
+                id,
+                home_subvault: item.home_subvault,
+                item_folder,
+            },
         })
     }
 
@@ -224,6 +238,91 @@ impl Vault {
         ))?;
 
         Ok(imported)
+    }
+
+    pub fn run_paintings_import<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummary, VaultError>
+    where
+        F: FnMut(&ImportProgress) -> ImportRunAction,
+    {
+        let source_folder = source_folder.as_ref();
+        if !source_folder.is_dir() {
+            return Err(VaultError::MissingImportFolder(source_folder.to_path_buf()));
+        }
+
+        let mut source_files = Vec::new();
+        let mut skipped_entries = Vec::new();
+        discover_import_entries(source_folder, &mut source_files, &mut skipped_entries)?;
+        source_files.sort();
+        skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
+        let mut imported_items = Vec::new();
+        let mut failed_entries = Vec::new();
+        let mut duplicate_candidate_entries = Vec::new();
+        let mut cancelled_files = Vec::new();
+        for (processed, source_file) in source_files.iter().enumerate() {
+            let progress = ImportProgress {
+                processed,
+                total: source_files.len(),
+                current_file: source_file.clone(),
+            };
+            if on_progress(&progress) == ImportRunAction::Cancel {
+                cancelled_files.extend_from_slice(&source_files[processed..]);
+                break;
+            }
+            match self.preserve_artwork_item(
+                inferred_artwork_item(source_file.clone(), &ArtworkImportMetadata::default()),
+                false,
+            ) {
+                Ok(outcome) => {
+                    if outcome.duplicate_candidate_count > 0 {
+                        duplicate_candidate_entries.push(ImportDuplicateCandidateEntry {
+                            path: source_file.clone(),
+                            item_id: outcome.saved_item.id.clone(),
+                            candidate_count: outcome.duplicate_candidate_count,
+                        });
+                    }
+                    imported_items.push(outcome.saved_item);
+                }
+                Err(error) => {
+                    self.append_activity_log(&format!(
+                        "import-file-failed\t{}\t{}",
+                        activity_log_field(&source_file.display().to_string()),
+                        activity_log_field(&error.to_string())
+                    ))?;
+                    failed_entries.push(ImportFailedEntry {
+                        path: source_file.clone(),
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        self.rebuild_metadata_index()?;
+        self.append_activity_log(&format!(
+            "import-run-{}\t{}\timported={}\tskipped={}\tduplicate-candidates={}\tcancelled={}\tfailed={}",
+            if !cancelled_files.is_empty() {
+                "cancelled"
+            } else {
+                "completed"
+            },
+            activity_log_field(&source_folder.display().to_string()),
+            imported_items.len(),
+            skipped_entries.len(),
+            duplicate_candidate_entries.len(),
+            cancelled_files.len(),
+            failed_entries.len()
+        ))?;
+
+        Ok(ImportRunSummary {
+            imported_items,
+            skipped_entries,
+            failed_entries,
+            duplicate_candidate_entries,
+            cancelled_files,
+        })
     }
 
     pub fn manual_fallback_capture(
@@ -1368,6 +1467,12 @@ struct ThumbnailPreview {
     is_placeholder: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreservedArtwork {
+    saved_item: SavedItem,
+    duplicate_candidate_count: usize,
+}
+
 impl VaultRepairProposal {
     pub fn root(&self) -> &Path {
         &self.root
@@ -1651,6 +1756,141 @@ pub struct ArtworkImportMetadata {
     pub creator: Option<String>,
     pub year: Option<String>,
     pub saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRunAction {
+    Continue,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportProgress {
+    processed: usize,
+    total: usize,
+    current_file: PathBuf,
+}
+
+impl ImportProgress {
+    pub fn processed(&self) -> usize {
+        self.processed
+    }
+
+    pub fn total(&self) -> usize {
+        self.total
+    }
+
+    pub fn current_file(&self) -> &Path {
+        &self.current_file
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRunSummary {
+    imported_items: Vec<SavedItem>,
+    skipped_entries: Vec<ImportSkippedEntry>,
+    failed_entries: Vec<ImportFailedEntry>,
+    duplicate_candidate_entries: Vec<ImportDuplicateCandidateEntry>,
+    cancelled_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSkippedEntry {
+    path: PathBuf,
+    reason: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportFailedEntry {
+    path: PathBuf,
+    error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDuplicateCandidateEntry {
+    path: PathBuf,
+    item_id: String,
+    candidate_count: usize,
+}
+
+impl ImportDuplicateCandidateEntry {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    pub fn candidate_count(&self) -> usize {
+        self.candidate_count
+    }
+}
+
+impl ImportFailedEntry {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn error(&self) -> &str {
+        &self.error
+    }
+}
+
+impl ImportSkippedEntry {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn reason(&self) -> &str {
+        self.reason
+    }
+}
+
+impl ImportRunSummary {
+    pub fn imported_count(&self) -> usize {
+        self.imported_items.len()
+    }
+
+    pub fn failed_count(&self) -> usize {
+        self.failed_entries.len()
+    }
+
+    pub fn imported_items(&self) -> &[SavedItem] {
+        &self.imported_items
+    }
+
+    pub fn skipped_count(&self) -> usize {
+        self.skipped_entries.len()
+    }
+
+    pub fn skipped_entries(&self) -> &[ImportSkippedEntry] {
+        &self.skipped_entries
+    }
+
+    pub fn failed_entries(&self) -> &[ImportFailedEntry] {
+        &self.failed_entries
+    }
+
+    pub fn duplicate_candidate_count(&self) -> usize {
+        self.duplicate_candidate_entries.len()
+    }
+
+    pub fn duplicate_candidate_entries(&self) -> &[ImportDuplicateCandidateEntry] {
+        &self.duplicate_candidate_entries
+    }
+
+    pub fn was_cancelled(&self) -> bool {
+        !self.cancelled_files.is_empty()
+    }
+
+    pub fn cancelled_count(&self) -> usize {
+        self.cancelled_files.len()
+    }
+
+    pub fn cancelled_files(&self) -> &[PathBuf] {
+        &self.cancelled_files
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2236,6 +2476,36 @@ fn inferred_artwork_item(source_file: PathBuf, metadata: &ArtworkImportMetadata)
     }
 }
 
+fn discover_import_entries(
+    source_folder: &Path,
+    source_files: &mut Vec<PathBuf>,
+    skipped_entries: &mut Vec<ImportSkippedEntry>,
+) -> Result<(), VaultError> {
+    for entry in fs::read_dir(source_folder)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            skipped_entries.push(ImportSkippedEntry {
+                path: entry.path(),
+                reason: "symbolic-link",
+            });
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            discover_import_entries(&path, source_files, skipped_entries)?;
+        } else if file_type.is_file() && is_supported_image_file(&path) {
+            source_files.push(path);
+        } else if file_type.is_file() {
+            skipped_entries.push(ImportSkippedEntry {
+                path,
+                reason: "unsupported-file",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn imported_at() -> String {
     let nanoseconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2269,6 +2539,7 @@ struct ArtworkFrontmatter<'a> {
     imported_at: &'a str,
     file_fingerprint: &'a str,
     duplicate_candidates: Vec<String>,
+    review_reasons: Vec<String>,
     review_status: &'static str,
 }
 
@@ -2315,6 +2586,15 @@ fn artwork_record(
         duplicate_candidates: duplicate_candidates
             .iter()
             .map(|candidate| format!("{} | {}", candidate.item_id, candidate.signal))
+            .collect(),
+        review_reasons: duplicate_candidates
+            .iter()
+            .map(|candidate| {
+                format!(
+                    "duplicate-candidate | {} | {}",
+                    candidate.item_id, candidate.signal
+                )
+            })
             .collect(),
         review_status,
     };

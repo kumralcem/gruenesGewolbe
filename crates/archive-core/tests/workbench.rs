@@ -206,8 +206,8 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
     fs::write(
         &record_path,
         record.replace(
-            "review_status: reviewed",
-            "review_status: reviewed\nreview_reasons:\n- attribution-uncertain",
+            "review_reasons: []",
+            "review_reasons:\n- attribution-uncertain",
         ),
     )
     .expect("add existing review reason");
