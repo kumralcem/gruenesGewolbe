@@ -14,9 +14,9 @@ fn non_empty(value: Option<String>) -> Option<String> {
 
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
-    ArtworkImportMetadata, ArtworkImportOutcome, ArtworkSort, Collection, CollectionDefinition,
-    ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem, ImportProgress,
-    ImportRunAction, ImportRunOptions, ImportRunSummary, ItemDetails, ItemLinkDefinition,
+    ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
+    CollectionDefinition, ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem,
+    ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails, ItemLinkDefinition,
     ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult, SelectedFileImportSummary,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
     Vault, VaultError, VaultOpen, VaultRepairProposal,
@@ -183,7 +183,7 @@ impl DesktopShell {
         vault
             .add_artwork_files_with_options(
                 source_files,
-                ImportRunOptions {
+                ArtworkImportOptions {
                     metadata,
                     exact_duplicate_policy,
                 },
@@ -238,7 +238,7 @@ impl DesktopShell {
         vault
             .run_paintings_import_with_options(
                 source_folder,
-                ImportRunOptions {
+                ArtworkImportOptions {
                     metadata,
                     exact_duplicate_policy,
                 },

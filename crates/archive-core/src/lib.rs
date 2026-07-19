@@ -202,7 +202,7 @@ impl Vault {
 
         self.add_artwork_files_with_options(
             source_files,
-            ImportRunOptions {
+            ArtworkImportOptions {
                 metadata,
                 exact_duplicate_policy: ExactDuplicatePolicy::Skip,
             },
@@ -213,7 +213,7 @@ impl Vault {
     pub fn add_artwork_files_with_options(
         &self,
         source_files: impl IntoIterator<Item = PathBuf>,
-        options: ImportRunOptions,
+        options: ArtworkImportOptions,
     ) -> Result<SelectedFileImportSummary, VaultError> {
         let mut supported_files = Vec::new();
         let mut skipped_entries = Vec::new();
@@ -283,7 +283,7 @@ impl Vault {
     {
         self.run_paintings_import_with_options(
             source_folder,
-            ImportRunOptions {
+            ArtworkImportOptions {
                 metadata,
                 exact_duplicate_policy: ExactDuplicatePolicy::Skip,
             },
@@ -294,7 +294,7 @@ impl Vault {
     pub fn run_paintings_import_with_options<F>(
         &self,
         source_folder: impl AsRef<Path>,
-        options: ImportRunOptions,
+        options: ArtworkImportOptions,
         on_progress: F,
     ) -> Result<ImportRunSummary, VaultError>
     where
@@ -335,7 +335,7 @@ impl Vault {
         source_files: Vec<PathBuf>,
         mut skipped_entries: Vec<ImportSkippedEntry>,
         mut failed_entries: Vec<ImportFailedEntry>,
-        options: ImportRunOptions,
+        options: ArtworkImportOptions,
         mut on_progress: F,
     ) -> Result<ArtworkImportOutcome, VaultError>
     where
@@ -2015,7 +2015,7 @@ pub enum ExactDuplicatePolicy {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ImportRunOptions {
+pub struct ArtworkImportOptions {
     pub metadata: ArtworkImportMetadata,
     pub exact_duplicate_policy: ExactDuplicatePolicy,
 }

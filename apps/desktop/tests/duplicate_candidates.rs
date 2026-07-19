@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gruenes_gewolbe_desktop::DesktopShell;
 
 #[test]
-fn desktop_shell_shows_duplicate_candidate_warnings_without_blocking_import() {
+fn desktop_shell_does_not_create_review_work_for_repeated_exact_imports() {
     let root = temp_path("desktop-duplicate-vault");
     let source_dir = temp_path("desktop-duplicate-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
@@ -24,15 +24,12 @@ fn desktop_shell_shows_duplicate_candidate_warnings_without_blocking_import() {
         .import_paintings_folder(&source_dir)
         .expect("second import");
 
-    assert_eq!(second_import.len(), 1);
+    assert!(second_import.is_empty());
     let details = shell
-        .item_details(second_import[0].id())
-        .expect("read duplicate details");
+        .item_details(first_import[0].id())
+        .expect("read preserved details");
 
-    assert!(details
-        .duplicate_candidates()
-        .iter()
-        .any(|candidate| candidate.item_id() == first_import[0].id()));
+    assert!(details.duplicate_candidates().is_empty());
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");

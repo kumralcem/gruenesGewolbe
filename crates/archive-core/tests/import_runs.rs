@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_core::{
-    AddArtworkItem, ExactDuplicatePolicy, ImportRunAction, ImportRunOptions, Vault,
+    AddArtworkItem, ArtworkImportOptions, ExactDuplicatePolicy, ImportRunAction, Vault,
 };
 
 #[test]
@@ -403,9 +403,9 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
     let summary = vault
         .run_paintings_import_with_options(
             &source,
-            ImportRunOptions {
+            ArtworkImportOptions {
                 exact_duplicate_policy: ExactDuplicatePolicy::ImportAnyway,
-                ..ImportRunOptions::default()
+                ..ArtworkImportOptions::default()
             },
             |_| ImportRunAction::Continue,
         )
@@ -418,9 +418,9 @@ fn user_can_explicitly_import_an_exact_file_duplicate_anyway() {
     let repeated_summary = vault
         .run_paintings_import_with_options(
             &source,
-            ImportRunOptions {
+            ArtworkImportOptions {
                 exact_duplicate_policy: ExactDuplicatePolicy::ImportAnyway,
-                ..ImportRunOptions::default()
+                ..ArtworkImportOptions::default()
             },
             |_| ImportRunAction::Continue,
         )

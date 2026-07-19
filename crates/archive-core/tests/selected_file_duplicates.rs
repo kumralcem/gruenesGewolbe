@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gruenes_gewolbe_core::{AddArtworkItem, ExactDuplicatePolicy, ImportRunOptions, Vault};
+use gruenes_gewolbe_core::{AddArtworkItem, ArtworkImportOptions, ExactDuplicatePolicy, Vault};
 
 #[test]
 fn selected_file_exact_duplicates_are_skipped_and_can_be_imported_deliberately() {
@@ -22,7 +22,7 @@ fn selected_file_exact_duplicates_are_skipped_and_can_be_imported_deliberately()
         .expect("save existing item");
 
     let skipped = vault
-        .add_artwork_files_with_options([renamed.clone()], ImportRunOptions::default())
+        .add_artwork_files_with_options([renamed.clone()], ArtworkImportOptions::default())
         .expect("check selected duplicate");
     assert_eq!(skipped.imported_count(), 0);
     assert_eq!(skipped.exact_duplicate_count(), 1);
@@ -35,9 +35,9 @@ fn selected_file_exact_duplicates_are_skipped_and_can_be_imported_deliberately()
     let imported = vault
         .add_artwork_files_with_options(
             [renamed],
-            ImportRunOptions {
+            ArtworkImportOptions {
                 exact_duplicate_policy: ExactDuplicatePolicy::ImportAnyway,
-                ..ImportRunOptions::default()
+                ..ArtworkImportOptions::default()
             },
         )
         .expect("override selected duplicate");
@@ -74,7 +74,7 @@ fn selected_file_filename_only_overlap_remains_a_duplicate_candidate() {
         .expect("save first version");
 
     let summary = vault
-        .add_artwork_files_with_options([second_path], ImportRunOptions::default())
+        .add_artwork_files_with_options([second_path], ArtworkImportOptions::default())
         .expect("import nonidentical overlap");
 
     assert_eq!(summary.imported_count(), 1);
@@ -104,7 +104,7 @@ fn unsupported_selected_file_does_not_block_supported_selected_file() {
     let summary = vault
         .add_artwork_files_with_options(
             [unsupported.clone(), supported],
-            ImportRunOptions::default(),
+            ArtworkImportOptions::default(),
         )
         .expect("process selected files independently");
 
