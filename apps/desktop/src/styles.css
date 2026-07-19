@@ -545,7 +545,7 @@ button:disabled {
   border-radius: 7px;
 }
 
-.preserved-file {
+.primary-file {
   width: 100%;
   max-height: 320px;
   display: block;

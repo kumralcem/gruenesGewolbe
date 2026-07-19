@@ -62,7 +62,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 imported.len()
             ))
         }
-        "add-files" => {
+        "add-artwork-files" => {
             let [vault_path, source_files @ ..] = rest else {
                 return Err(usage());
             };
@@ -188,7 +188,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index> <vault-path> | ggvault add-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
+    "usage: ggvault <create|open|validate|rebuild-index> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
         .to_string()
 }
 

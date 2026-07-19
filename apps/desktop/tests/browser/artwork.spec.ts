@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("adds selected artwork files, sorts the gallery, and opens preserved-file details", async ({
+test("adds selected artwork files, sorts the gallery, and opens primary-file details", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -112,7 +112,7 @@ test("adds selected artwork files, sorts the gallery, and opens preserved-file d
   await page.locator('[data-artwork-id="item-garden"]').click();
   await expect(page.getByRole("heading", { name: "Garden" })).toBeVisible();
   await expect(page.getByLabel("Artwork details").getByText("Amy Artist · 2024")).toBeVisible();
-  await expect(page.getByRole("img", { name: "Preserved File for Garden" })).toHaveAttribute(
+  await expect(page.getByRole("img", { name: "Primary File for Garden" })).toHaveAttribute(
     "src",
     "https://asset.localhost/garden.png",
   );

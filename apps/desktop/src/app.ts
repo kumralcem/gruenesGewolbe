@@ -391,8 +391,8 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           selected
             ? `
               <aside class="artwork-details" aria-label="Artwork details">
-                <img class="preserved-file" src="${fileUrl(selected.primary_file)}" alt="Preserved File for ${escapeHtml(selected.title)}">
-                <p class="eyebrow">Preserved file</p>
+                <img class="primary-file" src="${fileUrl(selected.primary_file)}" alt="Primary File for ${escapeHtml(selected.title)}">
+                <p class="eyebrow">Primary file</p>
                 <h2>${escapeHtml(selected.title)}</h2>
                 <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
                 <dl>

@@ -18,13 +18,13 @@ fn cli_adds_selected_artwork_files_and_returns_structured_results() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_ggvault"))
         .args([
-            "add-files",
+            "add-artwork-files",
             root.to_str().expect("vault path"),
             first.to_str().expect("first path"),
             second.to_str().expect("second path"),
         ])
         .output()
-        .expect("run add-files command");
+        .expect("run add-artwork-files command");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 stdout");
