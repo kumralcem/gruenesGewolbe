@@ -58,6 +58,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
   let thumbnailPreparationRunning = false;
 
   const render = () => {
+    const workspaceScrollTop = root.querySelector<HTMLElement>(".workspace")?.scrollTop ?? 0;
     root.innerHTML = pageTemplate(state, adapter);
     createIcons({
       icons: { Archive, CircleAlert, FolderOpen, FolderPlus, Vault },
@@ -67,6 +68,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       state = nextState;
       render();
     });
+    const workspace = root.querySelector<HTMLElement>(".workspace");
+    if (workspace) workspace.scrollTop = workspaceScrollTop;
     scheduleThumbnailPreparation();
   };
 
@@ -327,7 +330,26 @@ function bindActions(
     button.addEventListener("click", async () => {
       const itemId = button.dataset.artworkId;
       if (!itemId) return;
-      await refreshWorkbench(adapter, state, update, state.artwork_sort, itemId);
+      await selectWorkbenchItem(adapter, state, update, itemId);
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-close-item-details]")?.addEventListener("click", async () => {
+    if (!state.workbench_snapshot) return;
+    const selected = state.workbench_snapshot.selected_item;
+    const form = root.querySelector<HTMLFormElement>("[data-item-record-form]");
+    if (
+      selected &&
+      form &&
+      itemRecordEditIsDirty(itemRecordEdit(form, selected, false), selected) &&
+      !window.confirm("Discard unsaved Item Record changes?")
+    ) return;
+    await update({
+      ...state,
+      workbench_snapshot: { ...state.workbench_snapshot, selected_item: null },
+      selected_review_reason_id: null,
+      pending_item_edit: null,
+      item_record_conflict: null,
     });
   });
 
@@ -663,6 +685,25 @@ async function refreshWorkbench(
   }
 }
 
+async function selectWorkbenchItem(
+  adapter: DesktopAdapter,
+  state: AppState,
+  update: (state: AppState) => Promise<void>,
+  itemId: string,
+): Promise<void> {
+  if (!adapter.workbenchSnapshot) return;
+  try {
+    const snapshot = await adapter.workbenchSnapshot(
+      state.artwork_sort,
+      itemId,
+      state.search_query,
+    );
+    await update({ ...state, workbench_snapshot: snapshot, error: null });
+  } catch (error) {
+    await update({ ...state, error: errorMessage(error) });
+  }
+}
+
 function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
   return `
     <div class="app-shell" aria-busy="${state.busy}">
@@ -798,7 +839,6 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       ${searchResultsTemplate(snapshot, state)}
 
       ${reviewQueueTemplate(snapshot, state)}
-      ${vaultTrashTemplate(snapshot, state, adapter)}
 
       <div class="artwork-content ${selected ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
@@ -828,6 +868,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           selected
             ? `
               <aside class="artwork-details" aria-label="Artwork details">
+                <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
                 ${selectedArtwork ? `<img class="primary-file" src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
                 ${selectedArtwork ? '<p class="eyebrow">Thumbnail preview</p>' : ""}
                 <h2>${escapeHtml(selected.title)}</h2>
@@ -849,6 +890,8 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
             : ""
         }
       </div>
+
+      ${vaultTrashTemplate(snapshot, state, adapter)}
     </section>
   `;
 }

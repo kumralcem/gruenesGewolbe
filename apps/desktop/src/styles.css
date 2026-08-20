@@ -11,10 +11,16 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  overflow: hidden;
   background: #f7f8f7;
 }
 
@@ -29,7 +35,8 @@ button:focus-visible {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: grid;
   grid-template-rows: 72px minmax(0, 1fr);
 }
@@ -106,6 +113,7 @@ button:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(240px, 290px) minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .vault-rail {
@@ -262,6 +270,7 @@ button:disabled {
   place-items: center;
   padding: 32px;
   overflow: auto;
+  overflow-anchor: none;
   background: #fff;
 }
 
@@ -620,12 +629,38 @@ button:disabled {
 }
 
 .artwork-details {
+  position: relative;
   min-width: 0;
   align-self: start;
   padding: 18px;
   background: #f7f9f8;
   border: 1px solid #d8dfdb;
   border-radius: 7px;
+}
+
+.detail-close {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: #33413b;
+  background: rgb(255 255 255 / 92%);
+  border: 1px solid #c5cec9;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.detail-close:hover {
+  color: #114c39;
+  background: #fff;
+  border-color: #176b4d;
 }
 
 .artwork-details h2 {

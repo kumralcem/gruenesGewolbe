@@ -14,8 +14,8 @@ Manual fallback should accept a source link, saving reason, copied image data, a
 
 ## Acceptance criteria
 
-- [x] A user can save a source link with an optional saving reason into the active vault.
-- [x] A visual capture preserves the best available file from the chosen source without silently replacing it later.
+- [ ] A user can save a source link with an optional saving reason from the native workbench into the Active Vault.
+- [ ] A native visual capture preserves the Best Available File from the chosen source without silently replacing it later.
 - [x] An idea capture preserves cleaned text as the source copy when extraction succeeds.
 - [x] Failed or incomplete extraction offers manual fallback instead of blocking capture.
 - [x] Manual fallback records the source link, saving reason, copied image data and/or copied text, and review status.
@@ -29,3 +29,5 @@ Manual fallback should accept a source link, saving reason, copied image data, a
 ## Comments
 
 Implemented with TDD. Evidence: `crates/archive-core/tests/capture.rs`, `apps/desktop/tests/capture.rs`, `crates/archive-core/tests/workbench.rs`, and `crates/archive-cli/tests/capture.rs`. URL capture now goes through a source-extraction boundary: successful extraction persists cleaned text into the vault, while blocked extraction returns a prefilled manual fallback prompt rather than creating a partial item or failing hard.
+
+- 2026-08-20 dogfood correction: the checked evidence above proves archive-core, desktop-shell, and CLI boundaries with fake extractors, but the Tauri command is not registered and the workbench exposes neither URL Capture nor Manual Fallback. The remaining agent-ready slice must add the native capture surface and real bounded extractor adapters (with X.com fallback and Wikimedia handling); it must not present manual URL storage as automatic extraction.

@@ -14,8 +14,8 @@ AI output should produce summaries, tags, and metadata suggestions. High-confide
 
 ## Acceptance criteria
 
-- [x] A user can configure OpenAI for the app without writing API keys or provider settings into the vault.
-- [x] A user can choose an AI budget mode before AI-assisted capture or enrichment.
+- [ ] A user can configure OpenAI from the native app without writing API keys or provider settings into the Vault.
+- [ ] A user can choose an AI Budget Mode in the native app before AI-assisted capture or Enrichment.
 - [x] Idea summarization sends cleaned text rather than raw HTML or unrelated vault records.
 - [x] Image metadata suggestions send only the relevant image or preview needed for the selected action.
 - [x] AI-generated summaries and tags are added when confidence and budget allow.
@@ -30,3 +30,5 @@ AI output should produce summaries, tags, and metadata suggestions. High-confide
 ## Comments
 
 Implemented with TDD. Evidence: `crates/archive-core/tests/ai_enrichment.rs`, `apps/desktop/tests/ai_enrichment.rs`, and `apps/desktop/tests/ai_provider_config.rs`. AI enrichment accepts high-confidence suggestions only when they fill unknown placeholder metadata, records compact metadata provenance, stages conflicting suggestions into the review queue, and records additive better-file candidates with provenance without replacing the current primary file.
+
+- 2026-08-20 dogfood correction: current evidence covers provider interfaces, user-state serialization, fake-provider behavior, and enrichment rules only. No live OpenAI provider, key-entry UI, Budget Mode control, or workbench Enrichment action is wired into the Tauri application. Those user-facing criteria remain agent-ready.
