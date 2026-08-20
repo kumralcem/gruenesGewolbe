@@ -10,6 +10,9 @@ import type {
   FolderPurpose,
   ImportProgress,
   ImportRunSummary,
+  ItemDetails,
+  ItemRecordEdit,
+  ItemRecordSaveResult,
   OpenVaultResult,
   SelectedFileImportSummary,
   WorkbenchSnapshot,
@@ -68,6 +71,32 @@ export function createTauriAdapter(): DesktopAdapter {
     cancelPaintingsImport: () => invoke<void>("cancel_paintings_import"),
     workbenchSnapshot: (artworkSort: ArtworkSort, selectedItemId: string | null) =>
       invoke<WorkbenchSnapshot>("workbench_snapshot", { artworkSort, selectedItemId }),
+    saveItemRecord: (edit: ItemRecordEdit) =>
+      invoke<ItemRecordSaveResult>("save_item_record", {
+        id: edit.id,
+        expectedRevision: edit.expected_revision,
+        overwriteConflict: edit.overwrite_conflict,
+        title: edit.title,
+        creator: edit.creator,
+        year: edit.year,
+        savingReason: edit.saving_reason,
+        summary: edit.summary,
+        tags: edit.tags,
+      }),
+    resolveReviewReason: (resolution) =>
+      invoke<ItemDetails>("resolve_review_reason", {
+        itemId: resolution.item_id,
+        reasonId: resolution.reason_id,
+        expectedRevision: resolution.expected_revision,
+        action: resolution.action,
+        correction: resolution.correction,
+      }),
+    confirmItemFolderRename: (id, proposal) =>
+      invoke<ItemDetails>("confirm_item_folder_rename", {
+        id,
+        currentPath: proposal.current_path,
+        proposedPath: proposal.proposed_path,
+      }),
     fileUrl: convertFileSrc,
   };
 }

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_core::{
-    AddArtworkItem, ArtworkSort, ExtractedTextCapture, UpdateItemRecord, Vault,
+    AddArtworkItem, ArtworkSort, ExtractedTextCapture, ReviewReasonAction, ReviewReasonResolution,
+    UpdateItemRecord, Vault,
 };
 
 #[test]
@@ -227,11 +228,12 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
     assert_eq!(details.review_status(), "needs-review");
     assert!(details
         .review_reasons()
-        .contains(&"attribution-uncertain".to_string()));
+        .iter()
+        .any(|reason| reason.kind() == "attribution-uncertain"));
     assert!(details
         .review_reasons()
         .iter()
-        .any(|reason| reason.starts_with("thumbnail-preview-unavailable")));
+        .any(|reason| reason.kind() == "thumbnail-preview-unavailable"));
     let activity = fs::read_to_string(root.join(".gruenesgewolbe/activity-log.tsv"))
         .expect("read activity log");
     assert!(activity.contains("thumbnail-preview-failed"));
@@ -364,7 +366,7 @@ fn user_can_browse_idea_sources_as_a_text_list_and_open_source_link_details() {
     assert_eq!(ideas[0].title(), "Archive note");
     assert_eq!(ideas[0].source_link(), "https://example.com/archive-note");
     assert_eq!(ideas[0].review_status(), "needs-review");
-    assert_eq!(ideas[0].reason(), Some("Useful source material"));
+    assert_eq!(ideas[0].saving_reason(), Some("Useful source material"));
     assert_eq!(
         ideas[0].source_copy(),
         Some(Path::new("source-copies/cleaned-text.md"))
@@ -388,7 +390,7 @@ fn user_can_browse_idea_sources_as_a_text_list_and_open_source_link_details() {
 }
 
 #[test]
-fn user_can_edit_item_record_fields_and_clear_review_status() {
+fn editing_item_record_fields_cannot_clear_review_reasons() {
     let root = temp_path("workbench-edit-vault");
     let source_dir = temp_path("workbench-edit-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
@@ -429,7 +431,6 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
             creator: Some("Jane Painter".to_string()),
             year: Some("1884".to_string()),
             saving_reason: Some("Palette reference for night scenes".to_string()),
-            review_status: Some("reviewed".to_string()),
         })
         .expect("update item record");
 
@@ -439,7 +440,7 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
     assert_eq!(details.title(), "Nocturne Study");
     assert_eq!(details.creator(), "Jane Painter");
     assert_eq!(details.year(), "1884");
-    assert_eq!(details.review_status(), "reviewed");
+    assert_eq!(details.review_status(), "needs-review");
     assert_eq!(
         details.saving_reason(),
         Some("Palette reference for night scenes")
@@ -449,7 +450,7 @@ fn user_can_edit_item_record_fields_and_clear_review_status() {
     assert!(record.contains("title: Nocturne Study"));
     assert!(record.contains("creator: Jane Painter"));
     assert!(record.contains("year: '1884'"));
-    assert!(record.contains("review_status: reviewed"));
+    assert!(record.contains("review_status: needs-review"));
     assert!(record.contains("## Saving Reason\n\nPalette reference for night scenes\n"));
     assert!(record.contains("# Keep this curator note\ncustom_context:\n  shelf: west"));
     assert!(record.contains("## Curator Notes\n\nKeep this prose exactly.\n"));
@@ -494,7 +495,6 @@ fn metadata_cleanup_suggests_a_folder_rename_without_moving_the_item_folder() {
             creator: Some("Jane Painter".to_string()),
             year: Some("1884".to_string()),
             saving_reason: None,
-            review_status: None,
         })
         .expect("update item metadata");
 
@@ -515,7 +515,7 @@ fn metadata_cleanup_suggests_a_folder_rename_without_moving_the_item_folder() {
 }
 
 #[test]
-fn direct_item_record_edits_are_reflected_after_rebuild() {
+fn direct_item_record_edits_are_reflected_but_status_remains_derived() {
     let root = temp_path("workbench-file-edit-vault");
     let source_dir = temp_path("workbench-file-edit-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
@@ -550,7 +550,7 @@ fn direct_item_record_edits_are_reflected_after_rebuild() {
 
     let details = vault.item_details(saved_item.id()).expect("read details");
     assert_eq!(details.title(), "File Edited Title");
-    assert_eq!(details.review_status(), "reviewed");
+    assert_eq!(details.review_status(), "needs-review");
 
     let results = vault
         .search_metadata("file edited title")
@@ -589,16 +589,17 @@ fn user_can_browse_a_cross_subvault_review_queue_for_uncertain_items() {
         })
         .expect("capture idea");
 
-    vault
-        .update_item_record(UpdateItemRecord {
-            id: artwork.id().to_string(),
-            title: None,
-            creator: None,
-            year: None,
-            saving_reason: None,
-            review_status: Some("reviewed".to_string()),
-        })
-        .expect("clear artwork review");
+    let mut details = vault.item_details(artwork.id()).expect("open artwork");
+    while let Some(reason) = details.review_reasons().first() {
+        details = vault
+            .resolve_review_reason(ReviewReasonResolution {
+                item_id: artwork.id().to_string(),
+                reason_id: reason.id().to_string(),
+                expected_revision: details.record_revision().to_string(),
+                action: ReviewReasonAction::Dismiss,
+            })
+            .expect("resolve artwork reason");
+    }
 
     let queue = vault.review_queue().expect("browse review queue");
 
@@ -608,7 +609,8 @@ fn user_can_browse_a_cross_subvault_review_queue_for_uncertain_items() {
     assert_eq!(queue[0].title(), "Archive note");
     assert_eq!(queue[0].item_type(), "idea");
     assert_eq!(queue[0].review_status(), "needs-review");
-    assert_eq!(queue[0].reason(), Some("Useful source material"));
+    assert_eq!(queue[0].saving_reason(), Some("Useful source material"));
+    assert!(!queue[0].review_reasons().is_empty());
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");

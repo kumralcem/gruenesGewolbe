@@ -262,6 +262,11 @@ fn artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata
     );
     assert_eq!(details.metadata_suggestions()[1].field(), "year");
     assert_eq!(details.review_status(), "needs-review");
+    assert!(details
+        .review_reasons()
+        .iter()
+        .any(|reason| reason.kind() == "metadata-suggestion"
+            && reason.target_field() == Some("creator")));
 
     let queue = vault.review_queue().expect("browse review queue");
     assert!(queue
@@ -343,6 +348,9 @@ fn artwork_enrichment_accepts_high_confidence_unknown_metadata_and_stages_confli
     assert_eq!(details.metadata_provenance().len(), 2);
     assert_eq!(details.metadata_suggestions().len(), 1);
     assert_eq!(details.metadata_suggestions()[0].field(), "title");
+    assert_eq!(details.review_reasons().len(), 1);
+    assert_eq!(details.review_reasons()[0].kind(), "metadata-suggestion");
+    assert_eq!(details.review_reasons()[0].target_field(), Some("title"));
     assert_eq!(
         details.metadata_suggestions()[0].suggested_value(),
         "Moonlit Harbor"

@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_core::{
-    ArtworkSort, CollectionDefinition, ManualFallbackCapture, UpdateItemRecord,
+    ArtworkSort, CollectionDefinition, ManualFallbackCapture, ReviewReasonAction,
+    ReviewReasonResolution, UpdateItemRecord,
 };
 use gruenes_gewolbe_desktop::{DesktopShell, WorkbenchRequest};
 
@@ -41,18 +42,28 @@ fn desktop_shell_supports_workbench_browse_inspect_edit_and_review() {
     assert_eq!(review_queue[0].title(), "mystery");
     assert_eq!(review_queue[0].review_status(), "needs-review");
 
-    let updated = shell
+    let mut updated = shell
         .update_item_record(UpdateItemRecord {
             id: details.id().to_string(),
             title: Some("Nocturne Study Revised".to_string()),
             creator: Some("Jane Painter".to_string()),
             year: Some("1884".to_string()),
             saving_reason: Some("Palette reference".to_string()),
-            review_status: Some("reviewed".to_string()),
         })
         .expect("update item record");
 
     assert_eq!(updated.title(), "Nocturne Study Revised");
+    assert_eq!(updated.review_status(), "needs-review");
+    while let Some(reason) = updated.review_reasons().first() {
+        updated = shell
+            .resolve_review_reason(ReviewReasonResolution {
+                item_id: updated.id().to_string(),
+                reason_id: reason.id().to_string(),
+                expected_revision: updated.record_revision().to_string(),
+                action: ReviewReasonAction::Accept,
+            })
+            .expect("accept review reason");
+    }
     assert_eq!(updated.review_status(), "reviewed");
     assert_eq!(
         updated.folder_rename_suggestion(),

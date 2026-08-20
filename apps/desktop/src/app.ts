@@ -15,6 +15,8 @@ import type {
   DesktopStartup,
   FolderPurpose,
   ImportProgress,
+  ItemDetails,
+  ItemRecordEdit,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -26,6 +28,9 @@ interface AppState extends DesktopStartup {
   import_progress: ImportProgress | null;
   import_summary: ArtworkImportOutcome | null;
   import_summary_kind: "folder" | "selected" | null;
+  pending_item_edit: ItemRecordEdit | null;
+  item_record_conflict: ItemDetails | null;
+  selected_review_reason_id?: string | null;
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
@@ -41,6 +46,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     import_progress: null,
     import_summary: null,
     import_summary_kind: null,
+    pending_item_edit: null,
+    item_record_conflict: null,
   };
 
   const render = () => {
@@ -66,6 +73,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       import_progress: null,
       import_summary: null,
       import_summary_kind: null,
+      pending_item_edit: null,
+      item_record_conflict: null,
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -77,6 +86,27 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     state = { ...state, busy: false, error: errorMessage(error) };
   }
   render();
+
+  window.addEventListener("focus", () => {
+    if (!state.active_vault || state.busy || !adapter.workbenchSnapshot) return;
+    const form = root.querySelector<HTMLFormElement>("[data-item-record-form]");
+    const selected = state.workbench_snapshot?.selected_item;
+    const draft = form && selected ? itemRecordEdit(form, selected, false) : null;
+    const stateForRefresh = {
+      ...state,
+      pending_item_edit: draft && selected && itemRecordEditIsDirty(draft, selected) ? draft : null,
+    };
+    void refreshWorkbench(
+      adapter,
+      stateForRefresh,
+      async (nextState) => {
+        state = nextState;
+        render();
+      },
+      state.artwork_sort,
+      state.workbench_snapshot?.selected_item?.id ?? null,
+    );
+  });
 }
 
 function bindActions(
@@ -223,6 +253,176 @@ function bindActions(
       await refreshWorkbench(adapter, state, update, state.artwork_sort, itemId);
     });
   });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-review-item-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const itemId = button.dataset.reviewItemId;
+      const reasonId = button.dataset.reviewReasonId;
+      if (!itemId || !reasonId) return;
+      await refreshWorkbench(
+        adapter,
+        { ...state, selected_review_reason_id: reasonId },
+        update,
+        state.artwork_sort,
+        itemId,
+      );
+      const reason = Array.from(root.querySelectorAll<HTMLElement>("[data-review-reason]")).find(
+        (element) => element.dataset.reviewReason === reasonId,
+      );
+      reason?.scrollIntoView({ block: "nearest" });
+      reason?.focus();
+    });
+  });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-review-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const selected = state.workbench_snapshot?.selected_item;
+      const reasonId = button.dataset.reviewReasonId;
+      const action = button.dataset.reviewAction as "accept" | "correct" | "dismiss";
+      if (!selected || !reasonId || !adapter.resolveReviewReason) return;
+      const reasonCard = button.closest<HTMLElement>("[data-review-reason]");
+      const correction =
+        action === "correct"
+          ? reasonCard?.querySelector<HTMLInputElement>("[data-review-correction]")?.value.trim() || null
+          : null;
+      if (action === "correct" && !correction) return;
+      try {
+        await adapter.resolveReviewReason({
+          item_id: selected.id,
+          reason_id: reasonId,
+          expected_revision: selected.record_revision,
+          action,
+          correction,
+        });
+        await refreshWorkbench(adapter, state, update, state.artwork_sort, selected.id);
+      } catch (error) {
+        await update({ ...state, error: errorMessage(error) });
+      }
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-refresh-records]")?.addEventListener("click", async () => {
+    await refreshWorkbench(
+      adapter,
+      { ...state, pending_item_edit: null, item_record_conflict: null },
+      update,
+      state.artwork_sort,
+      state.workbench_snapshot?.selected_item?.id ?? null,
+    );
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-save-item-record]")?.addEventListener("click", async () => {
+    const form = root.querySelector<HTMLFormElement>("[data-item-record-form]");
+    const selected = state.workbench_snapshot?.selected_item;
+    if (!form || !selected || !adapter.saveItemRecord || !form.reportValidity()) return;
+    await saveItemEdit(adapter, state, itemRecordEdit(form, selected, false), update);
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-conflict-reload]")?.addEventListener("click", async () => {
+    const external = state.item_record_conflict;
+    if (!external || !state.workbench_snapshot) return;
+    await update({
+      ...state,
+      workbench_snapshot: { ...state.workbench_snapshot, selected_item: external },
+      pending_item_edit: null,
+      item_record_conflict: null,
+      error: null,
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-conflict-overwrite]")?.addEventListener("click", async () => {
+    if (!state.pending_item_edit || !adapter.saveItemRecord) return;
+    await saveItemEdit(
+      adapter,
+      state,
+      {
+        ...state.pending_item_edit,
+        expected_revision: state.item_record_conflict?.record_revision ?? state.pending_item_edit.expected_revision,
+        overwrite_conflict: true,
+      },
+      update,
+    );
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-confirm-folder-rename]")?.addEventListener("click", async () => {
+    const selected = state.workbench_snapshot?.selected_item;
+    if (!selected?.folder_rename_proposal || !adapter.confirmItemFolderRename) return;
+    await update({ ...state, busy: true, error: null });
+    try {
+      await adapter.confirmItemFolderRename(selected.id, selected.folder_rename_proposal);
+      await refreshWorkbench(adapter, state, update, state.artwork_sort, selected.id);
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
+  });
+}
+
+async function saveItemEdit(
+  adapter: DesktopAdapter,
+  state: AppState,
+  edit: ItemRecordEdit,
+  update: (state: AppState) => Promise<void>,
+): Promise<void> {
+  if (!adapter.saveItemRecord) return;
+  try {
+    const result = await adapter.saveItemRecord(edit);
+    if (result.status === "conflict") {
+      await update({
+        ...state,
+        pending_item_edit: edit,
+        item_record_conflict: result.external_item,
+        error: null,
+      });
+      return;
+    }
+    const snapshot = adapter.workbenchSnapshot
+      ? await adapter.workbenchSnapshot(state.artwork_sort, edit.id)
+      : state.workbench_snapshot
+        ? { ...state.workbench_snapshot, selected_item: result.item }
+        : null;
+    await update({
+      ...state,
+      workbench_snapshot: snapshot,
+      pending_item_edit: null,
+      item_record_conflict: null,
+      error: null,
+    });
+  } catch (error) {
+    await update({ ...state, error: errorMessage(error) });
+  }
+}
+
+function itemRecordEdit(
+  form: HTMLFormElement,
+  selected: ItemDetails,
+  overwriteConflict: boolean,
+): ItemRecordEdit {
+  const data = new FormData(form);
+  return {
+    id: selected.id,
+    expected_revision: selected.record_revision,
+    overwrite_conflict: overwriteConflict,
+    title: String(data.get("title") ?? "").trim(),
+    creator: String(data.get("creator") ?? "").trim(),
+    year: String(data.get("year") ?? "").trim(),
+    saving_reason: String(data.get("saving_reason") ?? "").trim(),
+    summary: String(data.get("summary") ?? "").trim(),
+    tags: String(data.get("tags") ?? "")
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+  };
+}
+
+function itemRecordEditIsDirty(edit: ItemRecordEdit, selected: ItemDetails): boolean {
+  return (
+    edit.title !== selected.title ||
+    edit.creator !== selected.creator ||
+    edit.year !== selected.year ||
+    edit.saving_reason !== (selected.saving_reason ?? "") ||
+    edit.summary !== (selected.summary ?? "") ||
+    edit.tags.join("\n") !== selected.tags.join("\n")
+  );
 }
 
 async function chooseVault(
@@ -447,10 +647,15 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           <button class="secondary-button" type="button" data-import-folder ${state.busy || !adapter.selectImportFolder || !adapter.runPaintingsImport ? "disabled" : ""}>
             <i data-lucide="folder-open"></i>Import Folder
           </button>
+          <button class="secondary-button" type="button" data-refresh-records ${state.busy || !adapter.workbenchSnapshot ? "disabled" : ""}>
+            Refresh Item Records
+          </button>
         </div>
       </header>
 
       ${importRunTemplate(state, adapter)}
+
+      ${reviewQueueTemplate(snapshot, state)}
 
       <div class="artwork-content ${selected ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
@@ -484,10 +689,15 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
                 <p class="eyebrow">Primary file</p>
                 <h2>${escapeHtml(selected.title)}</h2>
                 <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
-                <dl>
+                ${itemRecordConflictTemplate(state)}
+                ${reviewReasonsTemplate(state, selected, adapter)}
+                ${itemRecordEditorTemplate(state, selected, adapter)}
+                ${folderRenameTemplate(selected, adapter)}
+                <dl class="record-context">
                   <div><dt>Home Subvault</dt><dd>${escapeHtml(selected.home_subvault)}</dd></div>
                   <div><dt>Review Status</dt><dd>${escapeHtml(selected.review_status)}</dd></div>
-                  ${selected.saving_reason ? `<div><dt>Saving Reason</dt><dd>${escapeHtml(selected.saving_reason)}</dd></div>` : ""}
+                  <div><dt>Collections</dt><dd>${escapeHtml(selected.collections.join(", ") || "None")}</dd></div>
+                  <div><dt>Item Links</dt><dd>${itemLinksTemplate(selected)}</dd></div>
                   <div><dt>File</dt><dd class="file-path">${escapeHtml(selected.primary_file)}</dd></div>
                 </dl>
               </aside>
@@ -497,6 +707,132 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       </div>
     </section>
   `;
+}
+
+function reviewQueueTemplate(snapshot: WorkbenchSnapshot, state: AppState): string {
+  if (snapshot.review_queue.length === 0) return "";
+  return `
+    <section class="review-queue" aria-label="Review Queue">
+      <p class="eyebrow">Review Queue</p>
+      <div class="review-queue-items">
+        ${snapshot.review_queue
+          .flatMap((item) =>
+            item.review_reasons.map(
+              (reason) => `
+                <button type="button" data-review-item-id="${escapeHtml(item.id)}"
+                  data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy ? "disabled" : ""}>
+                  <strong>${escapeHtml(item.title)}</strong>
+                  <span>${escapeHtml(reason.message)}</span>
+                </button>`,
+            ),
+          )
+          .join("")}
+      </div>
+    </section>`;
+}
+
+function reviewReasonsTemplate(
+  state: AppState,
+  selected: ItemDetails,
+  adapter: DesktopAdapter,
+): string {
+  if (selected.review_reasons.length === 0) {
+    return '<section class="review-reasons"><strong>Reviewed</strong><p>No unresolved Review Reasons.</p></section>';
+  }
+  return `
+    <section class="review-reasons" aria-label="Review Reasons">
+      <strong>Review Reasons</strong>
+      ${selected.review_reasons
+        .map(
+          (reason) => `
+            <article class="review-reason ${state.selected_review_reason_id === reason.id ? "is-targeted" : ""}" data-review-reason="${escapeHtml(reason.id)}" tabindex="-1">
+              <h3>${escapeHtml(reason.message)}</h3>
+              <p>${escapeHtml(reason.evidence)}</p>
+              <label>${reason.target_field ? `Correct ${escapeHtml(reason.target_field)}` : "Describe the correction"}
+                <input data-review-correction value="">
+              </label>
+              <div class="review-reason-actions">
+                <button class="secondary-button" type="button" data-review-action="accept" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveReviewReason ? "disabled" : ""}>Accept</button>
+                <button class="secondary-button" type="button" data-review-action="correct" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveReviewReason ? "disabled" : ""}>Correct</button>
+                <button class="secondary-button" type="button" data-review-action="dismiss" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveReviewReason ? "disabled" : ""}>Dismiss</button>
+              </div>
+            </article>`,
+        )
+        .join("")}
+    </section>`;
+}
+
+function itemRecordEditorTemplate(
+  state: AppState,
+  selected: ItemDetails,
+  adapter: DesktopAdapter,
+): string {
+  const pending = state.pending_item_edit?.id === selected.id ? state.pending_item_edit : null;
+  const value = (field: "title" | "creator" | "year" | "saving_reason" | "summary") =>
+    pending?.[field] ?? selected[field] ?? "";
+  const tags = pending?.tags ?? selected.tags;
+  return `
+    <form class="item-record-form" data-item-record-form>
+      <label>Title<input name="title" value="${escapeHtml(value("title"))}" required></label>
+      <div class="field-pair">
+        <label>Creator<input name="creator" value="${escapeHtml(value("creator"))}" required></label>
+        <label>Year<input name="year" value="${escapeHtml(value("year"))}" pattern="(?:\\d{4}|Unknown Year)" required></label>
+      </div>
+      <label>Saving Reason<textarea name="saving_reason">${escapeHtml(value("saving_reason"))}</textarea></label>
+      <label>Summary<textarea name="summary">${escapeHtml(value("summary"))}</textarea></label>
+      <label>Tags<input name="tags" value="${escapeHtml(tags.join(", "))}" aria-describedby="tag-hint"></label>
+      <small id="tag-hint">Comma-separated; known aliases normalize through the Tag Registry.</small>
+      <button class="primary-button" type="button" data-save-item-record ${state.busy || !adapter.saveItemRecord ? "disabled" : ""}>Save Item Record</button>
+    </form>
+  `;
+}
+
+function itemRecordConflictTemplate(state: AppState): string {
+  const conflict = state.item_record_conflict;
+  if (!conflict) return "";
+  return `
+    <section class="item-record-conflict" role="alert">
+      <strong>Item Record Conflict</strong>
+      <p>The file changed after this editor loaded. Review the external known fields before choosing an action.</p>
+      <dl>
+        <div><dt>Title</dt><dd>${escapeHtml(conflict.title)}</dd></div>
+        <div><dt>Creator</dt><dd>${escapeHtml(conflict.creator)}</dd></div>
+        <div><dt>Year</dt><dd>${escapeHtml(conflict.year)}</dd></div>
+        <div><dt>Saving Reason</dt><dd>${escapeHtml(conflict.saving_reason ?? "None")}</dd></div>
+        <div><dt>Summary</dt><dd>${escapeHtml(conflict.summary ?? "None")}</dd></div>
+        <div><dt>Tags</dt><dd>${escapeHtml(conflict.tags.join(", ") || "None")}</dd></div>
+      </dl>
+      <div class="conflict-actions">
+        <button class="secondary-button" type="button" data-conflict-reload>Reload External Version</button>
+        <button class="danger-button" type="button" data-conflict-overwrite>Overwrite After Review</button>
+      </div>
+    </section>
+  `;
+}
+
+function folderRenameTemplate(selected: ItemDetails, adapter: DesktopAdapter): string {
+  const proposal = selected.folder_rename_proposal;
+  if (!proposal) return "";
+  return `
+    <section class="folder-rename-proposal">
+      <strong>Folder rename available</strong>
+      <dl>
+        <div><dt>Current</dt><dd class="file-path">${escapeHtml(proposal.current_path)}</dd></div>
+        <div><dt>Proposed</dt><dd class="file-path">${escapeHtml(proposal.proposed_path)}</dd></div>
+      </dl>
+      <button class="secondary-button" type="button" data-confirm-folder-rename ${adapter.confirmItemFolderRename ? "" : "disabled"}>Confirm Folder Rename</button>
+    </section>
+  `;
+}
+
+function itemLinksTemplate(selected: ItemDetails): string {
+  if (selected.item_links.length === 0) return "None";
+  return selected.item_links
+    .map(
+      (link) =>
+        `<span class="item-link"><strong>${escapeHtml(link.label)}</strong> <small>${escapeHtml(link.link_type)} · ${escapeHtml(link.target)}</small></span>`,
+    )
+    .join("");
 }
 
 function importRunTemplate(state: AppState, adapter: DesktopAdapter): string {

@@ -2,9 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_desktop::{
-    ActiveVaultView, AddArtworkFilesCommand, DesktopStartupView, ImportRunSummaryView,
-    OpenVaultView, RunPaintingsImportCommand, SelectedFileImportSummaryView, TauriCommandState,
-    WorkbenchSnapshotCommand, WorkbenchSnapshotView,
+    ActiveVaultView, AddArtworkFilesCommand, ConfirmItemFolderRenameCommand, DesktopStartupView,
+    ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, OpenVaultView,
+    ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand,
+    SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
+    WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -141,6 +143,76 @@ fn workbench_snapshot(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn save_item_record(
+    id: String,
+    expected_revision: String,
+    overwrite_conflict: bool,
+    title: String,
+    creator: String,
+    year: String,
+    saving_reason: String,
+    summary: String,
+    tags: Vec<String>,
+    state: State<'_, CommandState>,
+) -> Result<ItemRecordSaveView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .save_item_record(SaveItemRecordCommand {
+            id,
+            expected_revision,
+            overwrite_conflict,
+            title,
+            creator,
+            year,
+            saving_reason,
+            summary,
+            tags,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_review_reason(
+    item_id: String,
+    reason_id: String,
+    expected_revision: String,
+    action: String,
+    correction: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .resolve_review_reason(ResolveReviewReasonCommand {
+            item_id,
+            reason_id,
+            expected_revision,
+            action,
+            correction,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_item_folder_rename(
+    id: String,
+    current_path: String,
+    proposed_path: String,
+    state: State<'_, CommandState>,
+) -> Result<ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .confirm_item_folder_rename(ConfirmItemFolderRenameCommand {
+            id,
+            current_path,
+            proposed_path,
+        })
+        .map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -161,7 +233,10 @@ fn main() {
             add_artwork_files,
             run_paintings_import,
             cancel_paintings_import,
-            workbench_snapshot
+            workbench_snapshot,
+            save_item_record,
+            resolve_review_reason,
+            confirm_item_folder_rename
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Gruenes Gewoelbe");

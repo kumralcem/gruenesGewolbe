@@ -110,13 +110,66 @@ export interface ItemDetails {
   year: string;
   primary_file: string;
   review_status: string;
+  review_reasons: ReviewReason[];
   tags: string[];
   collections: string[];
+  item_links: Array<{ link_type: string; target: string; label: string }>;
   saving_reason: string | null;
   source_link: string | null;
   summary: string | null;
   source_copy: string | null;
+  record_revision: string;
+  folder_rename_proposal: ItemFolderRenameProposal | null;
 }
+
+export interface ReviewReason {
+  id: string;
+  kind: string;
+  target_field: string | null;
+  message: string;
+  evidence: string;
+}
+
+export interface ReviewQueueItem {
+  id: string;
+  home_subvault: string;
+  item_type: string;
+  title: string;
+  review_status: string;
+  saving_reason: string | null;
+  review_reasons: ReviewReason[];
+}
+
+export type ReviewReasonAction = "accept" | "correct" | "dismiss";
+
+export interface ReviewReasonResolution {
+  item_id: string;
+  reason_id: string;
+  expected_revision: string;
+  action: ReviewReasonAction;
+  correction: string | null;
+}
+
+export interface ItemFolderRenameProposal {
+  current_path: string;
+  proposed_path: string;
+}
+
+export interface ItemRecordEdit {
+  id: string;
+  expected_revision: string;
+  overwrite_conflict: boolean;
+  title: string;
+  creator: string;
+  year: string;
+  saving_reason: string;
+  summary: string;
+  tags: string[];
+}
+
+export type ItemRecordSaveResult =
+  | { status: "saved"; item: ItemDetails }
+  | { status: "conflict"; external_item: ItemDetails };
 
 export interface WorkbenchSnapshot {
   active_vault: ActiveVault;
@@ -124,7 +177,7 @@ export interface WorkbenchSnapshot {
   collections: Array<{ id: string; name: string }>;
   artwork_items: ArtworkGridItem[];
   idea_sources: unknown[];
-  review_queue: unknown[];
+  review_queue: ReviewQueueItem[];
   search_results: unknown[];
   selected_item: ItemDetails | null;
 }
@@ -152,6 +205,12 @@ export interface DesktopAdapter {
     sort: ArtworkSort,
     selectedItemId: string | null,
   ): Promise<WorkbenchSnapshot>;
+  saveItemRecord?(edit: ItemRecordEdit): Promise<ItemRecordSaveResult>;
+  resolveReviewReason?(resolution: ReviewReasonResolution): Promise<ItemDetails>;
+  confirmItemFolderRename?(
+    id: string,
+    proposal: ItemFolderRenameProposal,
+  ): Promise<ItemDetails>;
   fileUrl?(path: string): string;
 }
 

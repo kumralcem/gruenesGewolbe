@@ -268,7 +268,7 @@ fn ambiguous_overlap_is_imported_with_a_duplicate_candidate_review_reason() {
     assert!(details
         .review_reasons()
         .iter()
-        .any(|reason| reason.starts_with("duplicate-candidate |")));
+        .any(|reason| reason.kind() == "duplicate-candidate"));
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source).expect("clean source");

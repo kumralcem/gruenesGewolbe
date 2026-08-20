@@ -107,7 +107,7 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
-        self.preserve_artwork_item(item, true, &[])
+        self.preserve_artwork_item(item, true, &[], Vec::new())
             .map(|outcome| outcome.saved_item)
     }
 
@@ -116,6 +116,7 @@ impl Vault {
         item: AddArtworkItem,
         refresh_metadata_index: bool,
         excluded_duplicate_candidate_ids: &[String],
+        additional_review_reasons: Vec<ReviewReason>,
     ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
@@ -165,6 +166,7 @@ impl Vault {
             &imported_at(),
             &file_fingerprint,
             &duplicate_candidates,
+            &additional_review_reasons,
         )?;
         fs::write(item_folder.join("record.md"), record)?;
         if refresh_metadata_index {
@@ -387,10 +389,13 @@ impl Vault {
                     continue;
                 }
             }
+            let (item, metadata_conflicts) =
+                inferred_artwork_item(source_file.clone(), &options.metadata);
             match self.preserve_artwork_item(
-                inferred_artwork_item(source_file.clone(), &options.metadata),
+                item,
                 false,
                 &duplicate_check.existing_item_ids,
+                metadata_conflicts,
             ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
@@ -686,11 +691,7 @@ impl Vault {
                 added_at: frontmatter_value(&text, "imported_at")
                     .and_then(|value| value.parse().ok())
                     .unwrap_or_default(),
-                review_status: required_frontmatter_value(
-                    &record.record_path,
-                    &text,
-                    "review_status",
-                )?,
+                review_status: derived_review_status(&review_reasons(&text)).to_string(),
             });
         }
 
@@ -736,12 +737,8 @@ impl Vault {
                 source_copy: frontmatter_value(&text, "source_copy")
                     .filter(|path| !path.is_empty())
                     .map(PathBuf::from),
-                review_status: required_frontmatter_value(
-                    &record.record_path,
-                    &text,
-                    "review_status",
-                )?,
-                reason: markdown_section(&text, "Saving Reason"),
+                review_status: derived_review_status(&review_reasons(&text)).to_string(),
+                saving_reason: markdown_section(&text, "Saving Reason"),
             });
         }
 
@@ -757,8 +754,8 @@ impl Vault {
         let mut items = Vec::new();
         for record in self.item_record_entries()? {
             let text = fs::read_to_string(&record.record_path)?;
-            let review_status =
-                required_frontmatter_value(&record.record_path, &text, "review_status")?;
+            let reasons = review_reasons(&text);
+            let review_status = derived_review_status(&reasons).to_string();
             if review_status != "needs-review" {
                 continue;
             }
@@ -768,7 +765,8 @@ impl Vault {
                 item_type: required_frontmatter_value(&record.record_path, &text, "item_type")?,
                 title: required_frontmatter_value(&record.record_path, &text, "title")?,
                 review_status,
-                reason: markdown_section(&text, "Saving Reason"),
+                saving_reason: markdown_section(&text, "Saving Reason"),
+                review_reasons: reasons,
             });
         }
 
@@ -801,12 +799,8 @@ impl Vault {
                     &text,
                     "primary_file",
                 )?),
-                review_status: required_frontmatter_value(
-                    &record.record_path,
-                    &text,
-                    "review_status",
-                )?,
-                review_reasons: frontmatter_list(&text, "review_reasons"),
+                review_status: derived_review_status(&review_reasons(&text)).to_string(),
+                review_reasons: review_reasons(&text),
                 tags: frontmatter_list(&text, "tags"),
                 collections: self.collection_names_for_item(id, &text)?,
                 item_links: item_links(&text),
@@ -824,7 +818,7 @@ impl Vault {
                 metadata_provenance: metadata_provenance(&text),
                 metadata_suggestions: metadata_suggestions(&text),
                 better_file_candidates: better_file_candidates(&text),
-                folder_rename_suggestion: folder_rename_suggestion(
+                folder_rename_proposal: folder_rename_proposal(
                     &record.item_folder,
                     &item_type,
                     &creator,
@@ -834,6 +828,7 @@ impl Vault {
                 import_original_filename: frontmatter_value(&text, "import_original_filename"),
                 import_source_path: frontmatter_value(&text, "import_source_path")
                     .map(PathBuf::from),
+                record_revision: item_record_revision(&text),
             });
         }
 
@@ -858,12 +853,6 @@ impl Vault {
             if let Some(year) = update.year.as_deref() {
                 frontmatter_updates.push(("year", serde_yaml::Value::String(year.to_string())));
             }
-            if let Some(review_status) = update.review_status.as_deref() {
-                frontmatter_updates.push((
-                    "review_status",
-                    serde_yaml::Value::String(review_status.to_string()),
-                ));
-            }
             let mut updated = update_frontmatter_values(&text, &frontmatter_updates)?;
             if let Some(saving_reason) = update.saving_reason.as_deref() {
                 updated = replace_markdown_section(&updated, "Saving Reason", saving_reason);
@@ -875,6 +864,219 @@ impl Vault {
         }
 
         Err(VaultError::SavedItemNotFound(update.id))
+    }
+
+    pub fn save_item_record_edit(&self, edit: ItemRecordEdit) -> Result<ItemDetails, VaultError> {
+        validate_item_record_edit(&edit)?;
+        for record in self.item_record_entries()? {
+            let text = fs::read_to_string(&record.record_path)?;
+            if frontmatter_value(&text, "id").as_deref() != Some(edit.id.as_str()) {
+                continue;
+            }
+
+            let actual_revision = item_record_revision(&text);
+            if actual_revision != edit.expected_revision {
+                return Err(VaultError::ItemRecordConflict {
+                    path: record.record_path,
+                    expected_revision: edit.expected_revision,
+                    actual_revision,
+                });
+            }
+
+            let mut registry = self.read_tag_registry()?;
+            let mut tags = Vec::new();
+            for input in &edit.tags {
+                let canonical = canonical_tag(&registry, input);
+                if !registry.iter().any(|tag| tag.name == canonical) {
+                    registry.push(TagDefinition {
+                        name: canonical.clone(),
+                        aliases: Vec::new(),
+                        meaning: None,
+                    });
+                }
+                if !tags.contains(&canonical) {
+                    tags.push(canonical);
+                }
+            }
+            tags.sort();
+            registry.sort_by(|left, right| left.name.cmp(&right.name));
+
+            let mut updated = update_frontmatter_values(
+                &text,
+                &[
+                    ("title", serde_yaml::Value::String(edit.title)),
+                    ("creator", serde_yaml::Value::String(edit.creator)),
+                    ("year", serde_yaml::Value::String(edit.year)),
+                    (
+                        "tags",
+                        serde_yaml::Value::Sequence(
+                            tags.into_iter().map(serde_yaml::Value::String).collect(),
+                        ),
+                    ),
+                ],
+            )?;
+            updated = replace_or_append_markdown_section(
+                &updated,
+                "Saving Reason",
+                edit.saving_reason.trim(),
+            );
+            updated = replace_or_append_markdown_section(&updated, "Summary", edit.summary.trim());
+
+            atomic_write(&record.record_path, updated.as_bytes())?;
+            self.write_tag_registry(&registry)?;
+            self.rebuild_metadata_index()?;
+            return self.item_details(&edit.id);
+        }
+
+        Err(VaultError::SavedItemNotFound(edit.id))
+    }
+
+    pub fn resolve_review_reason(
+        &self,
+        resolution: ReviewReasonResolution,
+    ) -> Result<ItemDetails, VaultError> {
+        for record in self.item_record_entries()? {
+            let text = fs::read_to_string(&record.record_path)?;
+            if frontmatter_value(&text, "id").as_deref() != Some(resolution.item_id.as_str()) {
+                continue;
+            }
+
+            let actual_revision = item_record_revision(&text);
+            if actual_revision != resolution.expected_revision {
+                return Err(VaultError::ItemRecordConflict {
+                    path: record.record_path,
+                    expected_revision: resolution.expected_revision,
+                    actual_revision,
+                });
+            }
+
+            let mut reasons = review_reasons(&text);
+            let reason_index = reasons
+                .iter()
+                .position(|reason| reason.id == resolution.reason_id)
+                .ok_or_else(|| VaultError::ReviewReasonNotFound(resolution.reason_id.clone()))?;
+            let reason = reasons.remove(reason_index);
+            let mut updated = text;
+
+            if let ReviewReasonAction::Correct { value } = &resolution.action {
+                if value.trim().is_empty() {
+                    return Err(VaultError::ReviewReasonCannotBeCorrected(reason.id));
+                }
+                match reason.target_field.as_deref() {
+                    Some(field) if matches!(field, "title" | "creator" | "year") => {
+                        updated = update_frontmatter_values(
+                            &updated,
+                            &[(field, serde_yaml::Value::String(value.trim().to_string()))],
+                        )?;
+                    }
+                    _ => {
+                        let mut corrections = markdown_list_section(&updated, "Review Resolutions");
+                        corrections.push(format!(
+                            "{} | corrected | {}",
+                            reason.id,
+                            value.trim().replace('|', "/")
+                        ));
+                        updated = replace_or_append_markdown_list_section(
+                            &updated,
+                            "Review Resolutions",
+                            &corrections,
+                        );
+                    }
+                }
+            }
+
+            if reason.kind == "metadata-suggestion" {
+                let field = reason
+                    .target_field
+                    .as_deref()
+                    .ok_or_else(|| VaultError::ReviewReasonCannotBeCorrected(reason.id.clone()))?;
+                let mut suggestions = metadata_suggestions(&updated);
+                let suggestion_index = suggestions
+                    .iter()
+                    .position(|suggestion| suggestion.field() == field)
+                    .ok_or_else(|| VaultError::ReviewReasonNotFound(reason.id.clone()))?;
+                let mut suggestion = suggestions.remove(suggestion_index);
+
+                match &resolution.action {
+                    ReviewReasonAction::Accept => {
+                        updated = update_frontmatter_values(
+                            &updated,
+                            &[(
+                                field,
+                                serde_yaml::Value::String(suggestion.suggested_value().to_string()),
+                            )],
+                        )?;
+                    }
+                    ReviewReasonAction::Correct { value } => {
+                        suggestion.provenance = format!(
+                            "{}; edited during review from {}",
+                            suggestion.provenance, suggestion.suggested_value
+                        );
+                        suggestion.suggested_value = value.trim().to_string();
+                    }
+                    ReviewReasonAction::Dismiss => {}
+                }
+
+                if !matches!(resolution.action, ReviewReasonAction::Dismiss) {
+                    let mut provenance = metadata_provenance(&updated);
+                    provenance.push(suggestion);
+                    let lines = provenance
+                        .iter()
+                        .map(metadata_suggestion_line)
+                        .collect::<Vec<_>>();
+                    updated = replace_or_append_markdown_list_section(
+                        &updated,
+                        "Metadata Provenance",
+                        &lines,
+                    );
+                }
+                let suggestion_lines = suggestions
+                    .iter()
+                    .map(metadata_suggestion_line)
+                    .collect::<Vec<_>>();
+                updated = replace_or_append_markdown_list_section(
+                    &updated,
+                    "Metadata Suggestions",
+                    &suggestion_lines,
+                );
+            }
+
+            updated = update_frontmatter_values(
+                &updated,
+                &[
+                    ("review_reasons", review_reason_sequence(&reasons)),
+                    (
+                        "review_status",
+                        serde_yaml::Value::String(derived_review_status(&reasons).to_string()),
+                    ),
+                ],
+            )?;
+            atomic_write(&record.record_path, updated.as_bytes())?;
+            self.rebuild_metadata_index()?;
+            return self.item_details(&resolution.item_id);
+        }
+
+        Err(VaultError::SavedItemNotFound(resolution.item_id))
+    }
+
+    pub fn confirm_item_folder_rename(
+        &self,
+        id: &str,
+        reviewed_proposal: &ItemFolderRenameProposal,
+    ) -> Result<ItemDetails, VaultError> {
+        let details = self.item_details(id)?;
+        let current_proposal = details
+            .folder_rename_proposal()
+            .ok_or_else(|| VaultError::NoItemFolderRenameSuggested(id.to_string()))?;
+        if current_proposal != reviewed_proposal || reviewed_proposal.proposed_path.exists() {
+            return Err(VaultError::ItemFolderRenameProposalChanged(id.to_string()));
+        }
+        fs::rename(
+            &reviewed_proposal.current_path,
+            &reviewed_proposal.proposed_path,
+        )?;
+        self.rebuild_metadata_index()?;
+        self.item_details(id)
     }
 
     pub fn enrich_idea_with_ai(
@@ -1473,16 +1675,22 @@ impl Vault {
     ) -> Result<(), VaultError> {
         let record_path = saved_item.item_folder.join("record.md");
         let record = fs::read_to_string(&record_path)?;
-        let review_reason = format!("thumbnail-preview-unavailable | {reason}");
-        if frontmatter_list(&record, "review_reasons")
+        let review_reason = ReviewReason {
+            id: "thumbnail-preview-unavailable".to_string(),
+            kind: "thumbnail-preview-unavailable".to_string(),
+            target_field: None,
+            message: "Thumbnail Preview is unavailable".to_string(),
+            evidence: reason.to_string(),
+        };
+        if review_reasons(&record)
             .iter()
-            .any(|existing| existing.starts_with("thumbnail-preview-unavailable"))
+            .any(|existing| existing.kind == "thumbnail-preview-unavailable")
         {
             return Ok(());
         }
 
         let mut review_reasons = frontmatter_list(&record, "review_reasons");
-        review_reasons.push(review_reason);
+        review_reasons.push(review_reason_line(&review_reason));
         let updated = update_frontmatter_values(
             &record,
             &[
@@ -1581,6 +1789,25 @@ impl Vault {
                     "Metadata Provenance",
                     &provenance_lines,
                 );
+                let reasons = review_reasons(&updated)
+                    .into_iter()
+                    .filter(|reason| {
+                        !accepted_metadata.iter().any(|suggestion| {
+                            reason.kind == "unknown-metadata"
+                                && reason.target_field.as_deref() == Some(suggestion.field())
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                updated = update_frontmatter_values(
+                    &updated,
+                    &[
+                        ("review_reasons", review_reason_sequence(&reasons)),
+                        (
+                            "review_status",
+                            serde_yaml::Value::String(derived_review_status(&reasons).to_string()),
+                        ),
+                    ],
+                )?;
             }
             if !staged_suggestions.is_empty() {
                 let suggestion_lines = staged_suggestions
@@ -1592,12 +1819,33 @@ impl Vault {
                     "Metadata Suggestions",
                     &suggestion_lines,
                 );
+                let mut reasons = review_reasons(&updated);
+                for suggestion in &staged_suggestions {
+                    let id = format!("metadata-suggestion-{}", suggestion.field());
+                    if reasons.iter().any(|reason| reason.id == id) {
+                        continue;
+                    }
+                    reasons.push(ReviewReason {
+                        id,
+                        kind: "metadata-suggestion".to_string(),
+                        target_field: Some(suggestion.field().to_string()),
+                        message: format!(
+                            "Suggested {}: {}",
+                            suggestion.field(),
+                            suggestion.suggested_value()
+                        ),
+                        evidence: suggestion.provenance().to_string(),
+                    });
+                }
                 updated = update_frontmatter_values(
                     &updated,
-                    &[(
-                        "review_status",
-                        serde_yaml::Value::String("needs-review".to_string()),
-                    )],
+                    &[
+                        ("review_reasons", review_reason_sequence(&reasons)),
+                        (
+                            "review_status",
+                            serde_yaml::Value::String(derived_review_status(&reasons).to_string()),
+                        ),
+                    ],
                 )?;
             }
             if !better_file_candidates.is_empty() {
@@ -1807,7 +2055,7 @@ pub struct IdeaSourceListItem {
     source_link: String,
     source_copy: Option<PathBuf>,
     review_status: String,
-    reason: Option<String>,
+    saving_reason: Option<String>,
 }
 
 impl IdeaSourceListItem {
@@ -1831,8 +2079,8 @@ impl IdeaSourceListItem {
         &self.review_status
     }
 
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
+    pub fn saving_reason(&self) -> Option<&str> {
+        self.saving_reason.as_deref()
     }
 }
 
@@ -1842,7 +2090,8 @@ pub struct ReviewQueueItem {
     item_type: String,
     title: String,
     review_status: String,
-    reason: Option<String>,
+    saving_reason: Option<String>,
+    review_reasons: Vec<ReviewReason>,
 }
 
 impl ReviewQueueItem {
@@ -1866,8 +2115,43 @@ impl ReviewQueueItem {
         &self.review_status
     }
 
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
+    pub fn saving_reason(&self) -> Option<&str> {
+        self.saving_reason.as_deref()
+    }
+
+    pub fn review_reasons(&self) -> &[ReviewReason] {
+        &self.review_reasons
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReason {
+    id: String,
+    kind: String,
+    target_field: Option<String>,
+    message: String,
+    evidence: String,
+}
+
+impl ReviewReason {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn target_field(&self) -> Option<&str> {
+        self.target_field.as_deref()
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn evidence(&self) -> &str {
+        &self.evidence
     }
 }
 
@@ -1879,7 +2163,7 @@ pub struct ItemDetails {
     year: String,
     primary_file: PathBuf,
     review_status: String,
-    review_reasons: Vec<String>,
+    review_reasons: Vec<ReviewReason>,
     tags: Vec<String>,
     collections: Vec<String>,
     item_links: Vec<ItemLink>,
@@ -1891,9 +2175,10 @@ pub struct ItemDetails {
     metadata_provenance: Vec<AiMetadataSuggestion>,
     metadata_suggestions: Vec<AiMetadataSuggestion>,
     better_file_candidates: Vec<BetterFileCandidate>,
-    folder_rename_suggestion: Option<String>,
+    folder_rename_proposal: Option<ItemFolderRenameProposal>,
     import_original_filename: Option<String>,
     import_source_path: Option<PathBuf>,
+    record_revision: String,
 }
 
 impl ItemDetails {
@@ -1929,7 +2214,7 @@ impl ItemDetails {
         &self.review_status
     }
 
-    pub fn review_reasons(&self) -> &[String] {
+    pub fn review_reasons(&self) -> &[ReviewReason] {
         &self.review_reasons
     }
 
@@ -1977,8 +2262,15 @@ impl ItemDetails {
         &self.better_file_candidates
     }
 
+    pub fn folder_rename_proposal(&self) -> Option<&ItemFolderRenameProposal> {
+        self.folder_rename_proposal.as_ref()
+    }
+
     pub fn folder_rename_suggestion(&self) -> Option<&str> {
-        self.folder_rename_suggestion.as_deref()
+        self.folder_rename_proposal()?
+            .proposed_path()
+            .file_name()?
+            .to_str()
     }
 
     pub fn import_original_filename(&self) -> Option<&str> {
@@ -1987,6 +2279,10 @@ impl ItemDetails {
 
     pub fn import_source_path(&self) -> Option<&Path> {
         self.import_source_path.as_deref()
+    }
+
+    pub fn record_revision(&self) -> &str {
+        &self.record_revision
     }
 }
 
@@ -1998,6 +2294,29 @@ pub struct AddArtworkItem {
     pub year: Option<String>,
     pub title: String,
     pub saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemFolderRenameProposal {
+    current_path: PathBuf,
+    proposed_path: PathBuf,
+}
+
+impl ItemFolderRenameProposal {
+    pub fn reviewed(current_path: impl Into<PathBuf>, proposed_path: impl Into<PathBuf>) -> Self {
+        Self {
+            current_path: current_path.into(),
+            proposed_path: proposed_path.into(),
+        }
+    }
+
+    pub fn current_path(&self) -> &Path {
+        &self.current_path
+    }
+
+    pub fn proposed_path(&self) -> &Path {
+        &self.proposed_path
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2247,7 +2566,34 @@ pub struct UpdateItemRecord {
     pub creator: Option<String>,
     pub year: Option<String>,
     pub saving_reason: Option<String>,
-    pub review_status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemRecordEdit {
+    pub id: String,
+    pub expected_revision: String,
+    pub overwrite_conflict: bool,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub saving_reason: String,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewReasonResolution {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: ReviewReasonAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewReasonAction {
+    Accept,
+    Correct { value: String },
+    Dismiss,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2600,7 +2946,10 @@ pub enum VaultError {
     MissingCollections(PathBuf),
     StructuralConflict(PathBuf),
     RepairProposalChanged(PathBuf),
-    MalformedConfig { path: PathBuf, reason: String },
+    MalformedConfig {
+        path: PathBuf,
+        reason: String,
+    },
     UnsupportedFormat(PathBuf),
     MissingSourceFile(PathBuf),
     MissingFileName(PathBuf),
@@ -2611,6 +2960,16 @@ pub enum VaultError {
     MalformedItemRecord(PathBuf),
     ItemRecordCodec(String),
     PreviewGeneration(String),
+    InvalidItemRecordEdit(Vec<String>),
+    ReviewReasonNotFound(String),
+    ReviewReasonCannotBeCorrected(String),
+    ItemRecordConflict {
+        path: PathBuf,
+        expected_revision: String,
+        actual_revision: String,
+    },
+    NoItemFolderRenameSuggested(String),
+    ItemFolderRenameProposalChanged(String),
 }
 
 impl fmt::Display for VaultError {
@@ -2670,6 +3029,29 @@ impl fmt::Display for VaultError {
             Self::ItemRecordCodec(reason) => write!(f, "item record codec failed: {reason}"),
             Self::PreviewGeneration(reason) => {
                 write!(f, "thumbnail preview generation failed: {reason}")
+            }
+            Self::InvalidItemRecordEdit(reasons) => {
+                write!(f, "item record edit is invalid: {}", reasons.join("; "))
+            }
+            Self::ReviewReasonNotFound(id) => write!(f, "review reason not found: {id}"),
+            Self::ReviewReasonCannotBeCorrected(id) => {
+                write!(
+                    f,
+                    "review reason cannot be corrected with a field value: {id}"
+                )
+            }
+            Self::ItemRecordConflict { path, .. } => {
+                write!(
+                    f,
+                    "item record changed after the editor loaded it: {}",
+                    path.display()
+                )
+            }
+            Self::NoItemFolderRenameSuggested(id) => {
+                write!(f, "item folder rename is not suggested: {id}")
+            }
+            Self::ItemFolderRenameProposalChanged(id) => {
+                write!(f, "item folder rename proposal changed: {id}")
             }
         }
     }
@@ -2753,6 +3135,64 @@ fn default_config() -> String {
     format!("format_version = 2\nname = \"{DEFAULT_VAULT_NAME}\"\n")
 }
 
+fn validate_item_record_edit(edit: &ItemRecordEdit) -> Result<(), VaultError> {
+    let mut reasons = Vec::new();
+    if edit.title.trim().is_empty() {
+        reasons.push("title must not be empty".to_string());
+    }
+    if edit.creator.trim().is_empty() {
+        reasons.push("creator must not be empty".to_string());
+    }
+    let year = edit.year.trim();
+    if year.is_empty() {
+        reasons.push("year must not be empty".to_string());
+    } else if year != "Unknown Year"
+        && (year.len() != 4 || !year.chars().all(|character| character.is_ascii_digit()))
+    {
+        reasons.push("year must be four digits or Unknown Year".to_string());
+    }
+    if edit.tags.iter().any(|tag| tag.trim().is_empty()) {
+        reasons.push("tags must not contain empty values".to_string());
+    }
+
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(VaultError::InvalidItemRecordEdit(reasons))
+    }
+}
+
+fn item_record_revision(record: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in record.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), VaultError> {
+    let parent = path.parent().ok_or_else(|| {
+        VaultError::ItemRecordCodec("item record has no parent directory".to_string())
+    })?;
+    let temporary = parent.join(format!(".record-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), VaultError> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 fn artwork_folder_name(creator: Option<&str>, year: Option<&str>, title: &str) -> String {
     format!(
         "{} - {} - {}",
@@ -2762,24 +3202,40 @@ fn artwork_folder_name(creator: Option<&str>, year: Option<&str>, title: &str) -
     )
 }
 
-fn folder_rename_suggestion(
+fn folder_rename_proposal(
     item_folder: &Path,
     item_type: &str,
     creator: &str,
     year: &str,
     title: &str,
-) -> Option<String> {
+) -> Option<ItemFolderRenameProposal> {
     if item_type != "artwork" {
         return None;
     }
 
     let suggested = artwork_folder_name(Some(creator), Some(year), title);
     let current = item_folder.file_name()?.to_string_lossy();
-    if suggested == current {
-        None
-    } else {
-        Some(suggested)
+
+    if suggested == current || is_collision_suffixed_name(&current, &suggested) {
+        return None;
     }
+
+    let parent = item_folder.parent()?;
+    Some(ItemFolderRenameProposal {
+        current_path: item_folder.to_path_buf(),
+        proposed_path: unique_folder_path(parent, &suggested),
+    })
+}
+
+fn is_collision_suffixed_name(current: &str, base: &str) -> bool {
+    let Some(suffix) = current
+        .strip_prefix(base)
+        .and_then(|value| value.strip_prefix(" ("))
+        .and_then(|value| value.strip_suffix(')'))
+    else {
+        return false;
+    };
+    suffix.parse::<usize>().is_ok_and(|number| number >= 2)
 }
 
 fn readable_part(value: Option<&str>, fallback: &str) -> String {
@@ -2811,16 +3267,41 @@ fn new_item_id() -> String {
     format!("item-{}", uuid::Uuid::new_v4())
 }
 
-fn inferred_artwork_item(source_file: PathBuf, metadata: &ArtworkImportMetadata) -> AddArtworkItem {
+fn inferred_artwork_item(
+    source_file: PathBuf,
+    metadata: &ArtworkImportMetadata,
+) -> (AddArtworkItem, Vec<ReviewReason>) {
     let inferred = infer_artwork_metadata(&source_file);
-    AddArtworkItem {
-        source_file,
-        home_subvault: "Paintings".to_string(),
-        creator: metadata.creator.clone().or(inferred.creator),
-        year: metadata.year.clone().or(inferred.year),
-        title: inferred.title,
-        saving_reason: metadata.saving_reason.clone(),
+    let mut conflicts = Vec::new();
+    if let (Some(supplied), Some(from_filename)) = (&metadata.creator, &inferred.creator) {
+        if supplied != from_filename {
+            conflicts.push(metadata_conflict_review_reason(
+                "creator",
+                supplied,
+                from_filename,
+            ));
+        }
     }
+    if let (Some(supplied), Some(from_filename)) = (&metadata.year, &inferred.year) {
+        if supplied != from_filename {
+            conflicts.push(metadata_conflict_review_reason(
+                "year",
+                supplied,
+                from_filename,
+            ));
+        }
+    }
+    (
+        AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: metadata.creator.clone().or(inferred.creator),
+            year: metadata.year.clone().or(inferred.year),
+            title: inferred.title,
+            saving_reason: metadata.saving_reason.clone(),
+        },
+        conflicts,
+    )
 }
 
 fn discover_import_entries(
@@ -2927,11 +3408,13 @@ fn artwork_record(
     imported_at: &str,
     file_fingerprint: &str,
     duplicate_candidates: &[DuplicateCandidate],
+    additional_review_reasons: &[ReviewReason],
 ) -> Result<String, VaultError> {
     let creator = item.creator.as_deref().unwrap_or("Unknown Creator");
     let year = item.year.as_deref().unwrap_or("Unknown Year");
     let saving_reason = item.saving_reason.as_deref().unwrap_or("");
     let review_status = if duplicate_candidates.is_empty()
+        && additional_review_reasons.is_empty()
         && creator != "Unknown Creator"
         && year != "Unknown Year"
     {
@@ -2962,15 +3445,35 @@ fn artwork_record(
             .iter()
             .map(|candidate| format!("{} | {}", candidate.item_id, candidate.signal))
             .collect(),
-        review_reasons: duplicate_candidates
-            .iter()
-            .map(|candidate| {
-                format!(
-                    "duplicate-candidate | {} | {}",
-                    candidate.item_id, candidate.signal
-                )
-            })
-            .collect(),
+        review_reasons: {
+            let mut reasons = Vec::new();
+            if creator == "Unknown Creator" {
+                reasons.push(review_reason_line(&ReviewReason {
+                    id: "unknown-creator".to_string(),
+                    kind: "unknown-metadata".to_string(),
+                    target_field: Some("creator".to_string()),
+                    message: "Creator is unknown".to_string(),
+                    evidence: "No creator metadata was supplied or inferred".to_string(),
+                }));
+            }
+            if year == "Unknown Year" {
+                reasons.push(review_reason_line(&ReviewReason {
+                    id: "unknown-year".to_string(),
+                    kind: "unknown-metadata".to_string(),
+                    target_field: Some("year".to_string()),
+                    message: "Year is unknown".to_string(),
+                    evidence: "No year metadata was supplied or inferred".to_string(),
+                }));
+            }
+            reasons.extend(
+                duplicate_candidates
+                    .iter()
+                    .map(duplicate_candidate_review_reason)
+                    .map(|reason| review_reason_line(&reason)),
+            );
+            reasons.extend(additional_review_reasons.iter().map(review_reason_line));
+            reasons
+        },
         review_status,
     };
     let yaml = serde_yaml::to_string(&frontmatter)
@@ -2992,6 +3495,39 @@ fn idea_source_record(
     let saving_reason = capture.saving_reason.as_deref().unwrap_or("");
     let source_copy = source_copy.unwrap_or("");
     let primary_file = primary_file.unwrap_or("");
+    let mut review_reasons = vec![
+        review_reason_line(&ReviewReason {
+            id: "unknown-creator".to_string(),
+            kind: "unknown-metadata".to_string(),
+            target_field: Some("creator".to_string()),
+            message: "Creator is unknown".to_string(),
+            evidence: "Idea capture did not supply creator metadata".to_string(),
+        }),
+        review_reason_line(&ReviewReason {
+            id: "unknown-year".to_string(),
+            kind: "unknown-metadata".to_string(),
+            target_field: Some("year".to_string()),
+            message: "Year is unknown".to_string(),
+            evidence: "Idea capture did not supply year metadata".to_string(),
+        }),
+    ];
+    if capture.capture_method == "manual-fallback" {
+        review_reasons.push(review_reason_line(&ReviewReason {
+            id: "manual-fallback".to_string(),
+            kind: "manual-fallback".to_string(),
+            target_field: None,
+            message: "Manual Fallback content needs review".to_string(),
+            evidence: "Source extraction was unavailable; content was supplied manually"
+                .to_string(),
+        }));
+    }
+    review_reasons.extend(
+        duplicate_candidates
+            .iter()
+            .map(duplicate_candidate_review_reason)
+            .map(|reason| review_reason_line(&reason)),
+    );
+    let review_reasons = serde_yaml::to_string(&review_reasons).unwrap_or_else(|_| "[]\n".into());
     let duplicate_candidates = duplicate_candidate_frontmatter(duplicate_candidates);
 
     format!(
@@ -3007,6 +3543,8 @@ source_copy: {source_copy}\n\
 primary_file: {primary_file}\n\
 capture_method: {capture_method}\n\
 duplicate_candidates: {duplicate_candidates}\n\
+review_reasons:\n\
+{review_reasons}\
 review_status: needs-review\n\
 ---\n\
 \n\
@@ -3018,6 +3556,7 @@ review_status: needs-review\n\
         title = capture.title,
         source_link = capture.source_link,
         capture_method = capture.capture_method,
+        review_reasons = review_reasons,
     )
 }
 
@@ -3174,6 +3713,97 @@ fn frontmatter_list(record: &str, key: &str) -> Vec<String> {
                     .collect()
             })
             .unwrap_or_default(),
+    }
+}
+
+fn review_reasons(record: &str) -> Vec<ReviewReason> {
+    frontmatter_list(record, "review_reasons")
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| parse_review_reason(&line, index))
+        .collect()
+}
+
+fn parse_review_reason(line: &str, index: usize) -> ReviewReason {
+    let parts = line.splitn(5, " | ").map(str::trim).collect::<Vec<_>>();
+    if parts.len() == 5 {
+        return ReviewReason {
+            id: parts[0].to_string(),
+            kind: parts[1].to_string(),
+            target_field: (!parts[2].is_empty()).then(|| parts[2].to_string()),
+            message: parts[3].to_string(),
+            evidence: parts[4].to_string(),
+        };
+    }
+
+    let kind = parts.first().copied().unwrap_or("review").to_string();
+    let evidence = parts.iter().skip(1).copied().collect::<Vec<_>>().join(": ");
+    ReviewReason {
+        id: format!("legacy-{kind}-{index}"),
+        message: review_reason_message(&kind).to_string(),
+        kind,
+        target_field: None,
+        evidence,
+    }
+}
+
+fn review_reason_line(reason: &ReviewReason) -> String {
+    let clean = |value: &str| value.replace('|', "/").replace(['\n', '\r'], " ");
+    format!(
+        "{} | {} | {} | {} | {}",
+        clean(&reason.id),
+        clean(&reason.kind),
+        clean(reason.target_field.as_deref().unwrap_or("")),
+        clean(&reason.message),
+        clean(&reason.evidence),
+    )
+}
+
+fn review_reason_sequence(reasons: &[ReviewReason]) -> serde_yaml::Value {
+    serde_yaml::Value::Sequence(
+        reasons
+            .iter()
+            .map(review_reason_line)
+            .map(serde_yaml::Value::String)
+            .collect(),
+    )
+}
+
+fn duplicate_candidate_review_reason(candidate: &DuplicateCandidate) -> ReviewReason {
+    ReviewReason {
+        id: format!("duplicate-candidate-{}", candidate.item_id),
+        kind: "duplicate-candidate".to_string(),
+        target_field: None,
+        message: "Possible overlap with another Saved Item".to_string(),
+        evidence: format!("{}: {}", candidate.item_id, candidate.signal),
+    }
+}
+
+fn metadata_conflict_review_reason(field: &str, supplied: &str, inferred: &str) -> ReviewReason {
+    ReviewReason {
+        id: format!("conflicting-{field}"),
+        kind: "conflicting-metadata".to_string(),
+        target_field: Some(field.to_string()),
+        message: format!("Conflicting {field} metadata"),
+        evidence: format!("Import value {supplied}; filename suggested {inferred}"),
+    }
+}
+
+fn review_reason_message(kind: &str) -> &str {
+    match kind {
+        "duplicate-candidate" => "Possible overlap with another Saved Item",
+        "thumbnail-preview-unavailable" => "Thumbnail Preview is unavailable",
+        "metadata-suggestion" => "Metadata Suggestion needs a decision",
+        "manual-fallback" => "Manual Fallback content needs review",
+        _ => "Saved Item needs review",
+    }
+}
+
+fn derived_review_status(reasons: &[ReviewReason]) -> &'static str {
+    if reasons.is_empty() {
+        "reviewed"
+    } else {
+        "needs-review"
     }
 }
 

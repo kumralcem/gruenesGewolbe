@@ -71,6 +71,7 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
                 thumbnail_file: "/derived/nocturne.png",
                 thumbnail_is_placeholder: false,
                 review_status: "reviewed",
+                review_reasons: [],
               },
               {
                 id: "item-garden",
@@ -103,12 +104,16 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
                 year: "2024",
                 primary_file: "/items/garden/files/garden.png",
                 review_status: "reviewed",
+                review_reasons: [],
                 tags: [],
                 collections: [],
+                item_links: [],
                 saving_reason: "Color reference",
                 source_link: null,
                 summary: null,
                 source_copy: null,
+                record_revision: "revision-1",
+                folder_rename_proposal: null,
               }
             : null,
         };

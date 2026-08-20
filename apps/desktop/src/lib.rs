@@ -16,8 +16,9 @@ use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
     CollectionDefinition, ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem,
-    ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails, ItemLinkDefinition,
-    ManualFallbackCapture, ReviewQueueItem, SavedItem, SearchResult, SelectedFileImportSummary,
+    ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails, ItemFolderRenameProposal,
+    ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture, ReviewQueueItem, ReviewReason,
+    ReviewReasonAction, ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
     Vault, VaultError, VaultOpen, VaultRepairProposal,
 };
@@ -322,6 +323,9 @@ impl DesktopShell {
                 .map_err(DesktopShellError::Vault)?,
             _ => Vec::new(),
         };
+        let artwork_items = vault
+            .browse_artwork_items_sorted(&request.home_subvault, request.artwork_sort)
+            .map_err(DesktopShellError::Vault)?;
         let selected_item = match request.selected_item_id.as_deref() {
             Some(id) => Some(vault.item_details(id).map_err(DesktopShellError::Vault)?),
             None => None,
@@ -331,9 +335,7 @@ impl DesktopShell {
             active_vault: ActiveVault::from(vault.root()),
             subvaults: vault.list_subvaults().map_err(DesktopShellError::Vault)?,
             collections: vault.list_collections().map_err(DesktopShellError::Vault)?,
-            artwork_items: vault
-                .browse_artwork_items_sorted(&request.home_subvault, request.artwork_sort)
-                .map_err(DesktopShellError::Vault)?,
+            artwork_items,
             idea_sources: vault
                 .browse_idea_sources()
                 .map_err(DesktopShellError::Vault)?,
@@ -372,6 +374,46 @@ impl DesktopShell {
 
         vault
             .update_item_record(update)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn save_item_record_edit(
+        &self,
+        edit: ItemRecordEdit,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .save_item_record_edit(edit)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn resolve_review_reason(
+        &self,
+        resolution: ReviewReasonResolution,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .resolve_review_reason(resolution)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn confirm_item_folder_rename(
+        &self,
+        id: &str,
+        proposal: &ItemFolderRenameProposal,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .confirm_item_folder_rename(id, proposal)
             .map_err(DesktopShellError::Vault)
     }
 
@@ -753,6 +795,63 @@ impl TauriCommandState {
             })
             .map(WorkbenchSnapshotView::from)
     }
+
+    pub fn save_item_record(
+        &self,
+        command: SaveItemRecordCommand,
+    ) -> Result<ItemRecordSaveView, DesktopShellError> {
+        let id = command.id.clone();
+        match self.shell.save_item_record_edit(command.into()) {
+            Ok(item) => Ok(ItemRecordSaveView::Saved {
+                item: ItemDetailsView::from(&item),
+            }),
+            Err(DesktopShellError::Vault(VaultError::ItemRecordConflict { .. })) => {
+                let external = self.shell.item_details(&id)?;
+                Ok(ItemRecordSaveView::Conflict {
+                    external_item: ItemDetailsView::from(&external),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn resolve_review_reason(
+        &self,
+        command: ResolveReviewReasonCommand,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        let action = match command.action.as_str() {
+            "accept" => ReviewReasonAction::Accept,
+            "correct" => ReviewReasonAction::Correct {
+                value: command.correction.unwrap_or_default(),
+            },
+            "dismiss" => ReviewReasonAction::Dismiss,
+            action => {
+                return Err(DesktopShellError::InvalidReviewReasonAction(
+                    action.to_string(),
+                ))
+            }
+        };
+        self.shell
+            .resolve_review_reason(ReviewReasonResolution {
+                item_id: command.item_id,
+                reason_id: command.reason_id,
+                expected_revision: command.expected_revision,
+                action,
+            })
+            .map(|item| ItemDetailsView::from(&item))
+    }
+
+    pub fn confirm_item_folder_rename(
+        &self,
+        command: ConfirmItemFolderRenameCommand,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .confirm_item_folder_rename(
+                &command.id,
+                &ItemFolderRenameProposal::reviewed(command.current_path, command.proposed_path),
+            )
+            .map(|item| ItemDetailsView::from(&item))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -767,6 +866,51 @@ pub struct RunPaintingsImportCommand {
     pub year: Option<String>,
     pub saving_reason: Option<String>,
     pub import_exact_duplicates: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveItemRecordCommand {
+    pub id: String,
+    pub expected_revision: String,
+    pub overwrite_conflict: bool,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub saving_reason: String,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveReviewReasonCommand {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: String,
+    pub correction: Option<String>,
+}
+
+impl From<SaveItemRecordCommand> for ItemRecordEdit {
+    fn from(command: SaveItemRecordCommand) -> Self {
+        Self {
+            id: command.id,
+            expected_revision: command.expected_revision,
+            overwrite_conflict: command.overwrite_conflict,
+            title: command.title,
+            creator: command.creator,
+            year: command.year,
+            saving_reason: command.saving_reason,
+            summary: command.summary,
+            tags: command.tags,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmItemFolderRenameCommand {
+    pub id: String,
+    pub current_path: String,
+    pub proposed_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1084,7 +1228,7 @@ pub struct IdeaSourceItemView {
     pub source_link: String,
     pub source_copy: Option<String>,
     pub review_status: String,
-    pub reason: Option<String>,
+    pub saving_reason: Option<String>,
 }
 
 impl From<&IdeaSourceListItem> for IdeaSourceItemView {
@@ -1095,7 +1239,7 @@ impl From<&IdeaSourceListItem> for IdeaSourceItemView {
             source_link: item.source_link().to_string(),
             source_copy: item.source_copy().map(path_string),
             review_status: item.review_status().to_string(),
-            reason: item.reason().map(str::to_string),
+            saving_reason: item.saving_reason().map(str::to_string),
         }
     }
 }
@@ -1107,7 +1251,8 @@ pub struct ReviewQueueItemView {
     pub item_type: String,
     pub title: String,
     pub review_status: String,
-    pub reason: Option<String>,
+    pub saving_reason: Option<String>,
+    pub review_reasons: Vec<ReviewReasonView>,
 }
 
 impl From<&ReviewQueueItem> for ReviewQueueItemView {
@@ -1118,7 +1263,33 @@ impl From<&ReviewQueueItem> for ReviewQueueItemView {
             item_type: item.item_type().to_string(),
             title: item.title().to_string(),
             review_status: item.review_status().to_string(),
-            reason: item.reason().map(str::to_string),
+            saving_reason: item.saving_reason().map(str::to_string),
+            review_reasons: item
+                .review_reasons()
+                .iter()
+                .map(ReviewReasonView::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewReasonView {
+    pub id: String,
+    pub kind: String,
+    pub target_field: Option<String>,
+    pub message: String,
+    pub evidence: String,
+}
+
+impl From<&ReviewReason> for ReviewReasonView {
+    fn from(reason: &ReviewReason) -> Self {
+        Self {
+            id: reason.id().to_string(),
+            kind: reason.kind().to_string(),
+            target_field: reason.target_field().map(str::to_string),
+            message: reason.message().to_string(),
+            evidence: reason.evidence().to_string(),
         }
     }
 }
@@ -1148,12 +1319,16 @@ pub struct ItemDetailsView {
     pub year: String,
     pub primary_file: String,
     pub review_status: String,
+    pub review_reasons: Vec<ReviewReasonView>,
     pub tags: Vec<String>,
     pub collections: Vec<String>,
+    pub item_links: Vec<ItemLinkView>,
     pub saving_reason: Option<String>,
     pub source_link: Option<String>,
     pub summary: Option<String>,
     pub source_copy: Option<String>,
+    pub record_revision: String,
+    pub folder_rename_proposal: Option<ItemFolderRenameProposalView>,
 }
 
 impl From<&ItemDetails> for ItemDetailsView {
@@ -1167,18 +1342,65 @@ impl From<&ItemDetails> for ItemDetailsView {
             year: details.year().to_string(),
             primary_file: path_string(details.primary_file()),
             review_status: details.review_status().to_string(),
+            review_reasons: details
+                .review_reasons()
+                .iter()
+                .map(ReviewReasonView::from)
+                .collect(),
             tags: details.tags().into_iter().map(str::to_string).collect(),
             collections: details
                 .collections()
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+            item_links: details
+                .item_links()
+                .iter()
+                .map(|link| ItemLinkView {
+                    link_type: link.link_type().to_string(),
+                    target: link.target().to_string(),
+                    label: link.label().to_string(),
+                })
+                .collect(),
             saving_reason: details.saving_reason().map(str::to_string),
             source_link: details.source_link().map(str::to_string),
             summary: details.summary().map(str::to_string),
             source_copy: details.source_copy().map(path_string),
+            record_revision: details.record_revision().to_string(),
+            folder_rename_proposal: details
+                .folder_rename_proposal()
+                .map(ItemFolderRenameProposalView::from),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ItemLinkView {
+    pub link_type: String,
+    pub target: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ItemFolderRenameProposalView {
+    pub current_path: String,
+    pub proposed_path: String,
+}
+
+impl From<&ItemFolderRenameProposal> for ItemFolderRenameProposalView {
+    fn from(proposal: &ItemFolderRenameProposal) -> Self {
+        Self {
+            current_path: path_string(proposal.current_path()),
+            proposed_path: path_string(proposal.proposed_path()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ItemRecordSaveView {
+    Saved { item: ItemDetailsView },
+    Conflict { external_item: ItemDetailsView },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1313,6 +1535,7 @@ pub enum DesktopShellError {
     AppStateNotConfigured,
     MalformedProviderConfig(PathBuf),
     UnsupportedArtworkSort(String),
+    InvalidReviewReasonAction(String),
     Io(io::Error),
     Vault(VaultError),
 }
@@ -1329,6 +1552,9 @@ impl std::fmt::Display for DesktopShellError {
                 write!(f, "provider config is malformed: {}", path.display())
             }
             Self::UnsupportedArtworkSort(sort) => write!(f, "unsupported artwork sort: {sort}"),
+            Self::InvalidReviewReasonAction(action) => {
+                write!(f, "invalid review reason action: {action}")
+            }
             Self::Io(error) => write!(f, "{error}"),
             Self::Vault(error) => write!(f, "{error}"),
         }
@@ -1343,6 +1569,7 @@ impl std::error::Error for DesktopShellError {
             Self::AppStateNotConfigured => None,
             Self::MalformedProviderConfig(_) => None,
             Self::UnsupportedArtworkSort(_) => None,
+            Self::InvalidReviewReasonAction(_) => None,
             Self::Io(error) => Some(error),
             Self::Vault(error) => Some(error),
         }
