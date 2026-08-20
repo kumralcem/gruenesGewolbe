@@ -105,7 +105,10 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 rebuilt.indexed_items()
             )];
             lines.extend(rebuilt.omitted_paths().iter().map(|path| {
-                format!("omitted-item-record\t{}", cli_field(&path.display().to_string()))
+                format!(
+                    "omitted-item-record\t{}",
+                    cli_field(&path.display().to_string())
+                )
             }));
             Ok(lines.join("\n"))
         }
@@ -113,8 +116,8 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let [vault_path] = rest else {
                 return Err(usage());
             };
-            let vault = Vault::open(PathBuf::from(vault_path))
-                .map_err(|error| error.to_string())?;
+            let vault =
+                Vault::open(PathBuf::from(vault_path)).map_err(|error| error.to_string())?;
             let problems = vault.vault_problems().map_err(|error| error.to_string())?;
             Ok(problems
                 .into_iter()
@@ -210,33 +213,104 @@ fn run(args: Vec<String>) -> Result<String, String> {
             ))
         }
         "trash-item" => {
-            let [vault_path, item_id] = rest else { return Err(usage()); };
+            let [vault_path, item_id] = rest else {
+                return Err(usage());
+            };
             let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
-            let item = vault.move_item_to_trash(item_id).map_err(|e| e.to_string())?;
-            Ok(format!("trashed-item\t{}\t{}\t{}", item.id(), cli_field(item.home_subvault()), cli_field(&item.item_folder().display().to_string())))
+            let item = vault
+                .move_item_to_trash(item_id)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "trashed-item\t{}\t{}\t{}",
+                item.id(),
+                cli_field(item.home_subvault()),
+                cli_field(&item.item_folder().display().to_string())
+            ))
         }
         "restore-item" => {
-            let [vault_path, item_id] = rest else { return Err(usage()); };
+            let [vault_path, item_id] = rest else {
+                return Err(usage());
+            };
             let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
-            let item = vault.restore_trashed_item(item_id).map_err(|e| e.to_string())?;
-            Ok(format!("restored-item\t{}\t{}\t{}", item.id(), cli_field(item.home_subvault()), cli_field(&item.item_folder().display().to_string())))
+            let item = vault
+                .restore_trashed_item(item_id)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "restored-item\t{}\t{}\t{}",
+                item.id(),
+                cli_field(item.home_subvault()),
+                cli_field(&item.item_folder().display().to_string())
+            ))
+        }
+        "permanently-delete-item" => {
+            let [vault_path, item_id, flag, confirmed_id] = rest else {
+                return Err(usage());
+            };
+            if flag != "--confirm" {
+                return Err("permanent deletion requires --confirm <exact-item-id>".to_string());
+            }
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let outcome = vault
+                .permanently_delete_trashed_item(item_id, confirmed_id)
+                .map_err(|e| e.to_string())?;
+            let mut lines = vec![format!("permanently-deleted-item\t{}", outcome.id())];
+            lines.extend(
+                outcome
+                    .collections()
+                    .iter()
+                    .map(|name| format!("affected-collection\t{}", cli_field(name))),
+            );
+            lines.extend(outcome.incoming_item_links().iter().map(|link| {
+                format!(
+                    "removed-incoming-item-link\t{}\t{}",
+                    link.source_item_id(),
+                    cli_field(link.label())
+                )
+            }));
+            Ok(lines.join("\n"))
         }
         "resolve-duplicate-candidate" => {
-            let [vault_path, item_id, reason_id, decision] = rest else { return Err(usage()); };
+            let [vault_path, item_id, reason_id, decision] = rest else {
+                return Err(usage());
+            };
             let action = match decision.as_str() {
                 "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
                 "keep-both" => DuplicateCandidateAction::KeepBoth,
-                "move-this-item-to-vault-trash" => DuplicateCandidateAction::MoveThisItemToVaultTrash,
-                _ => return Err("decision must be not-a-duplicate, keep-both, or move-this-item-to-vault-trash".to_string()),
+                "move-this-item-to-vault-trash" => {
+                    DuplicateCandidateAction::MoveThisItemToVaultTrash
+                }
+                _ => return Err(
+                    "decision must be not-a-duplicate, keep-both, or move-this-item-to-vault-trash"
+                        .to_string(),
+                ),
             };
             let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
-            let revision = vault.item_details(item_id).map_err(|e| e.to_string())?.record_revision().to_string();
-            let outcome = vault.resolve_duplicate_candidate(DuplicateCandidateResolution {
-                item_id: item_id.to_string(), reason_id: reason_id.to_string(), expected_revision: revision, action,
-            }).map_err(|e| e.to_string())?;
+            let revision = vault
+                .item_details(item_id)
+                .map_err(|e| e.to_string())?
+                .record_revision()
+                .to_string();
+            let outcome = vault
+                .resolve_duplicate_candidate(DuplicateCandidateResolution {
+                    item_id: item_id.to_string(),
+                    reason_id: reason_id.to_string(),
+                    expected_revision: revision,
+                    action,
+                })
+                .map_err(|e| e.to_string())?;
             Ok(match outcome {
-                DuplicateCandidateResolutionOutcome::Active(item) => format!("resolved-duplicate-candidate\t{}\t{}\t{}", item.id(), decision, item.review_status()),
-                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => format!("resolved-duplicate-candidate\t{}\t{}\t{}", item.id(), decision, cli_field(&item.item_folder().display().to_string())),
+                DuplicateCandidateResolutionOutcome::Active(item) => format!(
+                    "resolved-duplicate-candidate\t{}\t{}\t{}",
+                    item.id(),
+                    decision,
+                    item.review_status()
+                ),
+                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => format!(
+                    "resolved-duplicate-candidate\t{}\t{}\t{}",
+                    item.id(),
+                    decision,
+                    cli_field(&item.item_folder().display().to_string())
+                ),
             })
         }
         _ => Err(usage()),
@@ -244,7 +318,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id> | ggvault resolve-duplicate-candidate <vault-path> <item-id> <reason-id> <not-a-duplicate|keep-both|move-this-item-to-vault-trash>"
+    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id> | ggvault permanently-delete-item <vault-path> <item-id> --confirm <exact-item-id> | ggvault resolve-duplicate-candidate <vault-path> <item-id> <reason-id> <not-a-duplicate|keep-both|move-this-item-to-vault-trash>"
         .to_string()
 }
 

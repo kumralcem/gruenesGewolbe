@@ -10,46 +10,245 @@ fn move_and_restore_preserve_content_references_and_avoid_collisions() {
     let source = root.with_extension("png");
     fs::write(&source, b"preserved bytes").unwrap();
     let vault = Vault::create(&root).unwrap();
-    let item = vault.add_artwork_item(AddArtworkItem {
-        source_file: source.clone(), home_subvault: "Paintings".into(), title: "Blue".into(),
-        creator: Some("Artist".into()), year: Some("2020".into()), saving_reason: None,
-    }).unwrap();
-    let collection = vault.create_collection(CollectionDefinition { name: "Favorites".into(), purpose: "Keep".into(), description: None }).unwrap();
-    vault.add_item_to_collection(collection.id(), item.id()).unwrap();
-    let source_item = vault.add_artwork_item(AddArtworkItem { source_file: source.clone(), home_subvault: "Paintings".into(), title: "Source".into(), creator: Some("Artist".into()), year: Some("2021".into()), saving_reason: None }).unwrap();
-    vault.add_item_link(source_item.id(), ItemLinkDefinition { link_type: "related".into(), target: item.id().into(), label: "Inspired by".into() }).unwrap();
+    let item = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Blue".into(),
+            creator: Some("Artist".into()),
+            year: Some("2020".into()),
+            saving_reason: None,
+        })
+        .unwrap();
+    let collection = vault
+        .create_collection(CollectionDefinition {
+            name: "Favorites".into(),
+            purpose: "Keep".into(),
+            description: None,
+        })
+        .unwrap();
+    vault
+        .add_item_to_collection(collection.id(), item.id())
+        .unwrap();
+    let source_item = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Source".into(),
+            creator: Some("Artist".into()),
+            year: Some("2021".into()),
+            saving_reason: None,
+        })
+        .unwrap();
+    vault
+        .add_item_link(
+            source_item.id(),
+            ItemLinkDefinition {
+                link_type: "related".into(),
+                target: item.id().into(),
+                label: "Inspired by".into(),
+            },
+        )
+        .unwrap();
     let original = item.item_folder().to_path_buf();
     let trashed = vault.move_item_to_trash(item.id()).unwrap();
-    assert!(trashed.item_folder().starts_with(root.join("trash/Paintings")));
-    assert_eq!(fs::read(trashed.item_folder().join("files").join(source.file_name().unwrap())).unwrap(), b"preserved bytes");
-    assert!(!vault.browse_artwork_items("Paintings").unwrap().iter().any(|entry| entry.saved_item().id() == item.id()));
-    assert!(!vault.review_queue().unwrap().iter().any(|entry| entry.saved_item().id() == item.id()));
+    assert!(trashed
+        .item_folder()
+        .starts_with(root.join("trash/Paintings")));
+    assert_eq!(
+        fs::read(
+            trashed
+                .item_folder()
+                .join("files")
+                .join(source.file_name().unwrap())
+        )
+        .unwrap(),
+        b"preserved bytes"
+    );
+    assert!(!vault
+        .browse_artwork_items("Paintings")
+        .unwrap()
+        .iter()
+        .any(|entry| entry.saved_item().id() == item.id()));
+    assert!(!vault
+        .review_queue()
+        .unwrap()
+        .iter()
+        .any(|entry| entry.saved_item().id() == item.id()));
     vault.rebuild_metadata_index().unwrap();
     assert!(vault.search_metadata("Blue").unwrap().is_empty());
     let trash = vault.list_trashed_items().unwrap();
     assert_eq!(trash[0].id(), item.id());
     assert_eq!(trash[0].collections(), vec!["Favorites"]);
-    assert_eq!(trash[0].incoming_item_links()[0].source_item_id(), source_item.id());
+    assert_eq!(
+        trash[0].incoming_item_links()[0].source_item_id(),
+        source_item.id()
+    );
     assert!(vault.item_details(source_item.id()).unwrap().item_links()[0].target_in_vault_trash());
     let trashed_record = trashed.item_folder().join("record.md");
     let valid_record = fs::read(&trashed_record).unwrap();
     fs::write(&trashed_record, b"---\nid: [broken\n---\n").unwrap();
-    assert!(vault.vault_problems().unwrap().iter().any(|problem| problem.path() == trashed_record));
+    assert!(vault
+        .vault_problems()
+        .unwrap()
+        .iter()
+        .any(|problem| problem.path() == trashed_record));
     fs::write(&trashed_record, valid_record).unwrap();
 
     fs::create_dir_all(&original).unwrap();
     let restored = vault.restore_trashed_item(item.id()).unwrap();
     assert_eq!(restored.id(), item.id());
     assert_ne!(restored.item_folder(), original);
-    assert!(restored.item_folder().file_name().unwrap().to_string_lossy().ends_with(" (2)"));
+    assert!(restored
+        .item_folder()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .ends_with(" (2)"));
     drop(vault);
     let reopened = Vault::open(&root).unwrap();
-    assert_eq!(reopened.item_details(item.id()).unwrap().collections(), vec!["Favorites"]);
-    assert!(!reopened.item_details(source_item.id()).unwrap().item_links()[0].target_in_vault_trash());
+    assert_eq!(
+        reopened.item_details(item.id()).unwrap().collections(),
+        vec!["Favorites"]
+    );
+    assert!(!reopened
+        .item_details(source_item.id())
+        .unwrap()
+        .item_links()[0]
+        .target_in_vault_trash());
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn permanent_delete_requires_exact_identity_and_cleans_known_references() {
+    let root = temp_path("permanent-delete");
+    let source = root.with_extension("png");
+    fs::write(&source, b"preserved bytes").unwrap();
+    let vault = Vault::create(&root).unwrap();
+    let target = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Target".into(),
+            creator: None,
+            year: None,
+            saving_reason: None,
+        })
+        .unwrap();
+    let source_item = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Source".into(),
+            creator: None,
+            year: None,
+            saving_reason: None,
+        })
+        .unwrap();
+    let collection = vault
+        .create_collection(CollectionDefinition {
+            name: "Favorites".into(),
+            purpose: "Keep".into(),
+            description: None,
+        })
+        .unwrap();
+    vault
+        .add_item_to_collection(collection.id(), target.id())
+        .unwrap();
+    vault
+        .add_item_link(
+            source_item.id(),
+            ItemLinkDefinition {
+                link_type: "references".into(),
+                target: target.id().into(),
+                label: "Target link".into(),
+            },
+        )
+        .unwrap();
+    vault.move_item_to_trash(source_item.id()).unwrap();
+    let trashed = vault.move_item_to_trash(target.id()).unwrap();
+
+    assert!(vault
+        .permanently_delete_trashed_item(target.id(), "wrong-id")
+        .is_err());
+    assert!(trashed.item_folder().is_dir());
+    let outcome = vault
+        .permanently_delete_trashed_item(target.id(), target.id())
+        .unwrap();
+    assert_eq!(outcome.collections(), &["Favorites"]);
+    assert_eq!(
+        outcome.incoming_item_links()[0].source_item_id(),
+        source_item.id()
+    );
+    assert!(!trashed.item_folder().exists());
+    assert!(!fs::read_to_string(root.join("collections/favorites.md"))
+        .unwrap()
+        .contains(target.id()));
+    vault.restore_trashed_item(source_item.id()).unwrap();
+    assert!(vault.item_details(source_item.id()).unwrap().item_links().is_empty());
+    assert!(
+        !fs::read_to_string(root.join(".gruenesgewolbe/metadata-index.tsv"))
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line.starts_with(target.id()))
+    );
+    assert!(fs::read_to_string(vault.activity_log_path())
+        .unwrap()
+        .contains(&format!("permanently-delete-item\t{}", target.id())));
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(source).unwrap();
+}
+
+#[test]
+fn malformed_possible_referrer_blocks_cleanup_and_preserves_trashed_item() {
+    let root = temp_path("permanent-delete-malformed");
+    let source = root.with_extension("png");
+    fs::write(&source, b"bytes").unwrap();
+    let vault = Vault::create(&root).unwrap();
+    let target = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Target".into(),
+            creator: None,
+            year: None,
+            saving_reason: None,
+        })
+        .unwrap();
+    let possible_referrer = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file: source.clone(),
+            home_subvault: "Paintings".into(),
+            title: "Broken".into(),
+            creator: None,
+            year: None,
+            saving_reason: None,
+        })
+        .unwrap();
+    let trashed = vault.move_item_to_trash(target.id()).unwrap();
+    fs::write(
+        possible_referrer.item_folder().join("record.md"),
+        "---\nid: [broken\n---\n",
+    )
+    .unwrap();
+
+    assert!(vault
+        .permanently_delete_trashed_item(target.id(), target.id())
+        .is_err());
+    assert!(trashed.item_folder().is_dir());
+
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(source).unwrap();
 }
 
 fn temp_path(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("gg-{label}-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()))
+    std::env::temp_dir().join(format!(
+        "gg-{label}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }

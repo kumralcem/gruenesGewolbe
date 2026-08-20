@@ -193,6 +193,7 @@ export interface WorkbenchSnapshot {
   vault_problems: VaultProblem[];
 }
 export interface TrashedItem { id: string; home_subvault: string; item_folder: string; title: string; creator?: string; year?: string; review_status?: string; tags?: string[]; collections: string[]; incoming_item_links: Array<{ source_item_id: string; label: string }>; }
+export interface PermanentDeletion { id: string; collections: string[]; incoming_item_links: Array<{ source_item_id: string; label: string }>; }
 
 export interface SearchResult {
   id: string;
@@ -239,6 +240,7 @@ export interface DesktopAdapter {
   ): Promise<ItemDetails>;
   moveItemToTrash?(id: string): Promise<SavedItem>;
   restoreTrashedItem?(id: string): Promise<SavedItem>;
+  permanentlyDeleteTrashedItem?(id: string, confirmedId: string): Promise<PermanentDeletion>;
   fileUrl?(path: string): string;
 }
 

@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_desktop::{
     ActiveVaultView, AddArtworkFilesCommand, ConfirmItemFolderRenameCommand, DesktopStartupView,
-    ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, OpenVaultView,
-    DuplicateCandidateResolutionView, ResolveDuplicateCandidateCommand,
-    ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand,
-    SavedItemView, SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
+    DuplicateCandidateResolutionView, ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView,
+    OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
+    ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView,
+    SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
     WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
@@ -175,12 +175,36 @@ fn activity_log_path(state: State<'_, CommandState>) -> Result<String, String> {
 
 #[tauri::command]
 fn move_item_to_trash(id: String, state: State<'_, CommandState>) -> Result<SavedItemView, String> {
-    state.lock().map_err(|_| "desktop state is unavailable".to_string())?.move_item_to_trash(id).map_err(|e| e.to_string())
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .move_item_to_trash(id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn restore_trashed_item(id: String, state: State<'_, CommandState>) -> Result<SavedItemView, String> {
-    state.lock().map_err(|_| "desktop state is unavailable".to_string())?.restore_trashed_item(id).map_err(|e| e.to_string())
+fn restore_trashed_item(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .restore_trashed_item(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn permanently_delete_trashed_item(
+    id: String,
+    confirmed_id: String,
+    state: State<'_, CommandState>,
+) -> Result<PermanentDeletionView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .permanently_delete_trashed_item(id, confirmed_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -243,10 +267,16 @@ fn resolve_duplicate_candidate(
     action: String,
     state: State<'_, CommandState>,
 ) -> Result<DuplicateCandidateResolutionView, String> {
-    state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
         .resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
-            item_id, reason_id, expected_revision, action,
-        }).map_err(|error| error.to_string())
+            item_id,
+            reason_id,
+            expected_revision,
+            action,
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -293,6 +323,7 @@ fn main() {
             activity_log_path,
             move_item_to_trash,
             restore_trashed_item,
+            permanently_delete_trashed_item,
             save_item_record,
             resolve_review_reason,
             resolve_duplicate_candidate,

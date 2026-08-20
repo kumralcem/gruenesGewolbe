@@ -414,6 +414,13 @@ function bindActions(
     try { await adapter.restoreTrashedItem(id); await refreshWorkbench(adapter, state, update, state.artwork_sort, id, true); }
     catch (error) { await update({ ...state, error: errorMessage(error) }); }
   }));
+  root.querySelectorAll<HTMLButtonElement>("[data-permanently-delete-trash-id]").forEach((button) => button.addEventListener("click", async () => {
+    const id = button.dataset.permanentlyDeleteTrashId;
+    const input = button.parentElement?.querySelector<HTMLInputElement>("[data-delete-confirmation]");
+    if (!id || !input || !adapter.permanentlyDeleteTrashedItem) return;
+    try { await adapter.permanentlyDeleteTrashedItem(id, input.value); await refreshWorkbench(adapter, state, update, state.artwork_sort, null, true); }
+    catch (error) { await update({ ...state, error: errorMessage(error) }); }
+  }));
 }
 
 async function saveItemEdit(
@@ -791,7 +798,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
 
 function vaultTrashTemplate(snapshot: WorkbenchSnapshot, state: AppState, adapter: DesktopAdapter): string {
   const items = snapshot.trashed_items ?? [];
-  return `<section class="vault-trash" aria-label="Vault Trash"><p class="eyebrow">Recoverable removal</p><h2>Vault Trash</h2>${items.length === 0 ? "<p>Vault Trash is empty.</p>" : items.map(item => `<article><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(metadataLine(item.creator ?? "", item.year ?? ""))} · ${escapeHtml(item.home_subvault)}</p><p>Review: ${escapeHtml(item.review_status ?? "Unknown")} · Tags: ${escapeHtml(item.tags?.join(", ") || "None")}</p><p class="file-path">${escapeHtml(item.item_folder)}</p><p>Collections: ${escapeHtml(item.collections.join(", ") || "None")} (target in Vault Trash)</p><p>Incoming Item Links: ${escapeHtml(item.incoming_item_links.map(link => `${link.label} (${link.source_item_id}) → target in Vault Trash`).join(", ") || "None")}</p><button class="secondary-button" type="button" data-restore-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.restoreTrashedItem ? "disabled" : ""}>Restore</button></article>`).join("")}</section>`;
+  return `<section class="vault-trash" aria-label="Vault Trash"><p class="eyebrow">Recoverable removal</p><h2>Vault Trash</h2>${items.length === 0 ? "<p>Vault Trash is empty.</p>" : items.map(item => `<article><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(metadataLine(item.creator ?? "", item.year ?? ""))} · ${escapeHtml(item.home_subvault)}</p><p>Review: ${escapeHtml(item.review_status ?? "Unknown")} · Tags: ${escapeHtml(item.tags?.join(", ") || "None")}</p><p class="file-path">${escapeHtml(item.item_folder)}</p><p>Collections: ${escapeHtml(item.collections.join(", ") || "None")} (target in Vault Trash)</p><p>Incoming Item Links: ${escapeHtml(item.incoming_item_links.map(link => `${link.label} (${link.source_item_id}) → target in Vault Trash`).join(", ") || "None")}</p><button class="secondary-button" type="button" data-restore-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.restoreTrashedItem ? "disabled" : ""}>Restore</button><div><label>Type stable item ID <code>${escapeHtml(item.id)}</code> to permanently delete<input data-delete-confirmation aria-label="Confirm permanent deletion for ${escapeHtml(item.title)}"></label><button class="danger-button" type="button" data-permanently-delete-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.permanentlyDeleteTrashedItem ? "disabled" : ""}>Permanently Delete</button></div></article>`).join("")}</section>`;
 }
 
 function vaultProblemsTemplate(snapshot: WorkbenchSnapshot): string {

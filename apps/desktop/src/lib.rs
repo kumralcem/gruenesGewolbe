@@ -15,13 +15,14 @@ fn non_empty(value: Option<String>) -> Option<String> {
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
-    CollectionDefinition, ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem,
-    ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails, ItemFolderRenameProposal,
-    DuplicateCandidateAction, DuplicateCandidateResolution, DuplicateCandidateResolutionOutcome,
-    ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture, ReviewQueueItem, ReviewReason,
-    ReviewReasonAction, ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
-    SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    TrashedItem, Vault, VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
+    CollectionDefinition, DuplicateCandidateAction, DuplicateCandidateResolution,
+    DuplicateCandidateResolutionOutcome, ExactDuplicatePolicy, ExtractedTextCapture,
+    IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails,
+    ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture,
+    PermanentDeletion, ReviewQueueItem, ReviewReason, ReviewReasonAction, ReviewReasonResolution,
+    SavedItem, SearchResult, SelectedFileImportSummary, SourceCaptureResult, SourceExtractor,
+    SourceLinkCapture, TagDefinition, TrashedItem, UpdateItemRecord, Vault, VaultError, VaultOpen,
+    VaultProblem, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -347,7 +348,9 @@ impl DesktopShell {
             review_queue: vault.review_queue().map_err(DesktopShellError::Vault)?,
             search_results,
             selected_item,
-            trashed_items: vault.list_trashed_items().map_err(DesktopShellError::Vault)?,
+            trashed_items: vault
+                .list_trashed_items()
+                .map_err(DesktopShellError::Vault)?,
             vault_problems: vault.vault_problems().map_err(DesktopShellError::Vault)?,
         })
     }
@@ -436,8 +439,13 @@ impl DesktopShell {
         &self,
         resolution: DuplicateCandidateResolution,
     ) -> Result<DuplicateCandidateResolutionOutcome, DesktopShellError> {
-        let vault = self.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
-        vault.resolve_duplicate_candidate(resolution).map_err(DesktopShellError::Vault)
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .resolve_duplicate_candidate(resolution)
+            .map_err(DesktopShellError::Vault)
     }
 
     pub fn confirm_item_folder_rename(
@@ -704,7 +712,9 @@ impl WorkbenchSnapshot {
     pub fn selected_item(&self) -> Option<&ItemDetails> {
         self.selected_item.as_ref()
     }
-    pub fn trashed_items(&self) -> &[TrashedItem] { &self.trashed_items }
+    pub fn trashed_items(&self) -> &[TrashedItem] {
+        &self.trashed_items
+    }
 
     pub fn vault_problems(&self) -> &[VaultProblem] {
         &self.vault_problems
@@ -850,13 +860,43 @@ impl TauriCommandState {
     }
 
     pub fn move_item_to_trash(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
-        let vault = self.shell.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
-        vault.move_item_to_trash(&id).map(SavedItemView::from).map_err(DesktopShellError::Vault)
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .move_item_to_trash(&id)
+            .map(SavedItemView::from)
+            .map_err(DesktopShellError::Vault)
     }
 
     pub fn restore_trashed_item(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
-        let vault = self.shell.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
-        vault.restore_trashed_item(&id).map(SavedItemView::from).map_err(DesktopShellError::Vault)
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .restore_trashed_item(&id)
+            .map(SavedItemView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn permanently_delete_trashed_item(
+        &self,
+        id: String,
+        confirmed_id: String,
+    ) -> Result<PermanentDeletionView, DesktopShellError> {
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .permanently_delete_trashed_item(&id, &confirmed_id)
+            .map(PermanentDeletionView::from)
+            .map_err(DesktopShellError::Vault)
     }
 
     pub fn save_item_record(
@@ -912,15 +952,31 @@ impl TauriCommandState {
             "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
             "keep-both" => DuplicateCandidateAction::KeepBoth,
             "move-this-item-to-vault-trash" => DuplicateCandidateAction::MoveThisItemToVaultTrash,
-            action => return Err(DesktopShellError::InvalidReviewReasonAction(action.to_string())),
+            action => {
+                return Err(DesktopShellError::InvalidReviewReasonAction(
+                    action.to_string(),
+                ))
+            }
         };
-        self.shell.resolve_duplicate_candidate(DuplicateCandidateResolution {
-            item_id: command.item_id, reason_id: command.reason_id,
-            expected_revision: command.expected_revision, action,
-        }).map(|outcome| match outcome {
-            DuplicateCandidateResolutionOutcome::Active(item) => DuplicateCandidateResolutionView::Active { item: ItemDetailsView::from(&item) },
-            DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => DuplicateCandidateResolutionView::MovedToVaultTrash { item: SavedItemView::from(item) },
-        })
+        self.shell
+            .resolve_duplicate_candidate(DuplicateCandidateResolution {
+                item_id: command.item_id,
+                reason_id: command.reason_id,
+                expected_revision: command.expected_revision,
+                action,
+            })
+            .map(|outcome| match outcome {
+                DuplicateCandidateResolutionOutcome::Active(item) => {
+                    DuplicateCandidateResolutionView::Active {
+                        item: ItemDetailsView::from(&item),
+                    }
+                }
+                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => {
+                    DuplicateCandidateResolutionView::MovedToVaultTrash {
+                        item: SavedItemView::from(item),
+                    }
+                }
+            })
     }
 
     pub fn confirm_item_folder_rename(
@@ -1445,7 +1501,10 @@ pub struct ItemDetailsView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DuplicateCandidateView { pub item_id: String, pub signal: String }
+pub struct DuplicateCandidateView {
+    pub item_id: String,
+    pub signal: String,
+}
 
 impl From<&ItemDetails> for ItemDetailsView {
     fn from(details: &ItemDetails) -> Self {
@@ -1463,9 +1522,14 @@ impl From<&ItemDetails> for ItemDetailsView {
                 .iter()
                 .map(ReviewReasonView::from)
                 .collect(),
-            duplicate_candidates: details.duplicate_candidates().iter().map(|candidate| DuplicateCandidateView {
-                item_id: candidate.item_id().to_string(), signal: candidate.signal().to_string(),
-            }).collect(),
+            duplicate_candidates: details
+                .duplicate_candidates()
+                .iter()
+                .map(|candidate| DuplicateCandidateView {
+                    item_id: candidate.item_id().to_string(),
+                    signal: candidate.signal().to_string(),
+                })
+                .collect(),
             tags: details.tags().into_iter().map(str::to_string).collect(),
             collections: details
                 .collections()
@@ -1540,14 +1604,66 @@ pub struct WorkbenchSnapshotView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TrashedItemView {
-    pub id: String, pub home_subvault: String, pub item_folder: String, pub title: String,
-    pub creator: String, pub year: String, pub review_status: String, pub tags: Vec<String>,
-    pub collections: Vec<String>, pub incoming_item_links: Vec<IncomingItemLinkView>,
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub review_status: String,
+    pub tags: Vec<String>,
+    pub collections: Vec<String>,
+    pub incoming_item_links: Vec<IncomingItemLinkView>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct IncomingItemLinkView { pub source_item_id: String, pub label: String }
+pub struct IncomingItemLinkView {
+    pub source_item_id: String,
+    pub label: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PermanentDeletionView {
+    pub id: String,
+    pub collections: Vec<String>,
+    pub incoming_item_links: Vec<IncomingItemLinkView>,
+}
+impl From<PermanentDeletion> for PermanentDeletionView {
+    fn from(outcome: PermanentDeletion) -> Self {
+        Self {
+            id: outcome.id().into(),
+            collections: outcome.collections().to_vec(),
+            incoming_item_links: outcome
+                .incoming_item_links()
+                .iter()
+                .map(|link| IncomingItemLinkView {
+                    source_item_id: link.source_item_id().into(),
+                    label: link.label().into(),
+                })
+                .collect(),
+        }
+    }
+}
 impl From<&TrashedItem> for TrashedItemView {
-    fn from(item: &TrashedItem) -> Self { Self { id: item.id().into(), home_subvault: item.home_subvault().into(), item_folder: path_string(item.item_folder()), title: item.title().into(), creator: item.creator().into(), year: item.year().into(), review_status: item.review_status().into(), tags: item.tags().into_iter().map(str::to_string).collect(), collections: item.collections().into_iter().map(str::to_string).collect(), incoming_item_links: item.incoming_item_links().iter().map(|l| IncomingItemLinkView { source_item_id: l.source_item_id().into(), label: l.label().into() }).collect() } }
+    fn from(item: &TrashedItem) -> Self {
+        Self {
+            id: item.id().into(),
+            home_subvault: item.home_subvault().into(),
+            item_folder: path_string(item.item_folder()),
+            title: item.title().into(),
+            creator: item.creator().into(),
+            year: item.year().into(),
+            review_status: item.review_status().into(),
+            tags: item.tags().into_iter().map(str::to_string).collect(),
+            collections: item.collections().into_iter().map(str::to_string).collect(),
+            incoming_item_links: item
+                .incoming_item_links()
+                .iter()
+                .map(|l| IncomingItemLinkView {
+                    source_item_id: l.source_item_id().into(),
+                    label: l.label().into(),
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1596,7 +1712,11 @@ impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
                 .map(SearchResultView::from)
                 .collect(),
             selected_item: snapshot.selected_item().map(ItemDetailsView::from),
-            trashed_items: snapshot.trashed_items().iter().map(TrashedItemView::from).collect(),
+            trashed_items: snapshot
+                .trashed_items()
+                .iter()
+                .map(TrashedItemView::from)
+                .collect(),
             vault_problems: snapshot
                 .vault_problems()
                 .iter()

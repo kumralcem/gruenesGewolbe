@@ -24,3 +24,26 @@ test("moves an item to visible Vault Trash and restores it", async ({ page }) =>
   await page.getByRole("button", { name: "Restore" }).click();
   await expect(page.getByRole("button", { name: /Blue/ })).toBeVisible();
 });
+
+test("permanent deletion shows impact and requires the stable item ID", async ({ page }) => {
+  await page.addInitScript(() => {
+    let deleted = false;
+    const trashedItem = { id: "item-1", title: "Blue", home_subvault: "Paintings", item_folder: "/vault/trash/Paintings/Blue", collections: ["Favorites"], incoming_item_links: [{ source_item_id: "item-2", label: "Inspired by" }] };
+    const snapshot = () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings"], collections: [], artwork_items: [], idea_sources: [], review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: deleted ? [] : [trashedItem] });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [{ root: "/vault" }], repair_proposal: null, notice: null }),
+      selectFolder: async () => null, createVault: async root => ({ root }), openVault: async root => ({ status: "opened", vault: { root } }), confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => snapshot() as any, refreshWorkbenchSnapshot: async () => snapshot() as any,
+      permanentlyDeleteTrashedItem: async (id, confirmedId) => { if (id !== confirmedId) throw new Error("exact item id required"); deleted = true; return { id, collections: ["Favorites"], incoming_item_links: [{ source_item_id: "item-2", label: "Inspired by" }] }; },
+    };
+  });
+  await page.goto("/");
+  const trash = page.getByRole("region", { name: "Vault Trash" });
+  await expect(trash).toContainText("Favorites");
+  await expect(trash).toContainText("Inspired by");
+  await trash.getByRole("button", { name: "Permanently Delete" }).click();
+  await expect(page.getByText("exact item id required")).toBeVisible();
+  await trash.getByRole("textbox", { name: /Confirm permanent deletion/ }).fill("item-1");
+  await trash.getByRole("button", { name: "Permanently Delete" }).click();
+  await expect(trash).toContainText("Vault Trash is empty");
+});

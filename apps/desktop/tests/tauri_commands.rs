@@ -80,18 +80,41 @@ fn tauri_command_exposes_the_duplicate_candidate_decisions() {
     fs::write(source.join("two/Study.jpg"), b"two").unwrap();
     let mut state = TauriCommandState::default();
     state.create_vault(root.display().to_string()).unwrap();
-    let imported = state.add_artwork_files(AddArtworkFilesCommand {
-        source_files: vec![source.join("one/Study.jpg").display().to_string(), source.join("two/Study.jpg").display().to_string()],
-        creator: Some("Jane Painter".into()), year: Some("1884".into()), saving_reason: None, import_exact_duplicates: false,
-    }).unwrap();
-    let selected = state.workbench_snapshot(WorkbenchSnapshotCommand {
-        home_subvault: "Paintings".into(), artwork_sort: "newest".into(), search_query: None,
-        selected_item_id: Some(imported.imported_items[1].id.clone()),
-    }).unwrap().selected_item.unwrap();
-    let reason = selected.review_reasons.iter().find(|reason| reason.kind == "duplicate-candidate").unwrap();
-    let result = state.resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
-        item_id: selected.id.clone(), reason_id: reason.id.clone(), expected_revision: selected.record_revision, action: "not-a-duplicate".into(),
-    }).unwrap();
+    let imported = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![
+                source.join("one/Study.jpg").display().to_string(),
+                source.join("two/Study.jpg").display().to_string(),
+            ],
+            creator: Some("Jane Painter".into()),
+            year: Some("1884".into()),
+            saving_reason: None,
+            import_exact_duplicates: false,
+        })
+        .unwrap();
+    let selected = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".into(),
+            artwork_sort: "newest".into(),
+            search_query: None,
+            selected_item_id: Some(imported.imported_items[1].id.clone()),
+        })
+        .unwrap()
+        .selected_item
+        .unwrap();
+    let reason = selected
+        .review_reasons
+        .iter()
+        .find(|reason| reason.kind == "duplicate-candidate")
+        .unwrap();
+    let result = state
+        .resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
+            item_id: selected.id.clone(),
+            reason_id: reason.id.clone(),
+            expected_revision: selected.record_revision,
+            action: "not-a-duplicate".into(),
+        })
+        .unwrap();
     assert_eq!(serde_json::to_value(result).unwrap()["status"], "active");
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(source).unwrap();
@@ -359,6 +382,46 @@ fn tauri_open_command_rejects_a_non_repairable_structural_conflict() {
     assert!(!root.join("collections").exists());
 
     fs::remove_dir_all(&root).expect("clean conflicting vault");
+}
+
+#[test]
+fn tauri_command_permanently_deletes_only_with_exact_identity() {
+    let root = temp_path("tauri-permanent-delete");
+    let source = root.with_extension("png");
+    fs::write(&source, b"image").expect("write source");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+    let imported = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![source.display().to_string()],
+            creator: None,
+            year: None,
+            saving_reason: None,
+            import_exact_duplicates: false,
+        })
+        .expect("add item");
+    let id = imported.imported_items[0].id.clone();
+    state.move_item_to_trash(id.clone()).expect("move to trash");
+    assert!(state
+        .permanently_delete_trashed_item(id.clone(), "wrong".into())
+        .is_err());
+    let outcome = state
+        .permanently_delete_trashed_item(id.clone(), id.clone())
+        .expect("delete through command");
+    assert_eq!(outcome.id, id);
+    let snapshot = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".into(),
+            artwork_sort: "newest".into(),
+            search_query: None,
+            selected_item_id: None,
+        })
+        .expect("snapshot");
+    assert!(snapshot.trashed_items.is_empty());
+    fs::remove_dir_all(root).expect("clean vault");
+    fs::remove_file(source).expect("clean source");
 }
 
 fn temp_path(name: &str) -> PathBuf {

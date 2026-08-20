@@ -87,28 +87,145 @@ impl Vault {
 
     pub fn move_item_to_trash(&self, id: &str) -> Result<SavedItem, VaultError> {
         let record = self.find_active_record(id)?;
-        let home_subvault = required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
-        let folder_name = record.entry.item_folder.file_name().ok_or_else(|| VaultError::SavedItemNotFound(id.to_string()))?;
+        let home_subvault =
+            required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
+        let folder_name = record
+            .entry
+            .item_folder
+            .file_name()
+            .ok_or_else(|| VaultError::SavedItemNotFound(id.to_string()))?;
         let destination_root = self.root.join(TRASH_DIR).join(&home_subvault);
         fs::create_dir_all(&destination_root)?;
         let destination = unique_folder_path(&destination_root, &folder_name.to_string_lossy());
         fs::rename(&record.entry.item_folder, &destination)?;
         self.rebuild_metadata_index()?;
         self.append_activity_log(&format!("trash-item\t{}\t{}", id, destination.display()))?;
-        Ok(SavedItem { id: id.to_string(), home_subvault, item_folder: destination })
+        Ok(SavedItem {
+            id: id.to_string(),
+            home_subvault,
+            item_folder: destination,
+        })
     }
 
     pub fn restore_trashed_item(&self, id: &str) -> Result<SavedItem, VaultError> {
         let record = self.find_trashed_record(id)?;
-        let home_subvault = required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
-        let folder_name = record.entry.item_folder.file_name().ok_or_else(|| VaultError::TrashedItemNotFound(id.to_string()))?;
-        let destination_root = self.root.join(SUBVAULTS_DIR).join(&home_subvault).join("items");
+        let home_subvault =
+            required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
+        let folder_name = record
+            .entry
+            .item_folder
+            .file_name()
+            .ok_or_else(|| VaultError::TrashedItemNotFound(id.to_string()))?;
+        let destination_root = self
+            .root
+            .join(SUBVAULTS_DIR)
+            .join(&home_subvault)
+            .join("items");
         fs::create_dir_all(&destination_root)?;
         let destination = unique_folder_path(&destination_root, &folder_name.to_string_lossy());
         fs::rename(&record.entry.item_folder, &destination)?;
         self.rebuild_metadata_index()?;
         self.append_activity_log(&format!("restore-item\t{}\t{}", id, destination.display()))?;
-        Ok(SavedItem { id: id.to_string(), home_subvault, item_folder: destination })
+        Ok(SavedItem {
+            id: id.to_string(),
+            home_subvault,
+            item_folder: destination,
+        })
+    }
+
+    pub fn permanently_delete_trashed_item(
+        &self,
+        id: &str,
+        confirmed_id: &str,
+    ) -> Result<PermanentDeletion, VaultError> {
+        if id != confirmed_id {
+            return Err(VaultError::PermanentDeletionNotConfirmed);
+        }
+        let target = self.find_trashed_record(id)?;
+        let active_scan = self.item_record_scan()?;
+        let trash_scan = self.trashed_item_record_scan()?;
+        if let Some(problem) = active_scan.vault_problems.first().or_else(|| {
+            trash_scan
+                .vault_problems
+                .iter()
+                .find(|problem| problem.path != target.entry.record_path)
+        }) {
+            return Err(VaultError::ReferenceCleanupBlocked(problem.path.clone()));
+        }
+
+        let impact = PermanentDeletion {
+            id: id.to_string(),
+            collections: self.collection_names_for_item(id, &target.text)?,
+            incoming_item_links: self.incoming_item_links(id)?,
+        };
+        let mut mutations: Vec<(PathBuf, String, String)> = Vec::new();
+        for entry in fs::read_dir(self.root.join(COLLECTIONS_DIR))? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let original = fs::read_to_string(&path)?;
+            let mut items = collection_items(&original);
+            let previous_len = items.len();
+            items.retain(|item_id| item_id != id);
+            if items.len() != previous_len {
+                mutations.push((
+                    path,
+                    original.clone(),
+                    replace_collection_items(&original, &items),
+                ));
+            }
+        }
+        for record in active_scan
+            .valid_records
+            .into_iter()
+            .chain(trash_scan.valid_records)
+        {
+            if record.entry.record_path == target.entry.record_path {
+                continue;
+            }
+            let lines = markdown_list_section(&record.text, "Item Links");
+            let retained: Vec<String> = lines
+                .iter()
+                .filter(|line| parse_item_link_line(line).map_or(true, |link| link.target() != id))
+                .cloned()
+                .collect();
+            if retained.len() != lines.len() {
+                let updated =
+                    replace_or_append_markdown_list_section(&record.text, "Item Links", &retained);
+                mutations.push((record.entry.record_path, record.text, updated));
+            }
+        }
+
+        let mut applied: Vec<(PathBuf, String)> = Vec::new();
+        for (path, original, updated) in &mutations {
+            if let Err(error) = atomic_write(path, updated.as_bytes()) {
+                rollback_text_mutations(&applied)?;
+                return Err(error);
+            }
+            applied.push((path.clone(), original.clone()));
+        }
+        let index_path = self.root.join(HIDDEN_STATE_DIR).join(METADATA_INDEX_FILE);
+        let log_path = self.activity_log_path();
+        let index_before = fs::read(&index_path).ok();
+        let log_before = fs::read(&log_path).ok();
+        let maintenance = self.rebuild_metadata_index().and_then(|_| {
+            self.append_activity_log(&format!("permanently-delete-item\t{}", id))
+        });
+        if let Err(error) = maintenance {
+            rollback_text_mutations(&applied)?;
+            restore_file_snapshot(&index_path, index_before.as_deref())?;
+            restore_file_snapshot(&log_path, log_before.as_deref())?;
+            return Err(error);
+        }
+        if let Err(error) = fs::remove_dir_all(&target.entry.item_folder) {
+            rollback_text_mutations(&applied)?;
+            restore_file_snapshot(&index_path, index_before.as_deref())?;
+            restore_file_snapshot(&log_path, log_before.as_deref())?;
+            return Err(VaultError::Io(error));
+        }
+        Ok(impact)
     }
 
     pub fn list_trashed_items(&self) -> Result<Vec<TrashedItem>, VaultError> {
@@ -117,8 +234,16 @@ impl Vault {
             let id = required_frontmatter_value(&record.entry.record_path, &record.text, "id")?;
             items.push(TrashedItem {
                 saved_item: saved_item_from_record(&record.entry, &record.text)?,
-                title: required_frontmatter_value(&record.entry.record_path, &record.text, "title")?,
-                creator: required_frontmatter_value(&record.entry.record_path, &record.text, "creator")?,
+                title: required_frontmatter_value(
+                    &record.entry.record_path,
+                    &record.text,
+                    "title",
+                )?,
+                creator: required_frontmatter_value(
+                    &record.entry.record_path,
+                    &record.text,
+                    "creator",
+                )?,
                 year: required_frontmatter_value(&record.entry.record_path, &record.text, "year")?,
                 review_status: derived_review_status(&review_reasons(&record.text)).to_string(),
                 tags: frontmatter_list(&record.text, "tags"),
@@ -861,9 +986,17 @@ impl Vault {
             let year = required_frontmatter_value(&record.record_path, &text, "year")?;
 
             let mut links = item_links(&text);
-            let trashed_ids: Vec<String> = self.trashed_item_record_scan()?.valid_records.into_iter()
-                .filter_map(|record| frontmatter_value(&record.text, "id")).collect();
-            for link in &mut links { link.target_in_vault_trash = trashed_ids.iter().any(|trashed_id| trashed_id == link.target()); }
+            let trashed_ids: Vec<String> = self
+                .trashed_item_record_scan()?
+                .valid_records
+                .into_iter()
+                .filter_map(|record| frontmatter_value(&record.text, "id"))
+                .collect();
+            for link in &mut links {
+                link.target_in_vault_trash = trashed_ids
+                    .iter()
+                    .any(|trashed_id| trashed_id == link.target());
+            }
             return Ok(ItemDetails {
                 saved_item: saved_item_from_record(&record, &text)?,
                 title: title.clone(),
@@ -1163,7 +1296,9 @@ impl Vault {
             let decision = match resolution.action {
                 DuplicateCandidateAction::NotADuplicate => "not-a-duplicate",
                 DuplicateCandidateAction::KeepBoth => "keep-both",
-                DuplicateCandidateAction::MoveThisItemToVaultTrash => "moved-this-item-to-vault-trash",
+                DuplicateCandidateAction::MoveThisItemToVaultTrash => {
+                    "moved-this-item-to-vault-trash"
+                }
             };
             let mut decisions = markdown_list_section(&text, "Duplicate Candidate Decisions");
             decisions.push(format!("{} | {decision}", resolution.reason_id));
@@ -1184,7 +1319,9 @@ impl Vault {
             return if move_to_trash {
                 let original_folder = record.entry.item_folder.clone();
                 let item = self.move_item_to_trash(&resolution.item_id)?;
-                if let Err(write_error) = atomic_write(&item.item_folder().join("record.md"), updated.as_bytes()) {
+                if let Err(write_error) =
+                    atomic_write(&item.item_folder().join("record.md"), updated.as_bytes())
+                {
                     fs::rename(item.item_folder(), &original_folder)?;
                     self.rebuild_metadata_index()?;
                     self.append_activity_log(&format!(
@@ -1514,7 +1651,9 @@ impl Vault {
     }
 
     fn trashed_item_record_scan(&self) -> Result<ItemRecordScan, VaultError> {
-        Ok(scan_item_record_entries(self.trashed_item_record_entries()?))
+        Ok(scan_item_record_entries(
+            self.trashed_item_record_entries()?,
+        ))
     }
 
     fn trashed_item_record_entries(&self) -> Result<Vec<ItemRecordEntry>, VaultError> {
@@ -1523,12 +1662,17 @@ impl Vault {
         if trash.is_dir() {
             for home in fs::read_dir(trash)? {
                 let home = home?;
-                if !home.file_type()?.is_dir() { continue; }
+                if !home.file_type()?.is_dir() {
+                    continue;
+                }
                 for folder in fs::read_dir(home.path())? {
                     let folder = folder?;
                     let record_path = folder.path().join("record.md");
                     if folder.file_type()?.is_dir() && record_path.is_file() {
-                        entries.push(ItemRecordEntry { record_path, item_folder: folder.path() });
+                        entries.push(ItemRecordEntry {
+                            record_path,
+                            item_folder: folder.path(),
+                        });
                     }
                 }
             }
@@ -1537,25 +1681,53 @@ impl Vault {
         Ok(entries)
     }
 
-    fn item_record_by_id(&self, entries: Vec<ItemRecordEntry>, id: &str, error: VaultError) -> Result<ValidItemRecord, VaultError> {
-        scan_item_record_entries(entries).valid_records.into_iter()
+    fn item_record_by_id(
+        &self,
+        entries: Vec<ItemRecordEntry>,
+        id: &str,
+        error: VaultError,
+    ) -> Result<ValidItemRecord, VaultError> {
+        scan_item_record_entries(entries)
+            .valid_records
+            .into_iter()
             .find(|record| frontmatter_value(&record.text, "id").as_deref() == Some(id))
             .ok_or(error)
     }
 
     fn find_active_record(&self, id: &str) -> Result<ValidItemRecord, VaultError> {
-        self.item_record_by_id(self.item_record_entries()?, id, VaultError::SavedItemNotFound(id.to_string()))
+        self.item_record_by_id(
+            self.item_record_entries()?,
+            id,
+            VaultError::SavedItemNotFound(id.to_string()),
+        )
     }
 
     fn find_trashed_record(&self, id: &str) -> Result<ValidItemRecord, VaultError> {
-        self.item_record_by_id(self.trashed_item_record_entries()?, id, VaultError::TrashedItemNotFound(id.to_string()))
+        self.item_record_by_id(
+            self.trashed_item_record_entries()?,
+            id,
+            VaultError::TrashedItemNotFound(id.to_string()),
+        )
     }
 
     fn incoming_item_links(&self, id: &str) -> Result<Vec<IncomingItemLink>, VaultError> {
         let mut links = Vec::new();
-        for record in self.item_record_scan()?.valid_records {
-            for link in item_links(&record.text).into_iter().filter(|link| link.target() == id) {
-                links.push(IncomingItemLink { source_item_id: required_frontmatter_value(&record.entry.record_path, &record.text, "id")?, label: link.label().to_string() });
+        let records = self.item_record_scan()?.valid_records.into_iter().chain(
+            self.trashed_item_record_scan()?.valid_records,
+        );
+        for record in records {
+            for link in item_links(&record.text)
+                .into_iter()
+                .filter(|link| link.target() == id)
+            {
+                links.push(IncomingItemLink {
+                    source_item_id: required_frontmatter_value(
+                        &record.entry.record_path,
+                        &record.text,
+                        "id",
+                    )?,
+                    label: link.label().to_string(),
+                });
             }
         }
         Ok(links)
@@ -2896,7 +3068,9 @@ impl ItemLink {
     pub fn label(&self) -> &str {
         &self.label
     }
-    pub fn target_in_vault_trash(&self) -> bool { self.target_in_vault_trash }
+    pub fn target_in_vault_trash(&self) -> bool {
+        self.target_in_vault_trash
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3152,24 +3326,70 @@ pub struct TrashedItem {
 }
 
 impl TrashedItem {
-    pub fn id(&self) -> &str { self.saved_item.id() }
-    pub fn home_subvault(&self) -> &str { self.saved_item.home_subvault() }
-    pub fn item_folder(&self) -> &Path { self.saved_item.item_folder() }
-    pub fn title(&self) -> &str { &self.title }
-    pub fn creator(&self) -> &str { &self.creator }
-    pub fn year(&self) -> &str { &self.year }
-    pub fn review_status(&self) -> &str { &self.review_status }
-    pub fn tags(&self) -> Vec<&str> { self.tags.iter().map(String::as_str).collect() }
-    pub fn collections(&self) -> Vec<&str> { self.collections.iter().map(String::as_str).collect() }
-    pub fn incoming_item_links(&self) -> &[IncomingItemLink] { &self.incoming_item_links }
+    pub fn id(&self) -> &str {
+        self.saved_item.id()
+    }
+    pub fn home_subvault(&self) -> &str {
+        self.saved_item.home_subvault()
+    }
+    pub fn item_folder(&self) -> &Path {
+        self.saved_item.item_folder()
+    }
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+    pub fn creator(&self) -> &str {
+        &self.creator
+    }
+    pub fn year(&self) -> &str {
+        &self.year
+    }
+    pub fn review_status(&self) -> &str {
+        &self.review_status
+    }
+    pub fn tags(&self) -> Vec<&str> {
+        self.tags.iter().map(String::as_str).collect()
+    }
+    pub fn collections(&self) -> Vec<&str> {
+        self.collections.iter().map(String::as_str).collect()
+    }
+    pub fn incoming_item_links(&self) -> &[IncomingItemLink] {
+        &self.incoming_item_links
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IncomingItemLink { source_item_id: String, label: String }
+pub struct IncomingItemLink {
+    source_item_id: String,
+    label: String,
+}
 
 impl IncomingItemLink {
-    pub fn source_item_id(&self) -> &str { &self.source_item_id }
-    pub fn label(&self) -> &str { &self.label }
+    pub fn source_item_id(&self) -> &str {
+        &self.source_item_id
+    }
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermanentDeletion {
+    id: String,
+    collections: Vec<String>,
+    incoming_item_links: Vec<IncomingItemLink>,
+}
+
+impl PermanentDeletion {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn collections(&self) -> &[String] {
+        &self.collections
+    }
+    pub fn incoming_item_links(&self) -> &[IncomingItemLink] {
+        &self.incoming_item_links
+    }
 }
 
 impl SavedItem {
@@ -3273,6 +3493,9 @@ pub enum VaultError {
     MissingImportFolder(PathBuf),
     SavedItemNotFound(String),
     TrashedItemNotFound(String),
+    PermanentDeletionNotConfirmed,
+    ReferenceCleanupBlocked(PathBuf),
+    ReferenceCleanupRollbackFailed(PathBuf),
     CollectionNotFound(String),
     MalformedItemRecord(PathBuf),
     ItemRecordCodec(String),
@@ -3340,6 +3563,20 @@ impl fmt::Display for VaultError {
             }
             Self::SavedItemNotFound(id) => write!(f, "saved item not found: {id}"),
             Self::TrashedItemNotFound(id) => write!(f, "trashed item not found: {id}"),
+            Self::PermanentDeletionNotConfirmed => write!(
+                f,
+                "permanent deletion requires confirmation of the exact item id"
+            ),
+            Self::ReferenceCleanupBlocked(path) => write!(
+                f,
+                "reference cleanup is blocked by malformed item record: {}",
+                path.display()
+            ),
+            Self::ReferenceCleanupRollbackFailed(path) => write!(
+                f,
+                "reference cleanup rollback failed for: {}",
+                path.display()
+            ),
             Self::CollectionNotFound(id) => write!(f, "collection not found: {id}"),
             Self::MalformedItemRecord(path) => {
                 write!(f, "item record is malformed: {}", path.display())
@@ -4013,7 +4250,10 @@ fn scan_item_record_entries(entries: Vec<ItemRecordEntry>) -> ItemRecordScan {
             Err(problem) => vault_problems.push(problem),
         }
     }
-    ItemRecordScan { valid_records, vault_problems }
+    ItemRecordScan {
+        valid_records,
+        vault_problems,
+    }
 }
 
 fn read_valid_item_record(entry: ItemRecordEntry) -> Result<ValidItemRecord, VaultProblem> {
@@ -4028,12 +4268,11 @@ fn read_valid_item_record(entry: ItemRecordEntry) -> Result<ValidItemRecord, Vau
             path: entry.record_path.clone(),
             error: "Item Record frontmatter delimiters are missing".to_string(),
         })?;
-    let mapping = serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter).map_err(|error| {
-        VaultProblem {
+    let mapping =
+        serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter).map_err(|error| VaultProblem {
             path: entry.record_path.clone(),
             error: format!("Item Record YAML parse error: {error}"),
-        }
-    })?;
+        })?;
 
     let required = |key: &str| {
         mapping
@@ -4116,8 +4355,19 @@ fn review_reasons(record: &str) -> Vec<ReviewReason> {
 fn parse_review_reason(line: &str, index: usize) -> ReviewReason {
     let parts = line.splitn(6, " | ").map(str::trim).collect::<Vec<_>>();
     if parts.len() >= 5 {
-        let candidate_item_id = parts.get(5).filter(|value| !value.is_empty()).map(|value| (*value).to_string())
-            .or_else(|| (parts[1] == "duplicate-candidate").then(|| parts[0].strip_prefix("duplicate-candidate-").map(str::to_string)).flatten());
+        let candidate_item_id = parts
+            .get(5)
+            .filter(|value| !value.is_empty())
+            .map(|value| (*value).to_string())
+            .or_else(|| {
+                (parts[1] == "duplicate-candidate")
+                    .then(|| {
+                        parts[0]
+                            .strip_prefix("duplicate-candidate-")
+                            .map(str::to_string)
+                    })
+                    .flatten()
+            });
         return ReviewReason {
             id: parts[0].to_string(),
             kind: parts[1].to_string(),
@@ -4471,16 +4721,36 @@ fn item_link_line(link: &ItemLinkDefinition) -> String {
 fn item_links(record: &str) -> Vec<ItemLink> {
     markdown_list_section(record, "Item Links")
         .into_iter()
-        .filter_map(|line| {
-            let mut parts = line.splitn(3, " | ").map(str::trim);
-            Some(ItemLink {
-                link_type: parts.next()?.to_string(),
-                label: parts.next()?.to_string(),
-                target: parts.next()?.to_string(),
-                target_in_vault_trash: false,
-            })
-        })
+        .filter_map(|line| parse_item_link_line(&line))
         .collect()
+}
+
+fn parse_item_link_line(line: &str) -> Option<ItemLink> {
+    let mut parts = line.splitn(3, " | ").map(str::trim);
+    Some(ItemLink {
+        link_type: parts.next()?.to_string(),
+        label: parts.next()?.to_string(),
+        target: parts.next()?.to_string(),
+        target_in_vault_trash: false,
+    })
+}
+
+fn rollback_text_mutations(applied: &[(PathBuf, String)]) -> Result<(), VaultError> {
+    for (path, original) in applied.iter().rev() {
+        atomic_write(path, original.as_bytes())
+            .map_err(|_| VaultError::ReferenceCleanupRollbackFailed(path.clone()))?;
+    }
+    Ok(())
+}
+
+fn restore_file_snapshot(path: &Path, contents: Option<&[u8]>) -> Result<(), VaultError> {
+    match contents {
+        Some(contents) => atomic_write(path, contents)
+            .map_err(|_| VaultError::ReferenceCleanupRollbackFailed(path.to_path_buf())),
+        None if path.exists() => fs::remove_file(path)
+            .map_err(|_| VaultError::ReferenceCleanupRollbackFailed(path.to_path_buf())),
+        None => Ok(()),
+    }
 }
 
 fn metadata_suggestion_line(suggestion: &AiMetadataSuggestion) -> String {
