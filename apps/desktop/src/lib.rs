@@ -817,14 +817,8 @@ impl TauriCommandState {
         &self,
         command: WorkbenchSnapshotCommand,
     ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
-        let artwork_sort = parse_artwork_sort(&command.artwork_sort)?;
         self.shell
-            .workbench_snapshot(WorkbenchRequest {
-                home_subvault: command.home_subvault,
-                artwork_sort,
-                search_query: command.search_query,
-                selected_item_id: command.selected_item_id,
-            })
+            .workbench_snapshot(workbench_request(command)?)
             .map(WorkbenchSnapshotView::from)
     }
 
@@ -832,14 +826,8 @@ impl TauriCommandState {
         &self,
         command: WorkbenchSnapshotCommand,
     ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
-        let artwork_sort = parse_artwork_sort(&command.artwork_sort)?;
         self.shell
-            .refresh_workbench(WorkbenchRequest {
-                home_subvault: command.home_subvault,
-                artwork_sort,
-                search_query: command.search_query,
-                selected_item_id: command.selected_item_id,
-            })
+            .refresh_workbench(workbench_request(command)?)
             .map(WorkbenchSnapshotView::from)
     }
 
@@ -1125,6 +1113,17 @@ pub struct WorkbenchSnapshotCommand {
     pub artwork_sort: String,
     pub search_query: Option<String>,
     pub selected_item_id: Option<String>,
+}
+
+fn workbench_request(
+    command: WorkbenchSnapshotCommand,
+) -> Result<WorkbenchRequest, DesktopShellError> {
+    Ok(WorkbenchRequest {
+        home_subvault: command.home_subvault,
+        artwork_sort: parse_artwork_sort(&command.artwork_sort)?,
+        search_query: command.search_query,
+        selected_item_id: command.selected_item_id,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

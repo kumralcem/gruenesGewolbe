@@ -65,10 +65,12 @@ export interface ImportFailedEntry {
   error: string;
 }
 
-export interface ImportVaultProblem {
+export interface VaultProblem {
   path: string;
   error: string;
 }
+
+export type ImportVaultProblem = VaultProblem;
 
 export interface ArtworkImportOutcome {
   imported_count: number;
@@ -180,7 +182,7 @@ export interface WorkbenchSnapshot {
   review_queue: ReviewQueueItem[];
   search_results: SearchResult[];
   selected_item: ItemDetails | null;
-  vault_problems: ImportVaultProblem[];
+  vault_problems: VaultProblem[];
 }
 
 export interface SearchResult {

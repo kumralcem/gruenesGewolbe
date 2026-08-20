@@ -78,8 +78,7 @@ impl Vault {
     }
 
     pub fn vault_problems(&self) -> Result<Vec<VaultProblem>, VaultError> {
-        let (_, problems) = self.valid_item_records()?;
-        Ok(problems)
+        Ok(self.item_record_scan()?.vault_problems)
     }
 
     pub fn list_subvaults(&self) -> Result<Vec<String>, VaultError> {
@@ -585,14 +584,14 @@ impl Vault {
     }
 
     pub fn rebuild_metadata_index(&self) -> Result<RebuiltMetadataIndex, VaultError> {
-        let (records, problems) = self.valid_item_records()?;
+        let scan = self.item_record_scan()?;
         let collection_search_text = self.collection_search_text_by_item_id()?;
         let hidden_state = self.root.join(HIDDEN_STATE_DIR);
         fs::create_dir_all(&hidden_state)?;
 
         let mut index = String::new();
         let mut indexed_items = 0;
-        for record in records {
+        for record in scan.valid_records {
             let text = record.text;
             let id = required_frontmatter_value(&record.entry.record_path, &text, "id")?;
             let home_subvault =
@@ -625,7 +624,8 @@ impl Vault {
 
         Ok(RebuiltMetadataIndex {
             indexed_items,
-            omitted_paths: problems
+            omitted_paths: scan
+                .vault_problems
                 .into_iter()
                 .map(|problem| problem.path)
                 .collect(),
@@ -681,7 +681,7 @@ impl Vault {
         sort: ArtworkSort,
     ) -> Result<Vec<ArtworkGridItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.valid_item_records()?.0 {
+        for record in self.item_record_scan()?.valid_records {
             let text = record.text;
             let record = record.entry;
             if frontmatter_value(&text, "home_subvault").as_deref() != Some(home_subvault) {
@@ -743,7 +743,7 @@ impl Vault {
 
     pub fn browse_idea_sources(&self) -> Result<Vec<IdeaSourceListItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.valid_item_records()?.0 {
+        for record in self.item_record_scan()?.valid_records {
             let text = record.text;
             let record = record.entry;
             if frontmatter_value(&text, "item_type").as_deref() != Some("idea") {
@@ -772,7 +772,7 @@ impl Vault {
 
     pub fn review_queue(&self) -> Result<Vec<ReviewQueueItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.valid_item_records()?.0 {
+        for record in self.item_record_scan()?.valid_records {
             let text = record.text;
             let record = record.entry;
             let reasons = review_reasons(&text);
@@ -800,8 +800,9 @@ impl Vault {
     }
 
     pub fn item_details(&self, id: &str) -> Result<ItemDetails, VaultError> {
-        for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+        for record in self.item_record_scan()?.valid_records {
+            let text = record.text;
+            let record = record.entry;
             if frontmatter_value(&text, "id").as_deref() != Some(id) {
                 continue;
             }
@@ -1314,8 +1315,9 @@ impl Vault {
     }
 
     pub fn open_saved_item(&self, id: &str) -> Result<SavedItem, VaultError> {
-        for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+        for record in self.item_record_scan()?.valid_records {
+            let text = record.text;
+            let record = record.entry;
             if frontmatter_value(&text, "id").as_deref() != Some(id) {
                 continue;
             }
@@ -1383,18 +1385,19 @@ impl Vault {
         Ok(records)
     }
 
-    fn valid_item_records(
-        &self,
-    ) -> Result<(Vec<ValidItemRecord>, Vec<VaultProblem>), VaultError> {
-        let mut records = Vec::new();
-        let mut problems = Vec::new();
+    fn item_record_scan(&self) -> Result<ItemRecordScan, VaultError> {
+        let mut valid_records = Vec::new();
+        let mut vault_problems = Vec::new();
         for entry in self.item_record_entries()? {
             match read_valid_item_record(entry) {
-                Ok(record) => records.push(record),
-                Err(problem) => problems.push(problem),
+                Ok(record) => valid_records.push(record),
+                Err(problem) => vault_problems.push(problem),
             }
         }
-        Ok((records, problems))
+        Ok(ItemRecordScan {
+            valid_records,
+            vault_problems,
+        })
     }
 
     fn collection_search_text_by_item_id(&self) -> Result<HashMap<String, String>, VaultError> {
@@ -3001,6 +3004,12 @@ struct ItemRecordEntry {
 struct ValidItemRecord {
     entry: ItemRecordEntry,
     text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ItemRecordScan {
+    valid_records: Vec<ValidItemRecord>,
+    vault_problems: Vec<VaultProblem>,
 }
 
 #[derive(Debug)]

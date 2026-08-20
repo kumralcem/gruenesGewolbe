@@ -39,9 +39,12 @@ fn malformed_item_records_are_localized_across_browsing_and_metadata_rebuilds() 
         fs::read(&malformed_paths[0]).expect("read first valid record before corruption"),
         fs::read(&malformed_paths[1]).expect("read second valid record before corruption"),
     ];
-    let malformed_record = b"---\nid: [not valid yaml\n---\n\n# Broken\n";
-    for path in &malformed_paths {
-        fs::write(path, malformed_record).expect("write malformed record");
+    let malformed_records: [&[u8]; 2] = [
+        b"\xff\xfeinvalid UTF-8 Item Record",
+        b"---\nid: [not valid yaml\n---\n\n# Broken\n",
+    ];
+    for (path, record) in malformed_paths.iter().zip(malformed_records) {
+        fs::write(path, record).expect("write malformed record");
     }
 
     let reopened = Vault::open(&root).expect("open around malformed Item Record");
@@ -54,14 +57,29 @@ fn malformed_item_records_are_localized_across_browsing_and_metadata_rebuilds() 
 
     let problems = reopened.vault_problems().expect("list localized Vault Problems");
     assert_eq!(problems.len(), 2);
-    for problem in &problems {
+    for (problem, malformed_record) in problems.iter().zip(malformed_records) {
         assert!(malformed_paths.iter().any(|path| path == problem.path()));
-        assert!(problem.error().contains("YAML"));
         assert_eq!(
             fs::read(problem.path()).expect("read malformed Item Record after scan"),
             malformed_record
         );
     }
+    assert!(problems[0].error().contains("could not be read"));
+    assert!(problems[1].error().contains("YAML"));
+    assert_eq!(
+        reopened
+            .item_details(saved_items[2].id())
+            .expect("open valid Item Details after unreadable record")
+            .title(),
+        "Harbor"
+    );
+    assert_eq!(
+        reopened
+            .open_saved_item(saved_items[2].id())
+            .expect("open valid Saved Item after unreadable record")
+            .id(),
+        saved_items[2].id()
+    );
 
     let rebuilt = reopened
         .rebuild_metadata_index()
