@@ -192,6 +192,7 @@ export interface WorkbenchSnapshot {
   trashed_items?: TrashedItem[];
   vault_problems: VaultProblem[];
 }
+export interface ThumbnailPreparation { generated: number; remaining: number; }
 export interface TrashedItem { id: string; home_subvault: string; item_folder: string; title: string; creator?: string; year?: string; review_status?: string; tags?: string[]; collections: string[]; incoming_item_links: Array<{ source_item_id: string; label: string }>; }
 export interface PermanentDeletion { id: string; collections: string[]; incoming_item_links: Array<{ source_item_id: string; label: string }>; }
 
@@ -230,6 +231,7 @@ export interface DesktopAdapter {
     selectedItemId: string | null,
     searchQuery?: string | null,
   ): Promise<WorkbenchSnapshot>;
+  prepareThumbnailPreviews?(limit: number): Promise<ThumbnailPreparation>;
   openActivityLog?(): Promise<void>;
   saveItemRecord?(edit: ItemRecordEdit): Promise<ItemRecordSaveResult>;
   resolveReviewReason?(resolution: ReviewReasonResolution): Promise<ItemDetails>;

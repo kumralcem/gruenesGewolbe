@@ -30,6 +30,10 @@ fn generated_personal_scale_vault_opens_browses_searches_and_rebuilds() {
     let browse_elapsed = browse_started.elapsed();
     assert_eq!(artwork.len(), PERSONAL_SCALE_ITEM_COUNT);
     assert_eq!(artwork[0].title(), "Generated Artwork 04999");
+    let prepared = reopened
+        .prepare_thumbnail_previews("Paintings", 10)
+        .expect("prepare uncached Thumbnail Previews");
+    assert_eq!(prepared.generated(), 10);
     for index in 0..10 {
         assert!(
             root.join(".gruenesgewolbe/thumbnails")

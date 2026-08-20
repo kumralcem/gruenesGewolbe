@@ -21,8 +21,8 @@ use gruenes_gewolbe_core::{
     ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture,
     PermanentDeletion, ReviewQueueItem, ReviewReason, ReviewReasonAction, ReviewReasonResolution,
     SavedItem, SearchResult, SelectedFileImportSummary, SourceCaptureResult, SourceExtractor,
-    SourceLinkCapture, TagDefinition, TrashedItem, UpdateItemRecord, Vault, VaultError, VaultOpen,
-    VaultProblem, VaultRepairProposal,
+    SourceLinkCapture, TagDefinition, ThumbnailPreparation, TrashedItem, UpdateItemRecord, Vault,
+    VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -367,6 +367,17 @@ impl DesktopShell {
             .rebuild_metadata_index()
             .map_err(DesktopShellError::Vault)?;
         self.workbench_snapshot(request)
+    }
+
+    pub fn prepare_thumbnail_previews(
+        &self,
+        limit: usize,
+    ) -> Result<ThumbnailPreparation, DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .prepare_thumbnail_previews("Paintings", limit)
+            .map_err(DesktopShellError::Vault)
     }
 
     pub fn activity_log_path(&self) -> Result<PathBuf, DesktopShellError> {
@@ -851,6 +862,15 @@ impl TauriCommandState {
         self.shell
             .refresh_workbench(workbench_request(command)?)
             .map(WorkbenchSnapshotView::from)
+    }
+
+    pub fn prepare_thumbnail_previews(
+        &self,
+        limit: usize,
+    ) -> Result<ThumbnailPreparationView, DesktopShellError> {
+        self.shell
+            .prepare_thumbnail_previews(limit)
+            .map(ThumbnailPreparationView::from)
     }
 
     pub fn activity_log_path(&self) -> Result<String, DesktopShellError> {
@@ -1600,6 +1620,21 @@ pub struct WorkbenchSnapshotView {
     pub selected_item: Option<ItemDetailsView>,
     pub trashed_items: Vec<TrashedItemView>,
     pub vault_problems: Vec<VaultProblemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThumbnailPreparationView {
+    pub generated: usize,
+    pub remaining: usize,
+}
+
+impl From<ThumbnailPreparation> for ThumbnailPreparationView {
+    fn from(preparation: ThumbnailPreparation) -> Self {
+        Self {
+            generated: preparation.generated(),
+            remaining: preparation.remaining(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

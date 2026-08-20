@@ -78,7 +78,7 @@ fn user_can_browse_artwork_items_and_open_item_details_from_records() {
 }
 
 #[test]
-fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_files() {
+fn gallery_browsing_is_immediate_and_thumbnail_previews_are_prepared_explicitly() {
     let root = temp_path("workbench-thumbnail-vault");
     let source_dir = temp_path("workbench-thumbnail-source");
     fs::create_dir_all(&source_dir).expect("create source directory");
@@ -105,6 +105,19 @@ fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_file
         .expect("browse artwork grid");
     assert_eq!(grid.len(), 1);
     assert!(grid[0].thumbnail_file().is_file());
+    assert!(grid[0].thumbnail_is_placeholder());
+    assert!(grid[0]
+        .thumbnail_file()
+        .ends_with(format!("{}.pending.png", saved_item.id())));
+    let prepared = vault
+        .prepare_thumbnail_previews("Paintings", 1)
+        .expect("prepare Thumbnail Preview");
+    assert_eq!(prepared.generated(), 1);
+    assert_eq!(prepared.remaining(), 0);
+    let grid = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse prepared artwork grid");
+    assert!(!grid[0].thumbnail_is_placeholder());
     assert!(grid[0]
         .thumbnail_file()
         .starts_with(root.join(".gruenesgewolbe").join("thumbnails")));
@@ -124,9 +137,16 @@ fn browsing_artwork_items_rebuilds_cached_thumbnail_previews_from_preserved_file
     );
 
     fs::remove_dir_all(root.join(".gruenesgewolbe")).expect("delete derived state");
-    let rebuilt_grid = vault
+    let pending_grid = vault
         .browse_artwork_items("Paintings")
         .expect("browse artwork grid after deleting cache");
+    assert!(pending_grid[0].thumbnail_is_placeholder());
+    vault
+        .prepare_thumbnail_previews("Paintings", 1)
+        .expect("rebuild Thumbnail Preview");
+    let rebuilt_grid = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse rebuilt artwork grid");
     assert_eq!(rebuilt_grid[0].saved_item().id(), saved_item.id());
     let rebuilt = image::open(rebuilt_grid[0].thumbnail_file()).expect("decode rebuilt preview");
     assert_eq!((rebuilt.width(), rebuilt.height()), (480, 240));
@@ -170,9 +190,10 @@ fn animated_gif_thumbnail_preview_uses_the_first_frame() {
         })
         .expect("save GIF artwork");
 
-    let grid = vault
-        .browse_artwork_items("Paintings")
-        .expect("browse GIF artwork");
+    vault
+        .prepare_thumbnail_previews("Paintings", 1)
+        .expect("prepare GIF preview");
+    let grid = vault.browse_artwork_items("Paintings").expect("browse GIF artwork");
     let preview = image::open(grid[0].thumbnail_file())
         .expect("decode GIF preview")
         .to_rgba8();
@@ -217,6 +238,9 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
         fs::read(saved.item_folder().join("files/damaged.jpg")).expect("read preserved file"),
         b"not actually a jpeg"
     );
+    vault
+        .prepare_thumbnail_previews("Paintings", 1)
+        .expect("prepare placeholder preview");
     let grid = vault
         .browse_artwork_items("Paintings")
         .expect("browse placeholder artwork");
@@ -241,6 +265,55 @@ fn undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason() {
 
     fs::remove_dir_all(&root).expect("clean vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn malformed_large_header_is_localized_during_background_preview_work() {
+    let root = temp_path("oversized-preview-vault");
+    let source_dir = temp_path("oversized-preview-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("oversized.gif");
+    fs::write(&source_file, gif_header(8_000, 8_000)).expect("write oversized image header");
+    let vault = Vault::create(&root).expect("create vault");
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: None,
+            year: None,
+            title: "Oversized".to_string(),
+            saving_reason: None,
+        })
+        .expect("preserve oversized source");
+
+    let initial = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse immediately");
+    assert!(initial[0].thumbnail_file().ends_with(format!("{}.pending.png", saved.id())));
+    vault
+        .prepare_thumbnail_previews("Paintings", 1)
+        .expect("bound oversized preview work");
+    let prepared = vault
+        .browse_artwork_items("Paintings")
+        .expect("browse placeholder");
+    assert!(prepared[0].thumbnail_file().ends_with(format!("{}.placeholder.png", saved.id())));
+    assert!(vault
+        .item_details(saved.id())
+        .expect("inspect oversized item")
+        .review_reasons()
+        .iter()
+        .any(|reason| reason.kind() == "thumbnail-preview-unavailable"));
+
+    fs::remove_dir_all(root).expect("clean vault");
+    fs::remove_dir_all(source_dir).expect("clean source directory");
+}
+
+fn gif_header(width: u16, height: u16) -> Vec<u8> {
+    let mut bytes = Vec::from(*b"GIF89a");
+    bytes.extend(width.to_le_bytes());
+    bytes.extend(height.to_le_bytes());
+    bytes.extend([0, 0, 0]);
+    bytes
 }
 
 #[test]

@@ -32,6 +32,7 @@ interface AppState extends DesktopStartup {
   pending_item_edit: ItemRecordEdit | null;
   item_record_conflict: ItemDetails | null;
   selected_review_reason_id?: string | null;
+  thumbnail_remaining: number | null;
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
@@ -50,7 +51,10 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     import_summary_kind: null,
     pending_item_edit: null,
     item_record_conflict: null,
+    thumbnail_remaining: null,
   };
+
+  let thumbnailPreparationRunning = false;
 
   const render = () => {
     root.innerHTML = pageTemplate(state, adapter);
@@ -62,6 +66,44 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       state = nextState;
       render();
     });
+    scheduleThumbnailPreparation();
+  };
+
+  const scheduleThumbnailPreparation = () => {
+    if (
+      thumbnailPreparationRunning ||
+      !state.active_vault ||
+      !state.workbench_snapshot ||
+      !adapter.prepareThumbnailPreviews ||
+      !adapter.workbenchSnapshot
+    ) return;
+    thumbnailPreparationRunning = true;
+    void (async () => {
+      try {
+        while (state.active_vault) {
+          const prepared = await adapter.prepareThumbnailPreviews!(1);
+          state = { ...state, thumbnail_remaining: prepared.remaining, error: null };
+          if (prepared.generated > 0) {
+            state = {
+              ...state,
+              workbench_snapshot: await adapter.workbenchSnapshot!(
+                state.artwork_sort,
+                state.workbench_snapshot?.selected_item?.id ?? null,
+                state.search_query,
+              ),
+            };
+          }
+          render();
+          if (prepared.remaining === 0 || prepared.generated === 0) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+        }
+      } catch (error) {
+        state = { ...state, error: errorMessage(error) };
+        render();
+      } finally {
+        thumbnailPreparationRunning = false;
+      }
+    })();
   };
 
   render();
@@ -78,6 +120,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       import_summary_kind: null,
       pending_item_edit: null,
       item_record_conflict: null,
+      thumbnail_remaining: null,
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -728,6 +771,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       </header>
 
       ${importRunTemplate(state, adapter)}
+      ${state.thumbnail_remaining && state.thumbnail_remaining > 0 ? `<p role="status">Preparing Thumbnail Previews in the background · ${state.thumbnail_remaining} remaining</p>` : ""}
 
       <section class="vault-tools" aria-label="Vault tools">
         <form class="vault-search" data-vault-search>

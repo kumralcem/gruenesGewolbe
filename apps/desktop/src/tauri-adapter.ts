@@ -16,6 +16,7 @@ import type {
   OpenVaultResult,
   SavedItem,
   SelectedFileImportSummary,
+  ThumbnailPreparation,
   WorkbenchSnapshot,
 } from "./contracts";
 
@@ -82,6 +83,8 @@ export function createTauriAdapter(): DesktopAdapter {
         selectedItemId,
         searchQuery,
       }),
+    prepareThumbnailPreviews: (limit) =>
+      invoke<ThumbnailPreparation>("prepare_thumbnail_previews", { limit }),
     openActivityLog: async () => {
       const path = await invoke<string>("activity_log_path");
       await openPath(path);

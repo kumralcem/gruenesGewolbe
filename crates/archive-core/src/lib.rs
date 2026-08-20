@@ -16,6 +16,7 @@ const METADATA_INDEX_FILE: &str = "metadata-index.tsv";
 const AI_COST_LOG_FILE: &str = "ai-cost-log.tsv";
 const ACTIVITY_LOG_FILE: &str = "activity-log.tsv";
 const THUMBNAILS_DIR: &str = "thumbnails";
+const MAX_THUMBNAIL_SOURCE_PIXELS: u64 = 24_000_000;
 const TAG_REGISTRY_FILE: &str = "tag-registry.md";
 const DEFAULT_VAULT_NAME: &str = "Personal Archive";
 
@@ -871,7 +872,7 @@ impl Vault {
                 &text,
                 "primary_file",
             )?);
-            let thumbnail = self.cached_thumbnail_for(&saved_item, &primary_file)?;
+            let thumbnail = self.thumbnail_for_gallery(&saved_item)?;
 
             items.push(ArtworkGridItem {
                 saved_item,
@@ -913,6 +914,38 @@ impl Vault {
                 .then_with(|| left.title.cmp(&right.title)),
         });
         Ok(items)
+    }
+
+    pub fn prepare_thumbnail_previews(
+        &self,
+        home_subvault: &str,
+        limit: usize,
+    ) -> Result<ThumbnailPreparation, VaultError> {
+        let mut generated = 0;
+        let mut remaining = 0;
+        for record in self.item_record_scan()?.valid_records {
+            if frontmatter_value(&record.text, "home_subvault").as_deref() != Some(home_subvault)
+                || frontmatter_value(&record.text, "item_type").as_deref() != Some("artwork")
+            {
+                continue;
+            }
+            let saved_item = saved_item_from_record(&record.entry, &record.text)?;
+            if self.thumbnail_is_final(&saved_item) {
+                continue;
+            }
+            if generated >= limit {
+                remaining += 1;
+                continue;
+            }
+            let primary_file = record.entry.item_folder.join(required_frontmatter_value(
+                &record.entry.record_path,
+                &record.text,
+                "primary_file",
+            )?);
+            self.generate_thumbnail_for(&saved_item, &primary_file)?;
+            generated += 1;
+        }
+        Ok(ThumbnailPreparation { generated, remaining })
     }
 
     pub fn browse_idea_sources(&self) -> Result<Vec<IdeaSourceListItem>, VaultError> {
@@ -1986,11 +2019,7 @@ impl Vault {
         Ok(())
     }
 
-    fn cached_thumbnail_for(
-        &self,
-        saved_item: &SavedItem,
-        primary_file: &Path,
-    ) -> Result<ThumbnailPreview, VaultError> {
+    fn thumbnail_for_gallery(&self, saved_item: &SavedItem) -> Result<ThumbnailPreview, VaultError> {
         let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
         fs::create_dir_all(&thumbnails_dir)?;
         let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
@@ -2008,20 +2037,60 @@ impl Vault {
             });
         }
 
-        let decoded = image::io::Reader::open(primary_file)
-            .map_err(|error| error.to_string())
-            .and_then(|reader| {
-                reader
-                    .with_guessed_format()
-                    .map_err(|error| error.to_string())
-            })
-            .and_then(|reader| reader.decode().map_err(|error| error.to_string()));
+        let pending_file = thumbnails_dir.join(format!("{}.pending.png", saved_item.id()));
+        if !pending_file.is_file() {
+            write_thumbnail_placeholder(&pending_file)?;
+        }
+        Ok(ThumbnailPreview {
+            path: pending_file,
+            is_placeholder: true,
+        })
+    }
+
+    fn thumbnail_is_final(&self, saved_item: &SavedItem) -> bool {
+        let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
+        thumbnails_dir.join(format!("{}.png", saved_item.id())).is_file()
+            || thumbnails_dir
+                .join(format!("{}.placeholder.png", saved_item.id()))
+                .is_file()
+    }
+
+    fn generate_thumbnail_for(
+        &self,
+        saved_item: &SavedItem,
+        primary_file: &Path,
+    ) -> Result<ThumbnailPreview, VaultError> {
+        let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
+        fs::create_dir_all(&thumbnails_dir)?;
+        let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
+        let placeholder_file = thumbnails_dir.join(format!("{}.placeholder.png", saved_item.id()));
+        let pending_file = thumbnails_dir.join(format!("{}.pending.png", saved_item.id()));
+
+        let dimensions = fast_webp_dimensions(primary_file)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                image::image_dimensions(primary_file).map_err(|error| error.to_string())
+            });
+        let decoded = dimensions.and_then(|(width, height)| {
+            if !thumbnail_dimensions_are_safe(width, height) {
+                return Err(format!(
+                    "image dimensions {width}x{height} exceed the safe Thumbnail Preview limit"
+                ));
+            }
+            image::io::Reader::open(primary_file)
+                .map_err(|error| error.to_string())?
+                .with_guessed_format()
+                .map_err(|error| error.to_string())?
+                .decode()
+                .map_err(|error| error.to_string())
+        });
         match decoded {
             Ok(image) => {
                 image
                     .thumbnail(480, 480)
                     .save_with_format(&thumbnail_file, image::ImageFormat::Png)
                     .map_err(|error| VaultError::PreviewGeneration(error.to_string()))?;
+                let _ = fs::remove_file(pending_file);
                 Ok(ThumbnailPreview {
                     path: thumbnail_file,
                     is_placeholder: false,
@@ -2030,6 +2099,7 @@ impl Vault {
             Err(reason) => {
                 write_thumbnail_placeholder(&placeholder_file)?;
                 self.record_thumbnail_preview_failure(saved_item, primary_file, &reason)?;
+                let _ = fs::remove_file(pending_file);
                 Ok(ThumbnailPreview {
                     path: placeholder_file,
                     is_placeholder: true,
@@ -2307,6 +2377,68 @@ impl Vault {
     }
 }
 
+fn thumbnail_dimensions_are_safe(width: u32, height: u32) -> bool {
+    u64::from(width) * u64::from(height) <= MAX_THUMBNAIL_SOURCE_PIXELS
+}
+
+fn fast_webp_dimensions(path: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut header = [0_u8; 30];
+    fs::File::open(path).ok()?.read_exact(&mut header).ok()?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WEBP" {
+        return None;
+    }
+    match &header[12..16] {
+        b"VP8 " if header[23..26] == [0x9d, 0x01, 0x2a] => Some((
+            u32::from(u16::from_le_bytes([header[26], header[27]]) & 0x3fff),
+            u32::from(u16::from_le_bytes([header[28], header[29]]) & 0x3fff),
+        )),
+        b"VP8L" if header[20] == 0x2f => Some((
+            1 + u32::from(header[21]) + (u32::from(header[22] & 0x3f) << 8),
+            1 + (u32::from(header[22] >> 6)
+                | (u32::from(header[23]) << 2)
+                | (u32::from(header[24] & 0x0f) << 10)),
+        )),
+        b"VP8X" => Some((
+            1 + u32::from(header[24])
+                + (u32::from(header[25]) << 8)
+                + (u32::from(header[26]) << 16),
+            1 + u32::from(header[27])
+                + (u32::from(header[28]) << 8)
+                + (u32::from(header[29]) << 16),
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_dimension_tests {
+    use std::fs;
+
+    use super::{fast_webp_dimensions, thumbnail_dimensions_are_safe};
+
+    #[test]
+    fn rejects_reported_8000_square_source_before_full_decode() {
+        assert!(!thumbnail_dimensions_are_safe(8_000, 8_000));
+        assert!(thumbnail_dimensions_are_safe(6_000, 4_000));
+    }
+
+    #[test]
+    fn reads_vp8_dimensions_from_the_small_header_only() {
+        let path = std::env::temp_dir().join(format!("webp-header-{}.webp", std::process::id()));
+        let mut header = [0_u8; 30];
+        header[0..4].copy_from_slice(b"RIFF");
+        header[8..12].copy_from_slice(b"WEBP");
+        header[12..16].copy_from_slice(b"VP8 ");
+        header[23..26].copy_from_slice(&[0x9d, 0x01, 0x2a]);
+        header[26..28].copy_from_slice(&8_000_u16.to_le_bytes());
+        header[28..30].copy_from_slice(&8_000_u16.to_le_bytes());
+        fs::write(&path, header).expect("write WebP header fixture");
+        assert_eq!(fast_webp_dimensions(&path), Some((8_000, 8_000)));
+        fs::remove_file(path).expect("clean WebP header fixture");
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultOpen {
     Opened(Vault),
@@ -2323,6 +2455,22 @@ pub struct VaultRepairProposal {
 struct ThumbnailPreview {
     path: PathBuf,
     is_placeholder: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbnailPreparation {
+    generated: usize,
+    remaining: usize,
+}
+
+impl ThumbnailPreparation {
+    pub fn generated(&self) -> usize {
+        self.generated
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

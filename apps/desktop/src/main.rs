@@ -7,7 +7,7 @@ use gruenes_gewolbe_desktop::{
     OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
     ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView,
     SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
-    WorkbenchSnapshotView,
+    ThumbnailPreparationView, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -162,6 +162,23 @@ fn refresh_workbench(
             selected_item_id,
         })
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn prepare_thumbnail_previews(
+    limit: usize,
+    state: State<'_, CommandState>,
+) -> Result<ThumbnailPreparationView, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .prepare_thumbnail_previews(limit)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("thumbnail task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -320,6 +337,7 @@ fn main() {
             cancel_paintings_import,
             workbench_snapshot,
             refresh_workbench,
+            prepare_thumbnail_previews,
             activity_log_path,
             move_item_to_trash,
             restore_trashed_item,
