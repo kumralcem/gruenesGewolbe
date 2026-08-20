@@ -23,4 +23,4 @@ if [[ ! -x node_modules/.bin/tauri ]]; then
   pnpm install --frozen-lockfile
 fi
 
-exec pnpm tauri -- dev --features tauri-runtime
+exec pnpm tauri dev --features tauri-runtime

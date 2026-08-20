@@ -23,5 +23,5 @@ if [[ ! -x node_modules/.bin/tauri ]]; then
   pnpm install --frozen-lockfile
 fi
 
-pnpm tauri -- build --features tauri-runtime --no-bundle
+pnpm tauri build --features tauri-runtime --no-bundle
 printf 'Release binary: %s\n' "$PROJECT_DIR/target/release/gruenes-gewolbe"
