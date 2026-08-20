@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_DIR="$PROJECT_DIR/apps/desktop"
 
-for tool in cargo cc npm pkg-config; do
+for tool in cargo cc pnpm pkg-config; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'Missing required tool: %s\n' "$tool" >&2
     exit 1
@@ -20,8 +20,8 @@ done
 
 cd "$DESKTOP_DIR"
 if [[ ! -x node_modules/.bin/tauri ]]; then
-  npm ci
+  pnpm install --frozen-lockfile
 fi
 
-npm run tauri -- build --features tauri-runtime --no-bundle
+pnpm tauri -- build --features tauri-runtime --no-bundle
 printf 'Release binary: %s\n' "$PROJECT_DIR/target/release/gruenes-gewolbe"

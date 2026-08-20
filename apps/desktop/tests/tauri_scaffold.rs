@@ -6,7 +6,7 @@ fn tauri_scaffold_points_at_the_vite_ui_and_linux_runtime() {
 
     let config = fs::read_to_string(app_root.join("tauri.conf.json")).expect("read Tauri config");
     assert!(config.contains("\"frontendDist\": \"./dist\""));
-    assert!(config.contains("\"beforeDevCommand\": \"npm run dev\""));
+    assert!(config.contains("\"beforeDevCommand\": \"pnpm dev\""));
     assert!(config.contains("\"identifier\": \"dev.gruenesgewolbe.app\""));
 
     let package = fs::read_to_string(app_root.join("package.json")).expect("read package");

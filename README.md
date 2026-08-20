@@ -25,7 +25,7 @@ The current test seam is the archive core public interface, with thin CLI, deskt
 
 The first desktop milestone targets Linux and produces a local binary rather than an installer. AppImage and other packaging formats are intentionally deferred until the application workflow is stable.
 
-Required tools are Rust, Node.js/npm, a C compiler, `pkg-config`, GTK 3 development files, and WebKitGTK 4.1 development files. On Fedora, the relevant GUI packages include `gtk3-devel` and `webkit2gtk4.1-devel`.
+Required tools are Rust, Node.js/pnpm, a C compiler, `pkg-config`, GTK 3 development files, and WebKitGTK 4.1 development files. On Fedora, the relevant GUI packages include `gtk3-devel` and `webkit2gtk4.1-devel`.
 
 Launch the development application:
 
@@ -52,10 +52,10 @@ Run the desktop type checks and browser workflow tests with:
 
 ```sh
 cd apps/desktop
-npm ci
-npx playwright install chromium
-npm run typecheck
-npm test
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+pnpm typecheck
+pnpm test
 ```
 
 The browser tests use controlled desktop-command responses; the Rust command tests cover persistence and the on-disk Vault behavior.
