@@ -2,7 +2,10 @@ use std::env;
 use std::path::PathBuf;
 use std::process;
 
-use gruenes_gewolbe_core::{ManualFallbackCapture, Vault};
+use gruenes_gewolbe_core::{
+    DuplicateCandidateAction, DuplicateCandidateResolution, DuplicateCandidateResolutionOutcome,
+    ManualFallbackCapture, Vault,
+};
 
 fn main() {
     match run(env::args().skip(1).collect()) {
@@ -218,12 +221,30 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let item = vault.restore_trashed_item(item_id).map_err(|e| e.to_string())?;
             Ok(format!("restored-item\t{}\t{}\t{}", item.id(), cli_field(item.home_subvault()), cli_field(&item.item_folder().display().to_string())))
         }
+        "resolve-duplicate-candidate" => {
+            let [vault_path, item_id, reason_id, decision] = rest else { return Err(usage()); };
+            let action = match decision.as_str() {
+                "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
+                "keep-both" => DuplicateCandidateAction::KeepBoth,
+                "move-this-item-to-vault-trash" => DuplicateCandidateAction::MoveThisItemToVaultTrash,
+                _ => return Err("decision must be not-a-duplicate, keep-both, or move-this-item-to-vault-trash".to_string()),
+            };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let revision = vault.item_details(item_id).map_err(|e| e.to_string())?.record_revision().to_string();
+            let outcome = vault.resolve_duplicate_candidate(DuplicateCandidateResolution {
+                item_id: item_id.to_string(), reason_id: reason_id.to_string(), expected_revision: revision, action,
+            }).map_err(|e| e.to_string())?;
+            Ok(match outcome {
+                DuplicateCandidateResolutionOutcome::Active(item) => format!("resolved-duplicate-candidate\t{}\t{}\t{}", item.id(), decision, item.review_status()),
+                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => format!("resolved-duplicate-candidate\t{}\t{}\t{}", item.id(), decision, cli_field(&item.item_folder().display().to_string())),
+            })
+        }
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id>"
+    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id> | ggvault resolve-duplicate-candidate <vault-path> <item-id> <reason-id> <not-a-duplicate|keep-both|move-this-item-to-vault-trash>"
         .to_string()
 }
 

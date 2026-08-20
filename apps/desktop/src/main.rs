@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use gruenes_gewolbe_desktop::{
     ActiveVaultView, AddArtworkFilesCommand, ConfirmItemFolderRenameCommand, DesktopStartupView,
     ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, OpenVaultView,
+    DuplicateCandidateResolutionView, ResolveDuplicateCandidateCommand,
     ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand,
     SavedItemView, SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
     WorkbenchSnapshotView,
@@ -235,6 +236,20 @@ fn resolve_review_reason(
 }
 
 #[tauri::command]
+fn resolve_duplicate_candidate(
+    item_id: String,
+    reason_id: String,
+    expected_revision: String,
+    action: String,
+    state: State<'_, CommandState>,
+) -> Result<DuplicateCandidateResolutionView, String> {
+    state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+        .resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
+            item_id, reason_id, expected_revision, action,
+        }).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn confirm_item_folder_rename(
     id: String,
     current_path: String,
@@ -280,6 +295,7 @@ fn main() {
             restore_trashed_item,
             save_item_record,
             resolve_review_reason,
+            resolve_duplicate_candidate,
             confirm_item_folder_rename
         ])
         .run(tauri::generate_context!())

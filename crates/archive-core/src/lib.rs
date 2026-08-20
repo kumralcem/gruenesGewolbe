@@ -1134,6 +1134,77 @@ impl Vault {
         Err(VaultError::SavedItemNotFound(resolution.item_id))
     }
 
+    pub fn resolve_duplicate_candidate(
+        &self,
+        resolution: DuplicateCandidateResolution,
+    ) -> Result<DuplicateCandidateResolutionOutcome, VaultError> {
+        let move_to_trash = resolution.action == DuplicateCandidateAction::MoveThisItemToVaultTrash;
+        for record in self.item_record_scan()?.valid_records {
+            let text = record.text;
+            if frontmatter_value(&text, "id").as_deref() != Some(resolution.item_id.as_str()) {
+                continue;
+            }
+            let actual_revision = item_record_revision(&text);
+            if actual_revision != resolution.expected_revision {
+                return Err(VaultError::ItemRecordConflict {
+                    path: record.entry.record_path,
+                    expected_revision: resolution.expected_revision,
+                    actual_revision,
+                });
+            }
+            let mut reasons = review_reasons(&text);
+            let reason_index = reasons
+                .iter()
+                .position(|reason| {
+                    reason.id == resolution.reason_id && reason.kind == "duplicate-candidate"
+                })
+                .ok_or_else(|| VaultError::ReviewReasonNotFound(resolution.reason_id.clone()))?;
+            reasons.remove(reason_index);
+            let decision = match resolution.action {
+                DuplicateCandidateAction::NotADuplicate => "not-a-duplicate",
+                DuplicateCandidateAction::KeepBoth => "keep-both",
+                DuplicateCandidateAction::MoveThisItemToVaultTrash => "moved-this-item-to-vault-trash",
+            };
+            let mut decisions = markdown_list_section(&text, "Duplicate Candidate Decisions");
+            decisions.push(format!("{} | {decision}", resolution.reason_id));
+            let updated = replace_or_append_markdown_list_section(
+                &update_frontmatter_values(
+                    &text,
+                    &[
+                        ("review_reasons", review_reason_sequence(&reasons)),
+                        (
+                            "review_status",
+                            serde_yaml::Value::String(derived_review_status(&reasons).to_string()),
+                        ),
+                    ],
+                )?,
+                "Duplicate Candidate Decisions",
+                &decisions,
+            );
+            return if move_to_trash {
+                let original_folder = record.entry.item_folder.clone();
+                let item = self.move_item_to_trash(&resolution.item_id)?;
+                if let Err(write_error) = atomic_write(&item.item_folder().join("record.md"), updated.as_bytes()) {
+                    fs::rename(item.item_folder(), &original_folder)?;
+                    self.rebuild_metadata_index()?;
+                    self.append_activity_log(&format!(
+                        "trash-item-rollback\t{}\t{}",
+                        resolution.item_id,
+                        original_folder.display()
+                    ))?;
+                    return Err(write_error);
+                }
+                Ok(DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item))
+            } else {
+                atomic_write(&record.entry.record_path, updated.as_bytes())?;
+                self.rebuild_metadata_index()?;
+                self.item_details(&resolution.item_id)
+                    .map(DuplicateCandidateResolutionOutcome::Active)
+            };
+        }
+        Err(VaultError::SavedItemNotFound(resolution.item_id))
+    }
+
     pub fn confirm_item_folder_rename(
         &self,
         id: &str,
@@ -1809,6 +1880,7 @@ impl Vault {
             target_field: None,
             message: "Thumbnail Preview is unavailable".to_string(),
             evidence: reason.to_string(),
+            candidate_item_id: None,
         };
         if review_reasons(&record)
             .iter()
@@ -1963,6 +2035,7 @@ impl Vault {
                             suggestion.suggested_value()
                         ),
                         evidence: suggestion.provenance().to_string(),
+                        candidate_item_id: None,
                     });
                 }
                 updated = update_frontmatter_values(
@@ -2259,6 +2332,7 @@ pub struct ReviewReason {
     target_field: Option<String>,
     message: String,
     evidence: String,
+    candidate_item_id: Option<String>,
 }
 
 impl ReviewReason {
@@ -2280,6 +2354,10 @@ impl ReviewReason {
 
     pub fn evidence(&self) -> &str {
         &self.evidence
+    }
+
+    pub fn candidate_item_id(&self) -> Option<&str> {
+        self.candidate_item_id.as_deref()
     }
 }
 
@@ -2722,6 +2800,43 @@ pub enum ReviewReasonAction {
     Accept,
     Correct { value: String },
     Dismiss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DuplicateCandidateAction {
+    NotADuplicate,
+    KeepBoth,
+    MoveThisItemToVaultTrash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateCandidateResolution {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: DuplicateCandidateAction,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DuplicateCandidateResolutionOutcome {
+    Active(ItemDetails),
+    MovedToVaultTrash(SavedItem),
+}
+
+impl DuplicateCandidateResolutionOutcome {
+    pub fn active_item(&self) -> Option<&ItemDetails> {
+        match self {
+            Self::Active(item) => Some(item),
+            Self::MovedToVaultTrash(_) => None,
+        }
+    }
+
+    pub fn trashed_item(&self) -> Option<&SavedItem> {
+        match self {
+            Self::Active(_) => None,
+            Self::MovedToVaultTrash(item) => Some(item),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3657,6 +3772,7 @@ fn artwork_record(
                     target_field: Some("creator".to_string()),
                     message: "Creator is unknown".to_string(),
                     evidence: "No creator metadata was supplied or inferred".to_string(),
+                    candidate_item_id: None,
                 }));
             }
             if year == "Unknown Year" {
@@ -3666,6 +3782,7 @@ fn artwork_record(
                     target_field: Some("year".to_string()),
                     message: "Year is unknown".to_string(),
                     evidence: "No year metadata was supplied or inferred".to_string(),
+                    candidate_item_id: None,
                 }));
             }
             reasons.extend(
@@ -3705,6 +3822,7 @@ fn idea_source_record(
             target_field: Some("creator".to_string()),
             message: "Creator is unknown".to_string(),
             evidence: "Idea capture did not supply creator metadata".to_string(),
+            candidate_item_id: None,
         }),
         review_reason_line(&ReviewReason {
             id: "unknown-year".to_string(),
@@ -3712,6 +3830,7 @@ fn idea_source_record(
             target_field: Some("year".to_string()),
             message: "Year is unknown".to_string(),
             evidence: "Idea capture did not supply year metadata".to_string(),
+            candidate_item_id: None,
         }),
     ];
     if capture.capture_method == "manual-fallback" {
@@ -3722,6 +3841,7 @@ fn idea_source_record(
             message: "Manual Fallback content needs review".to_string(),
             evidence: "Source extraction was unavailable; content was supplied manually"
                 .to_string(),
+            candidate_item_id: None,
         }));
     }
     review_reasons.extend(
@@ -3994,14 +4114,17 @@ fn review_reasons(record: &str) -> Vec<ReviewReason> {
 }
 
 fn parse_review_reason(line: &str, index: usize) -> ReviewReason {
-    let parts = line.splitn(5, " | ").map(str::trim).collect::<Vec<_>>();
-    if parts.len() == 5 {
+    let parts = line.splitn(6, " | ").map(str::trim).collect::<Vec<_>>();
+    if parts.len() >= 5 {
+        let candidate_item_id = parts.get(5).filter(|value| !value.is_empty()).map(|value| (*value).to_string())
+            .or_else(|| (parts[1] == "duplicate-candidate").then(|| parts[0].strip_prefix("duplicate-candidate-").map(str::to_string)).flatten());
         return ReviewReason {
             id: parts[0].to_string(),
             kind: parts[1].to_string(),
             target_field: (!parts[2].is_empty()).then(|| parts[2].to_string()),
             message: parts[3].to_string(),
             evidence: parts[4].to_string(),
+            candidate_item_id,
         };
     }
 
@@ -4013,19 +4136,24 @@ fn parse_review_reason(line: &str, index: usize) -> ReviewReason {
         kind,
         target_field: None,
         evidence,
+        candidate_item_id: None,
     }
 }
 
 fn review_reason_line(reason: &ReviewReason) -> String {
     let clean = |value: &str| value.replace('|', "/").replace(['\n', '\r'], " ");
-    format!(
+    let line = format!(
         "{} | {} | {} | {} | {}",
         clean(&reason.id),
         clean(&reason.kind),
         clean(reason.target_field.as_deref().unwrap_or("")),
         clean(&reason.message),
         clean(&reason.evidence),
-    )
+    );
+    match reason.candidate_item_id.as_deref() {
+        Some(candidate_item_id) => format!("{line} | {}", clean(candidate_item_id)),
+        None => line,
+    }
 }
 
 fn review_reason_sequence(reasons: &[ReviewReason]) -> serde_yaml::Value {
@@ -4045,6 +4173,7 @@ fn duplicate_candidate_review_reason(candidate: &DuplicateCandidate) -> ReviewRe
         target_field: None,
         message: "Possible overlap with another Saved Item".to_string(),
         evidence: format!("{}: {}", candidate.item_id, candidate.signal),
+        candidate_item_id: Some(candidate.item_id.clone()),
     }
 }
 
@@ -4055,6 +4184,7 @@ fn metadata_conflict_review_reason(field: &str, supplied: &str, inferred: &str) 
         target_field: Some(field.to_string()),
         message: format!("Conflicting {field} metadata"),
         evidence: format!("Import value {supplied}; filename suggested {inferred}"),
+        candidate_item_id: None,
     }
 }
 

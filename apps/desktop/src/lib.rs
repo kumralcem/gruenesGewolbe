@@ -17,6 +17,7 @@ use gruenes_gewolbe_core::{
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
     CollectionDefinition, ExactDuplicatePolicy, ExtractedTextCapture, IdeaSourceListItem,
     ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails, ItemFolderRenameProposal,
+    DuplicateCandidateAction, DuplicateCandidateResolution, DuplicateCandidateResolutionOutcome,
     ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture, ReviewQueueItem, ReviewReason,
     ReviewReasonAction, ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
@@ -429,6 +430,14 @@ impl DesktopShell {
         vault
             .resolve_review_reason(resolution)
             .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn resolve_duplicate_candidate(
+        &self,
+        resolution: DuplicateCandidateResolution,
+    ) -> Result<DuplicateCandidateResolutionOutcome, DesktopShellError> {
+        let vault = self.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
+        vault.resolve_duplicate_candidate(resolution).map_err(DesktopShellError::Vault)
     }
 
     pub fn confirm_item_folder_rename(
@@ -895,6 +904,25 @@ impl TauriCommandState {
             .map(|item| ItemDetailsView::from(&item))
     }
 
+    pub fn resolve_duplicate_candidate(
+        &self,
+        command: ResolveDuplicateCandidateCommand,
+    ) -> Result<DuplicateCandidateResolutionView, DesktopShellError> {
+        let action = match command.action.as_str() {
+            "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
+            "keep-both" => DuplicateCandidateAction::KeepBoth,
+            "move-this-item-to-vault-trash" => DuplicateCandidateAction::MoveThisItemToVaultTrash,
+            action => return Err(DesktopShellError::InvalidReviewReasonAction(action.to_string())),
+        };
+        self.shell.resolve_duplicate_candidate(DuplicateCandidateResolution {
+            item_id: command.item_id, reason_id: command.reason_id,
+            expected_revision: command.expected_revision, action,
+        }).map(|outcome| match outcome {
+            DuplicateCandidateResolutionOutcome::Active(item) => DuplicateCandidateResolutionView::Active { item: ItemDetailsView::from(&item) },
+            DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => DuplicateCandidateResolutionView::MovedToVaultTrash { item: SavedItemView::from(item) },
+        })
+    }
+
     pub fn confirm_item_folder_rename(
         &self,
         command: ConfirmItemFolderRenameCommand,
@@ -942,6 +970,21 @@ pub struct ResolveReviewReasonCommand {
     pub expected_revision: String,
     pub action: String,
     pub correction: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveDuplicateCandidateCommand {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum DuplicateCandidateResolutionView {
+    Active { item: ItemDetailsView },
+    MovedToVaultTrash { item: SavedItemView },
 }
 
 impl From<SaveItemRecordCommand> for ItemRecordEdit {
@@ -1345,6 +1388,7 @@ pub struct ReviewReasonView {
     pub target_field: Option<String>,
     pub message: String,
     pub evidence: String,
+    pub candidate_item_id: Option<String>,
 }
 
 impl From<&ReviewReason> for ReviewReasonView {
@@ -1355,6 +1399,7 @@ impl From<&ReviewReason> for ReviewReasonView {
             target_field: reason.target_field().map(str::to_string),
             message: reason.message().to_string(),
             evidence: reason.evidence().to_string(),
+            candidate_item_id: reason.candidate_item_id().map(str::to_string),
         }
     }
 }
@@ -1387,6 +1432,7 @@ pub struct ItemDetailsView {
     pub primary_file: String,
     pub review_status: String,
     pub review_reasons: Vec<ReviewReasonView>,
+    pub duplicate_candidates: Vec<DuplicateCandidateView>,
     pub tags: Vec<String>,
     pub collections: Vec<String>,
     pub item_links: Vec<ItemLinkView>,
@@ -1397,6 +1443,9 @@ pub struct ItemDetailsView {
     pub record_revision: String,
     pub folder_rename_proposal: Option<ItemFolderRenameProposalView>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DuplicateCandidateView { pub item_id: String, pub signal: String }
 
 impl From<&ItemDetails> for ItemDetailsView {
     fn from(details: &ItemDetails) -> Self {
@@ -1414,6 +1463,9 @@ impl From<&ItemDetails> for ItemDetailsView {
                 .iter()
                 .map(ReviewReasonView::from)
                 .collect(),
+            duplicate_candidates: details.duplicate_candidates().iter().map(|candidate| DuplicateCandidateView {
+                item_id: candidate.item_id().to_string(), signal: candidate.signal().to_string(),
+            }).collect(),
             tags: details.tags().into_iter().map(str::to_string).collect(),
             collections: details
                 .collections()

@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_core::{
-    AddArtworkItem, ManualFallbackCapture, SourceCaptureResult, SourceExtraction,
-    SourceExtractionRequest, SourceExtractor, SourceLinkCapture, Vault,
+    AddArtworkItem, DuplicateCandidateAction, DuplicateCandidateResolution,
+    ManualFallbackCapture, SourceCaptureResult, SourceExtraction, SourceExtractionRequest,
+    SourceExtractor, SourceLinkCapture, Vault,
 };
 
 #[test]
@@ -225,6 +226,129 @@ fn artwork_save_warns_about_descriptive_metadata_duplicate_candidates_without_bl
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn duplicate_candidate_can_be_recorded_as_not_a_duplicate_or_keep_both() {
+    for (action, recorded_decision) in [
+        (DuplicateCandidateAction::NotADuplicate, "not-a-duplicate"),
+        (DuplicateCandidateAction::KeepBoth, "keep-both"),
+    ] {
+        let root = temp_path(recorded_decision);
+        let source_dir = temp_path(&format!("{recorded_decision}-source"));
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::write(source_dir.join("first.jpg"), b"first").unwrap();
+        fs::write(source_dir.join("second.jpg"), b"second").unwrap();
+        let vault = Vault::create(&root).unwrap();
+        let first = add_matching_artwork(&vault, source_dir.join("first.jpg"));
+        let second = add_matching_artwork(&vault, source_dir.join("second.jpg"));
+        let details = vault.item_details(second.id()).unwrap();
+        let reason = details
+            .review_reasons()
+            .iter()
+            .find(|reason| reason.kind() == "duplicate-candidate")
+            .unwrap();
+
+        let resolved = vault
+            .resolve_duplicate_candidate(DuplicateCandidateResolution {
+                item_id: second.id().to_string(),
+                reason_id: reason.id().to_string(),
+                expected_revision: details.record_revision().to_string(),
+                action,
+            })
+            .unwrap();
+
+        assert_eq!(resolved.active_item().unwrap().review_status(), "reviewed");
+        assert!(vault.review_queue().unwrap().is_empty());
+        assert!(first.item_folder().is_dir());
+        assert!(second.item_folder().is_dir());
+        let record = fs::read_to_string(second.item_folder().join("record.md")).unwrap();
+        assert!(record.contains(&format!("{} | {}", reason.id(), recorded_decision)));
+
+        let reopened = Vault::open(&root).unwrap();
+        assert_eq!(reopened.item_details(second.id()).unwrap().review_status(), "reviewed");
+        assert!(reopened.review_queue().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(source_dir).unwrap();
+    }
+}
+
+#[test]
+fn duplicate_candidate_can_move_only_the_current_item_to_vault_trash() {
+    let root = temp_path("duplicate-move-to-trash");
+    let source_dir = temp_path("duplicate-move-to-trash-source");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join("first.jpg"), b"first").unwrap();
+    fs::write(source_dir.join("second.jpg"), b"second").unwrap();
+    let vault = Vault::create(&root).unwrap();
+    let first = add_matching_artwork(&vault, source_dir.join("first.jpg"));
+    let second = add_matching_artwork(&vault, source_dir.join("second.jpg"));
+    let details = vault.item_details(second.id()).unwrap();
+    let reason = details.review_reasons().iter().find(|reason| reason.kind() == "duplicate-candidate").unwrap();
+
+    let outcome = vault.resolve_duplicate_candidate(DuplicateCandidateResolution {
+        item_id: second.id().to_string(),
+        reason_id: reason.id().to_string(),
+        expected_revision: details.record_revision().to_string(),
+        action: DuplicateCandidateAction::MoveThisItemToVaultTrash,
+    }).unwrap();
+
+    assert_eq!(outcome.trashed_item().unwrap().id(), second.id());
+    assert!(vault.item_details(first.id()).is_ok());
+    assert!(vault.item_details(second.id()).is_err());
+    assert!(vault.review_queue().unwrap().is_empty());
+    let reopened = Vault::open(&root).unwrap();
+    assert!(reopened.item_details(first.id()).is_ok());
+    assert_eq!(reopened.list_trashed_items().unwrap()[0].id(), second.id());
+    let trashed_record = fs::read_to_string(outcome.trashed_item().unwrap().item_folder().join("record.md")).unwrap();
+    assert!(trashed_record.contains("moved-this-item-to-vault-trash"));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(source_dir).unwrap();
+}
+
+#[test]
+fn resolving_a_duplicate_candidate_keeps_needs_review_while_another_reason_remains() {
+    let root = temp_path("duplicate-with-other-review");
+    let source_dir = temp_path("duplicate-with-other-review-source");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source_dir.join("first.jpg"), b"first").unwrap();
+    fs::write(source_dir.join("second.jpg"), b"second").unwrap();
+    let vault = Vault::create(&root).unwrap();
+    add_matching_artwork(&vault, source_dir.join("first.jpg"));
+    let second = add_matching_artwork(&vault, source_dir.join("second.jpg"));
+    let record_path = second.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).unwrap().replacen(
+        "review_reasons:\n",
+        "review_reasons:\n- 'remaining-reason | unknown-metadata | year | Year is unknown | Still unknown'\n",
+        1,
+    );
+    fs::write(&record_path, record).unwrap();
+    let details = vault.item_details(second.id()).unwrap();
+    let duplicate_reason = details.review_reasons().iter().find(|reason| reason.kind() == "duplicate-candidate").unwrap();
+
+    let outcome = vault.resolve_duplicate_candidate(DuplicateCandidateResolution {
+        item_id: second.id().to_string(), reason_id: duplicate_reason.id().to_string(),
+        expected_revision: details.record_revision().to_string(), action: DuplicateCandidateAction::KeepBoth,
+    }).unwrap();
+
+    assert_eq!(outcome.active_item().unwrap().review_status(), "needs-review");
+    assert_eq!(outcome.active_item().unwrap().review_reasons()[0].id(), "remaining-reason");
+    assert_eq!(vault.review_queue().unwrap().len(), 1);
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(source_dir).unwrap();
+}
+
+fn add_matching_artwork(vault: &Vault, source_file: PathBuf) -> gruenes_gewolbe_core::SavedItem {
+    vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Jane Painter".to_string()),
+            year: Some("1884".to_string()),
+            title: "Nocturne Study".to_string(),
+            saving_reason: None,
+        })
+        .unwrap()
 }
 
 fn temp_path(name: &str) -> PathBuf {

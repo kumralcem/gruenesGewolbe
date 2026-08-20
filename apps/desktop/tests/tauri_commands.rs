@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_desktop::{
     AddArtworkFilesCommand, CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView,
-    RunPaintingsImportCommand, TauriCommandState, WorkbenchSnapshotCommand,
+    ResolveDuplicateCandidateCommand, RunPaintingsImportCommand, TauriCommandState,
+    WorkbenchSnapshotCommand,
 };
 
 #[test]
@@ -67,6 +68,33 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn tauri_command_exposes_the_duplicate_candidate_decisions() {
+    let root = temp_path("tauri-duplicate-vault");
+    let source = temp_path("tauri-duplicate-source");
+    fs::create_dir_all(source.join("one")).unwrap();
+    fs::create_dir_all(source.join("two")).unwrap();
+    fs::write(source.join("one/Study.jpg"), b"one").unwrap();
+    fs::write(source.join("two/Study.jpg"), b"two").unwrap();
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let imported = state.add_artwork_files(AddArtworkFilesCommand {
+        source_files: vec![source.join("one/Study.jpg").display().to_string(), source.join("two/Study.jpg").display().to_string()],
+        creator: Some("Jane Painter".into()), year: Some("1884".into()), saving_reason: None, import_exact_duplicates: false,
+    }).unwrap();
+    let selected = state.workbench_snapshot(WorkbenchSnapshotCommand {
+        home_subvault: "Paintings".into(), artwork_sort: "newest".into(), search_query: None,
+        selected_item_id: Some(imported.imported_items[1].id.clone()),
+    }).unwrap().selected_item.unwrap();
+    let reason = selected.review_reasons.iter().find(|reason| reason.kind == "duplicate-candidate").unwrap();
+    let result = state.resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
+        item_id: selected.id.clone(), reason_id: reason.id.clone(), expected_revision: selected.record_revision, action: "not-a-duplicate".into(),
+    }).unwrap();
+    assert_eq!(serde_json::to_value(result).unwrap()["status"], "active");
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(source).unwrap();
 }
 
 #[test]

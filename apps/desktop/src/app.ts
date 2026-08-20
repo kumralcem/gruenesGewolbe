@@ -325,6 +325,19 @@ function bindActions(
     });
   });
 
+  root.querySelectorAll<HTMLButtonElement>("[data-duplicate-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const selected = state.workbench_snapshot?.selected_item;
+      const reasonId = button.dataset.reviewReasonId;
+      const action = button.dataset.duplicateAction as "not-a-duplicate" | "keep-both" | "move-this-item-to-vault-trash";
+      if (!selected || !reasonId || !adapter.resolveDuplicateCandidate) return;
+      try {
+        await adapter.resolveDuplicateCandidate({ item_id: selected.id, reason_id: reasonId, expected_revision: selected.record_revision, action });
+        await refreshWorkbench(adapter, state, update, state.artwork_sort, action === "move-this-item-to-vault-trash" ? null : selected.id, true);
+      } catch (error) { await update({ ...state, error: errorMessage(error) }); }
+    });
+  });
+
   root.querySelector<HTMLButtonElement>("[data-refresh-records]")?.addEventListener("click", async () => {
     await refreshWorkbench(
       adapter,
@@ -851,7 +864,7 @@ function reviewReasonsTemplate(
       <strong>Review Reasons</strong>
       ${selected.review_reasons
         .map(
-          (reason) => `
+          (reason) => reason.kind === "duplicate-candidate" ? duplicateCandidateTemplate(state, reason, adapter) : `
             <article class="review-reason ${state.selected_review_reason_id === reason.id ? "is-targeted" : ""}" data-review-reason="${escapeHtml(reason.id)}" tabindex="-1">
               <h3>${escapeHtml(reason.message)}</h3>
               <p>${escapeHtml(reason.evidence)}</p>
@@ -867,6 +880,24 @@ function reviewReasonsTemplate(
         )
         .join("")}
     </section>`;
+}
+
+function duplicateCandidateTemplate(state: AppState, reason: ItemDetails["review_reasons"][number], adapter: DesktopAdapter): string {
+  const candidateId = reason.candidate_item_id;
+  const candidate = state.workbench_snapshot?.artwork_items.find((item) => item.id === candidateId);
+  const ideaCandidate = state.workbench_snapshot?.idea_sources.find((item) => item.id === candidateId);
+  const comparison = candidate
+    ? `<dl class="duplicate-comparison"><div><dt>Candidate</dt><dd>${escapeHtml(candidate.title)}</dd></div><div><dt>Creator</dt><dd>${escapeHtml(candidate.creator)}</dd></div><div><dt>Year</dt><dd>${escapeHtml(candidate.year)}</dd></div><div><dt>Saved Item</dt><dd>${escapeHtml(candidate.id)}</dd></div></dl>`
+    : ideaCandidate
+      ? `<dl class="duplicate-comparison"><div><dt>Candidate</dt><dd>${escapeHtml(ideaCandidate.title)}</dd></div><div><dt>Source Link</dt><dd>${escapeHtml(ideaCandidate.source_link)}</dd></div><div><dt>Saved Item</dt><dd>${escapeHtml(ideaCandidate.id)}</dd></div></dl>`
+    : `<p>Candidate Saved Item: ${escapeHtml(candidateId ?? reason.evidence.split(":")[0] ?? "Unknown")}</p>`;
+  return `<article class="review-reason ${state.selected_review_reason_id === reason.id ? "is-targeted" : ""}" data-review-reason="${escapeHtml(reason.id)}" tabindex="-1">
+    <h3>${escapeHtml(reason.message)}</h3><p>Matching evidence: ${escapeHtml(reason.evidence)}</p>${comparison}
+    <div class="review-reason-actions">
+      <button class="secondary-button" type="button" data-duplicate-action="not-a-duplicate" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveDuplicateCandidate ? "disabled" : ""}>Not a Duplicate</button>
+      <button class="secondary-button" type="button" data-duplicate-action="keep-both" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveDuplicateCandidate ? "disabled" : ""}>Keep Both</button>
+      <button class="danger-button" type="button" data-duplicate-action="move-this-item-to-vault-trash" data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy || !adapter.resolveDuplicateCandidate ? "disabled" : ""}>Move This Item to Vault Trash</button>
+    </div></article>`;
 }
 
 function itemRecordEditorTemplate(

@@ -106,6 +106,13 @@ export function createTauriAdapter(): DesktopAdapter {
         action: resolution.action,
         correction: resolution.correction,
       }),
+    resolveDuplicateCandidate: (resolution) =>
+      invoke("resolve_duplicate_candidate", {
+        itemId: resolution.item_id,
+        reasonId: resolution.reason_id,
+        expectedRevision: resolution.expected_revision,
+        action: resolution.action,
+      }),
     confirmItemFolderRename: (id, proposal) =>
       invoke<ItemDetails>("confirm_item_folder_rename", {
         id,

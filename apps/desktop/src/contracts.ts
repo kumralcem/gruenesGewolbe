@@ -113,6 +113,7 @@ export interface ItemDetails {
   primary_file: string;
   review_status: string;
   review_reasons: ReviewReason[];
+  duplicate_candidates?: Array<{ item_id: string; signal: string }>;
   tags: string[];
   collections: string[];
   item_links: Array<{ link_type: string; target: string; label: string; target_in_vault_trash?: boolean }>;
@@ -130,7 +131,10 @@ export interface ReviewReason {
   target_field: string | null;
   message: string;
   evidence: string;
+  candidate_item_id?: string | null;
 }
+
+export interface IdeaSourceListItem { id: string; title: string; source_link: string; source_copy: string | null; review_status: string; saving_reason: string | null; }
 
 export interface ReviewQueueItem {
   id: string;
@@ -151,6 +155,9 @@ export interface ReviewReasonResolution {
   action: ReviewReasonAction;
   correction: string | null;
 }
+
+export type DuplicateCandidateAction = "not-a-duplicate" | "keep-both" | "move-this-item-to-vault-trash";
+export interface DuplicateCandidateResolution { item_id: string; reason_id: string; expected_revision: string; action: DuplicateCandidateAction; }
 
 export interface ItemFolderRenameProposal {
   current_path: string;
@@ -178,7 +185,7 @@ export interface WorkbenchSnapshot {
   subvaults: string[];
   collections: Array<{ id: string; name: string }>;
   artwork_items: ArtworkGridItem[];
-  idea_sources: unknown[];
+  idea_sources: IdeaSourceListItem[];
   review_queue: ReviewQueueItem[];
   search_results: SearchResult[];
   selected_item: ItemDetails | null;
@@ -225,6 +232,7 @@ export interface DesktopAdapter {
   openActivityLog?(): Promise<void>;
   saveItemRecord?(edit: ItemRecordEdit): Promise<ItemRecordSaveResult>;
   resolveReviewReason?(resolution: ReviewReasonResolution): Promise<ItemDetails>;
+  resolveDuplicateCandidate?(resolution: DuplicateCandidateResolution): Promise<{ status: "active" | "moved-to-vault-trash" }>;
   confirmItemFolderRename?(
     id: string,
     proposal: ItemFolderRenameProposal,
