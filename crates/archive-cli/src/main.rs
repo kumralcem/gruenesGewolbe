@@ -206,12 +206,24 @@ fn run(args: Vec<String>) -> Result<String, String> {
                 cli_field(&details.primary_file().display().to_string()),
             ))
         }
+        "trash-item" => {
+            let [vault_path, item_id] = rest else { return Err(usage()); };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let item = vault.move_item_to_trash(item_id).map_err(|e| e.to_string())?;
+            Ok(format!("trashed-item\t{}\t{}\t{}", item.id(), cli_field(item.home_subvault()), cli_field(&item.item_folder().display().to_string())))
+        }
+        "restore-item" => {
+            let [vault_path, item_id] = rest else { return Err(usage()); };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let item = vault.restore_trashed_item(item_id).map_err(|e| e.to_string())?;
+            Ok(format!("restored-item\t{}\t{}\t{}", item.id(), cli_field(item.home_subvault()), cli_field(&item.item_folder().display().to_string())))
+        }
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
+    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id>"
         .to_string()
 }
 

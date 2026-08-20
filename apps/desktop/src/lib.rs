@@ -20,7 +20,7 @@ use gruenes_gewolbe_core::{
     ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture, ReviewQueueItem, ReviewReason,
     ReviewReasonAction, ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    Vault, VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
+    TrashedItem, Vault, VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -346,6 +346,7 @@ impl DesktopShell {
             review_queue: vault.review_queue().map_err(DesktopShellError::Vault)?,
             search_results,
             selected_item,
+            trashed_items: vault.list_trashed_items().map_err(DesktopShellError::Vault)?,
             vault_problems: vault.vault_problems().map_err(DesktopShellError::Vault)?,
         })
     }
@@ -658,6 +659,7 @@ pub struct WorkbenchSnapshot {
     review_queue: Vec<ReviewQueueItem>,
     search_results: Vec<SearchResult>,
     selected_item: Option<ItemDetails>,
+    trashed_items: Vec<TrashedItem>,
     vault_problems: Vec<VaultProblem>,
 }
 
@@ -693,6 +695,7 @@ impl WorkbenchSnapshot {
     pub fn selected_item(&self) -> Option<&ItemDetails> {
         self.selected_item.as_ref()
     }
+    pub fn trashed_items(&self) -> &[TrashedItem] { &self.trashed_items }
 
     pub fn vault_problems(&self) -> &[VaultProblem] {
         &self.vault_problems
@@ -835,6 +838,16 @@ impl TauriCommandState {
         self.shell
             .activity_log_path()
             .map(|path| path_string(&path))
+    }
+
+    pub fn move_item_to_trash(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
+        let vault = self.shell.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
+        vault.move_item_to_trash(&id).map(SavedItemView::from).map_err(DesktopShellError::Vault)
+    }
+
+    pub fn restore_trashed_item(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
+        let vault = self.shell.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?;
+        vault.restore_trashed_item(&id).map(SavedItemView::from).map_err(DesktopShellError::Vault)
     }
 
     pub fn save_item_record(
@@ -1414,6 +1427,7 @@ impl From<&ItemDetails> for ItemDetailsView {
                     link_type: link.link_type().to_string(),
                     target: link.target().to_string(),
                     label: link.label().to_string(),
+                    target_in_vault_trash: link.target_in_vault_trash(),
                 })
                 .collect(),
             saving_reason: details.saving_reason().map(str::to_string),
@@ -1433,6 +1447,7 @@ pub struct ItemLinkView {
     pub link_type: String,
     pub target: String,
     pub label: String,
+    pub target_in_vault_trash: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1467,7 +1482,20 @@ pub struct WorkbenchSnapshotView {
     pub review_queue: Vec<ReviewQueueItemView>,
     pub search_results: Vec<SearchResultView>,
     pub selected_item: Option<ItemDetailsView>,
+    pub trashed_items: Vec<TrashedItemView>,
     pub vault_problems: Vec<VaultProblemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashedItemView {
+    pub id: String, pub home_subvault: String, pub item_folder: String, pub title: String,
+    pub creator: String, pub year: String, pub review_status: String, pub tags: Vec<String>,
+    pub collections: Vec<String>, pub incoming_item_links: Vec<IncomingItemLinkView>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IncomingItemLinkView { pub source_item_id: String, pub label: String }
+impl From<&TrashedItem> for TrashedItemView {
+    fn from(item: &TrashedItem) -> Self { Self { id: item.id().into(), home_subvault: item.home_subvault().into(), item_folder: path_string(item.item_folder()), title: item.title().into(), creator: item.creator().into(), year: item.year().into(), review_status: item.review_status().into(), tags: item.tags().into_iter().map(str::to_string).collect(), collections: item.collections().into_iter().map(str::to_string).collect(), incoming_item_links: item.incoming_item_links().iter().map(|l| IncomingItemLinkView { source_item_id: l.source_item_id().into(), label: l.label().into() }).collect() } }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1516,6 +1544,7 @@ impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
                 .map(SearchResultView::from)
                 .collect(),
             selected_item: snapshot.selected_item().map(ItemDetailsView::from),
+            trashed_items: snapshot.trashed_items().iter().map(TrashedItemView::from).collect(),
             vault_problems: snapshot
                 .vault_problems()
                 .iter()

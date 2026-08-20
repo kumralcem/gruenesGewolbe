@@ -5,7 +5,7 @@ use gruenes_gewolbe_desktop::{
     ActiveVaultView, AddArtworkFilesCommand, ConfirmItemFolderRenameCommand, DesktopStartupView,
     ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, OpenVaultView,
     ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand,
-    SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
+    SavedItemView, SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
     WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
@@ -173,6 +173,16 @@ fn activity_log_path(state: State<'_, CommandState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn move_item_to_trash(id: String, state: State<'_, CommandState>) -> Result<SavedItemView, String> {
+    state.lock().map_err(|_| "desktop state is unavailable".to_string())?.move_item_to_trash(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restore_trashed_item(id: String, state: State<'_, CommandState>) -> Result<SavedItemView, String> {
+    state.lock().map_err(|_| "desktop state is unavailable".to_string())?.restore_trashed_item(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn save_item_record(
     id: String,
     expected_revision: String,
@@ -266,6 +276,8 @@ fn main() {
             workbench_snapshot,
             refresh_workbench,
             activity_log_path,
+            move_item_to_trash,
+            restore_trashed_item,
             save_item_record,
             resolve_review_reason,
             confirm_item_folder_rename

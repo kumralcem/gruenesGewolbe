@@ -14,6 +14,7 @@ import type {
   ItemRecordEdit,
   ItemRecordSaveResult,
   OpenVaultResult,
+  SavedItem,
   SelectedFileImportSummary,
   WorkbenchSnapshot,
 } from "./contracts";
@@ -111,6 +112,8 @@ export function createTauriAdapter(): DesktopAdapter {
         currentPath: proposal.current_path,
         proposedPath: proposal.proposed_path,
       }),
+    moveItemToTrash: (id) => invoke<SavedItem>("move_item_to_trash", { id }),
+    restoreTrashedItem: (id) => invoke<SavedItem>("restore_trashed_item", { id }),
     fileUrl: convertFileSrc,
   };
 }

@@ -115,7 +115,7 @@ export interface ItemDetails {
   review_reasons: ReviewReason[];
   tags: string[];
   collections: string[];
-  item_links: Array<{ link_type: string; target: string; label: string }>;
+  item_links: Array<{ link_type: string; target: string; label: string; target_in_vault_trash?: boolean }>;
   saving_reason: string | null;
   source_link: string | null;
   summary: string | null;
@@ -182,8 +182,10 @@ export interface WorkbenchSnapshot {
   review_queue: ReviewQueueItem[];
   search_results: SearchResult[];
   selected_item: ItemDetails | null;
+  trashed_items?: TrashedItem[];
   vault_problems: VaultProblem[];
 }
+export interface TrashedItem { id: string; home_subvault: string; item_folder: string; title: string; creator?: string; year?: string; review_status?: string; tags?: string[]; collections: string[]; incoming_item_links: Array<{ source_item_id: string; label: string }>; }
 
 export interface SearchResult {
   id: string;
@@ -227,6 +229,8 @@ export interface DesktopAdapter {
     id: string,
     proposal: ItemFolderRenameProposal,
   ): Promise<ItemDetails>;
+  moveItemToTrash?(id: string): Promise<SavedItem>;
+  restoreTrashedItem?(id: string): Promise<SavedItem>;
   fileUrl?(path: string): string;
 }
 

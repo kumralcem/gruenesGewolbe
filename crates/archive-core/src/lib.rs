@@ -10,6 +10,7 @@ use serde::Serialize;
 const VAULT_CONFIG_FILE: &str = "vault.toml";
 const SUBVAULTS_DIR: &str = "subvaults";
 const COLLECTIONS_DIR: &str = "collections";
+const TRASH_DIR: &str = "trash";
 const HIDDEN_STATE_DIR: &str = ".gruenesgewolbe";
 const METADATA_INDEX_FILE: &str = "metadata-index.tsv";
 const AI_COST_LOG_FILE: &str = "ai-cost-log.tsv";
@@ -78,7 +79,55 @@ impl Vault {
     }
 
     pub fn vault_problems(&self) -> Result<Vec<VaultProblem>, VaultError> {
-        Ok(self.item_record_scan()?.vault_problems)
+        let mut problems = self.item_record_scan()?.vault_problems;
+        problems.extend(self.trashed_item_record_scan()?.vault_problems);
+        problems.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(problems)
+    }
+
+    pub fn move_item_to_trash(&self, id: &str) -> Result<SavedItem, VaultError> {
+        let record = self.find_active_record(id)?;
+        let home_subvault = required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
+        let folder_name = record.entry.item_folder.file_name().ok_or_else(|| VaultError::SavedItemNotFound(id.to_string()))?;
+        let destination_root = self.root.join(TRASH_DIR).join(&home_subvault);
+        fs::create_dir_all(&destination_root)?;
+        let destination = unique_folder_path(&destination_root, &folder_name.to_string_lossy());
+        fs::rename(&record.entry.item_folder, &destination)?;
+        self.rebuild_metadata_index()?;
+        self.append_activity_log(&format!("trash-item\t{}\t{}", id, destination.display()))?;
+        Ok(SavedItem { id: id.to_string(), home_subvault, item_folder: destination })
+    }
+
+    pub fn restore_trashed_item(&self, id: &str) -> Result<SavedItem, VaultError> {
+        let record = self.find_trashed_record(id)?;
+        let home_subvault = required_frontmatter_value(&record.entry.record_path, &record.text, "home_subvault")?;
+        let folder_name = record.entry.item_folder.file_name().ok_or_else(|| VaultError::TrashedItemNotFound(id.to_string()))?;
+        let destination_root = self.root.join(SUBVAULTS_DIR).join(&home_subvault).join("items");
+        fs::create_dir_all(&destination_root)?;
+        let destination = unique_folder_path(&destination_root, &folder_name.to_string_lossy());
+        fs::rename(&record.entry.item_folder, &destination)?;
+        self.rebuild_metadata_index()?;
+        self.append_activity_log(&format!("restore-item\t{}\t{}", id, destination.display()))?;
+        Ok(SavedItem { id: id.to_string(), home_subvault, item_folder: destination })
+    }
+
+    pub fn list_trashed_items(&self) -> Result<Vec<TrashedItem>, VaultError> {
+        let mut items = Vec::new();
+        for record in self.trashed_item_record_scan()?.valid_records {
+            let id = required_frontmatter_value(&record.entry.record_path, &record.text, "id")?;
+            items.push(TrashedItem {
+                saved_item: saved_item_from_record(&record.entry, &record.text)?,
+                title: required_frontmatter_value(&record.entry.record_path, &record.text, "title")?,
+                creator: required_frontmatter_value(&record.entry.record_path, &record.text, "creator")?,
+                year: required_frontmatter_value(&record.entry.record_path, &record.text, "year")?,
+                review_status: derived_review_status(&review_reasons(&record.text)).to_string(),
+                tags: frontmatter_list(&record.text, "tags"),
+                collections: self.collection_names_for_item(&id, &record.text)?,
+                incoming_item_links: self.incoming_item_links(&id)?,
+            });
+        }
+        items.sort_by(|a, b| a.title.cmp(&b.title));
+        Ok(items)
     }
 
     pub fn list_subvaults(&self) -> Result<Vec<String>, VaultError> {
@@ -811,6 +860,10 @@ impl Vault {
             let creator = required_frontmatter_value(&record.record_path, &text, "creator")?;
             let year = required_frontmatter_value(&record.record_path, &text, "year")?;
 
+            let mut links = item_links(&text);
+            let trashed_ids: Vec<String> = self.trashed_item_record_scan()?.valid_records.into_iter()
+                .filter_map(|record| frontmatter_value(&record.text, "id")).collect();
+            for link in &mut links { link.target_in_vault_trash = trashed_ids.iter().any(|trashed_id| trashed_id == link.target()); }
             return Ok(ItemDetails {
                 saved_item: saved_item_from_record(&record, &text)?,
                 title: title.clone(),
@@ -825,7 +878,7 @@ impl Vault {
                 review_reasons: review_reasons(&text),
                 tags: frontmatter_list(&text, "tags"),
                 collections: self.collection_names_for_item(id, &text)?,
-                item_links: item_links(&text),
+                item_links: links,
                 duplicate_candidates: duplicate_candidates(&text),
                 saving_reason: markdown_section(&text, "Saving Reason"),
                 source_link: frontmatter_value(&text, "source_link"),
@@ -1386,18 +1439,55 @@ impl Vault {
     }
 
     fn item_record_scan(&self) -> Result<ItemRecordScan, VaultError> {
-        let mut valid_records = Vec::new();
-        let mut vault_problems = Vec::new();
-        for entry in self.item_record_entries()? {
-            match read_valid_item_record(entry) {
-                Ok(record) => valid_records.push(record),
-                Err(problem) => vault_problems.push(problem),
+        Ok(scan_item_record_entries(self.item_record_entries()?))
+    }
+
+    fn trashed_item_record_scan(&self) -> Result<ItemRecordScan, VaultError> {
+        Ok(scan_item_record_entries(self.trashed_item_record_entries()?))
+    }
+
+    fn trashed_item_record_entries(&self) -> Result<Vec<ItemRecordEntry>, VaultError> {
+        let mut entries = Vec::new();
+        let trash = self.root.join(TRASH_DIR);
+        if trash.is_dir() {
+            for home in fs::read_dir(trash)? {
+                let home = home?;
+                if !home.file_type()?.is_dir() { continue; }
+                for folder in fs::read_dir(home.path())? {
+                    let folder = folder?;
+                    let record_path = folder.path().join("record.md");
+                    if folder.file_type()?.is_dir() && record_path.is_file() {
+                        entries.push(ItemRecordEntry { record_path, item_folder: folder.path() });
+                    }
+                }
             }
         }
-        Ok(ItemRecordScan {
-            valid_records,
-            vault_problems,
-        })
+        entries.sort_by(|left, right| left.item_folder.cmp(&right.item_folder));
+        Ok(entries)
+    }
+
+    fn item_record_by_id(&self, entries: Vec<ItemRecordEntry>, id: &str, error: VaultError) -> Result<ValidItemRecord, VaultError> {
+        scan_item_record_entries(entries).valid_records.into_iter()
+            .find(|record| frontmatter_value(&record.text, "id").as_deref() == Some(id))
+            .ok_or(error)
+    }
+
+    fn find_active_record(&self, id: &str) -> Result<ValidItemRecord, VaultError> {
+        self.item_record_by_id(self.item_record_entries()?, id, VaultError::SavedItemNotFound(id.to_string()))
+    }
+
+    fn find_trashed_record(&self, id: &str) -> Result<ValidItemRecord, VaultError> {
+        self.item_record_by_id(self.trashed_item_record_entries()?, id, VaultError::TrashedItemNotFound(id.to_string()))
+    }
+
+    fn incoming_item_links(&self, id: &str) -> Result<Vec<IncomingItemLink>, VaultError> {
+        let mut links = Vec::new();
+        for record in self.item_record_scan()?.valid_records {
+            for link in item_links(&record.text).into_iter().filter(|link| link.target() == id) {
+                links.push(IncomingItemLink { source_item_id: required_frontmatter_value(&record.entry.record_path, &record.text, "id")?, label: link.label().to_string() });
+            }
+        }
+        Ok(links)
     }
 
     fn collection_search_text_by_item_id(&self) -> Result<HashMap<String, String>, VaultError> {
@@ -2676,6 +2766,7 @@ pub struct ItemLink {
     link_type: String,
     target: String,
     label: String,
+    target_in_vault_trash: bool,
 }
 
 impl ItemLink {
@@ -2690,6 +2781,7 @@ impl ItemLink {
     pub fn label(&self) -> &str {
         &self.label
     }
+    pub fn target_in_vault_trash(&self) -> bool { self.target_in_vault_trash }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2932,6 +3024,39 @@ pub struct SavedItem {
     item_folder: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashedItem {
+    saved_item: SavedItem,
+    title: String,
+    creator: String,
+    year: String,
+    review_status: String,
+    tags: Vec<String>,
+    collections: Vec<String>,
+    incoming_item_links: Vec<IncomingItemLink>,
+}
+
+impl TrashedItem {
+    pub fn id(&self) -> &str { self.saved_item.id() }
+    pub fn home_subvault(&self) -> &str { self.saved_item.home_subvault() }
+    pub fn item_folder(&self) -> &Path { self.saved_item.item_folder() }
+    pub fn title(&self) -> &str { &self.title }
+    pub fn creator(&self) -> &str { &self.creator }
+    pub fn year(&self) -> &str { &self.year }
+    pub fn review_status(&self) -> &str { &self.review_status }
+    pub fn tags(&self) -> Vec<&str> { self.tags.iter().map(String::as_str).collect() }
+    pub fn collections(&self) -> Vec<&str> { self.collections.iter().map(String::as_str).collect() }
+    pub fn incoming_item_links(&self) -> &[IncomingItemLink] { &self.incoming_item_links }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncomingItemLink { source_item_id: String, label: String }
+
+impl IncomingItemLink {
+    pub fn source_item_id(&self) -> &str { &self.source_item_id }
+    pub fn label(&self) -> &str { &self.label }
+}
+
 impl SavedItem {
     pub fn id(&self) -> &str {
         &self.id
@@ -3032,6 +3157,7 @@ pub enum VaultError {
     UnsupportedImageFile(PathBuf),
     MissingImportFolder(PathBuf),
     SavedItemNotFound(String),
+    TrashedItemNotFound(String),
     CollectionNotFound(String),
     MalformedItemRecord(PathBuf),
     ItemRecordCodec(String),
@@ -3098,6 +3224,7 @@ impl fmt::Display for VaultError {
                 write!(f, "import folder does not exist: {}", path.display())
             }
             Self::SavedItemNotFound(id) => write!(f, "saved item not found: {id}"),
+            Self::TrashedItemNotFound(id) => write!(f, "trashed item not found: {id}"),
             Self::CollectionNotFound(id) => write!(f, "collection not found: {id}"),
             Self::MalformedItemRecord(path) => {
                 write!(f, "item record is malformed: {}", path.display())
@@ -3757,6 +3884,18 @@ fn saved_item_from_record(record: &ItemRecordEntry, text: &str) -> Result<SavedI
     })
 }
 
+fn scan_item_record_entries(entries: Vec<ItemRecordEntry>) -> ItemRecordScan {
+    let mut valid_records = Vec::new();
+    let mut vault_problems = Vec::new();
+    for entry in entries {
+        match read_valid_item_record(entry) {
+            Ok(record) => valid_records.push(record),
+            Err(problem) => vault_problems.push(problem),
+        }
+    }
+    ItemRecordScan { valid_records, vault_problems }
+}
+
 fn read_valid_item_record(entry: ItemRecordEntry) -> Result<ValidItemRecord, VaultProblem> {
     let text = fs::read_to_string(&entry.record_path).map_err(|error| VaultProblem {
         path: entry.record_path.clone(),
@@ -4208,6 +4347,7 @@ fn item_links(record: &str) -> Vec<ItemLink> {
                 link_type: parts.next()?.to_string(),
                 label: parts.next()?.to_string(),
                 target: parts.next()?.to_string(),
+                target_in_vault_trash: false,
             })
         })
         .collect()
