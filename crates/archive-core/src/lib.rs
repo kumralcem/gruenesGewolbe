@@ -73,6 +73,15 @@ impl Vault {
         &self.root
     }
 
+    pub fn activity_log_path(&self) -> PathBuf {
+        self.root.join(HIDDEN_STATE_DIR).join(ACTIVITY_LOG_FILE)
+    }
+
+    pub fn vault_problems(&self) -> Result<Vec<VaultProblem>, VaultError> {
+        let (_, problems) = self.valid_item_records()?;
+        Ok(problems)
+    }
+
     pub fn list_subvaults(&self) -> Result<Vec<String>, VaultError> {
         let mut subvaults = Vec::new();
         for entry in fs::read_dir(self.root.join(SUBVAULTS_DIR))? {
@@ -576,7 +585,7 @@ impl Vault {
     }
 
     pub fn rebuild_metadata_index(&self) -> Result<RebuiltMetadataIndex, VaultError> {
-        let records = self.item_record_entries()?;
+        let (records, problems) = self.valid_item_records()?;
         let collection_search_text = self.collection_search_text_by_item_id()?;
         let hidden_state = self.root.join(HIDDEN_STATE_DIR);
         fs::create_dir_all(&hidden_state)?;
@@ -584,11 +593,11 @@ impl Vault {
         let mut index = String::new();
         let mut indexed_items = 0;
         for record in records {
-            let text = fs::read_to_string(&record.record_path)?;
-            let id = frontmatter_value(&text, "id")
-                .ok_or_else(|| VaultError::MalformedItemRecord(record.record_path.clone()))?;
-            let home_subvault = frontmatter_value(&text, "home_subvault")
-                .ok_or_else(|| VaultError::MalformedItemRecord(record.record_path.clone()))?;
+            let text = record.text;
+            let id = required_frontmatter_value(&record.entry.record_path, &text, "id")?;
+            let home_subvault =
+                required_frontmatter_value(&record.entry.record_path, &text, "home_subvault")?;
+            let title = required_frontmatter_value(&record.entry.record_path, &text, "title")?;
             let mut searchable_source = text;
             if let Some(collection_text) = collection_search_text.get(&id) {
                 searchable_source.push('\n');
@@ -601,8 +610,10 @@ impl Vault {
             index.push_str(&escape_index_field(&home_subvault));
             index.push('\t');
             index.push_str(&escape_index_field(
-                &record.item_folder.display().to_string(),
+                &record.entry.item_folder.display().to_string(),
             ));
+            index.push('\t');
+            index.push_str(&escape_index_field(&title));
             index.push('\t');
             index.push_str(&escape_index_field(&searchable_text));
             index.push('\n');
@@ -612,7 +623,13 @@ impl Vault {
         fs::write(hidden_state.join(METADATA_INDEX_FILE), index)?;
         self.append_activity_log(&format!("rebuild-metadata-index\t{indexed_items}"))?;
 
-        Ok(RebuiltMetadataIndex { indexed_items })
+        Ok(RebuiltMetadataIndex {
+            indexed_items,
+            omitted_paths: problems
+                .into_iter()
+                .map(|problem| problem.path)
+                .collect(),
+        })
     }
 
     pub fn search_metadata(&self, query: &str) -> Result<Vec<SearchResult>, VaultError> {
@@ -630,7 +647,7 @@ impl Vault {
         let mut results = Vec::new();
         for line in index.lines() {
             let fields: Vec<_> = line.split('\t').map(unescape_index_field).collect();
-            let [id, home_subvault, item_folder, searchable_text] = fields.as_slice() else {
+            let [id, home_subvault, item_folder, title, searchable_text] = fields.as_slice() else {
                 continue;
             };
 
@@ -644,6 +661,7 @@ impl Vault {
                     home_subvault: home_subvault.to_string(),
                     item_folder: PathBuf::from(item_folder),
                 },
+                title: title.to_string(),
             });
         }
 
@@ -663,8 +681,9 @@ impl Vault {
         sort: ArtworkSort,
     ) -> Result<Vec<ArtworkGridItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+        for record in self.valid_item_records()?.0 {
+            let text = record.text;
+            let record = record.entry;
             if frontmatter_value(&text, "home_subvault").as_deref() != Some(home_subvault) {
                 continue;
             }
@@ -724,8 +743,9 @@ impl Vault {
 
     pub fn browse_idea_sources(&self) -> Result<Vec<IdeaSourceListItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+        for record in self.valid_item_records()?.0 {
+            let text = record.text;
+            let record = record.entry;
             if frontmatter_value(&text, "item_type").as_deref() != Some("idea") {
                 continue;
             }
@@ -752,8 +772,9 @@ impl Vault {
 
     pub fn review_queue(&self) -> Result<Vec<ReviewQueueItem>, VaultError> {
         let mut items = Vec::new();
-        for record in self.item_record_entries()? {
-            let text = fs::read_to_string(&record.record_path)?;
+        for record in self.valid_item_records()?.0 {
+            let text = record.text;
+            let record = record.entry;
             let reasons = review_reasons(&text);
             let review_status = derived_review_status(&reasons).to_string();
             if review_status != "needs-review" {
@@ -1360,6 +1381,20 @@ impl Vault {
 
         records.sort_by(|left, right| left.item_folder.cmp(&right.item_folder));
         Ok(records)
+    }
+
+    fn valid_item_records(
+        &self,
+    ) -> Result<(Vec<ValidItemRecord>, Vec<VaultProblem>), VaultError> {
+        let mut records = Vec::new();
+        let mut problems = Vec::new();
+        for entry in self.item_record_entries()? {
+            match read_valid_item_record(entry) {
+                Ok(record) => records.push(record),
+                Err(problem) => problems.push(problem),
+            }
+        }
+        Ok((records, problems))
     }
 
     fn collection_search_text_by_item_id(&self) -> Result<HashMap<String, String>, VaultError> {
@@ -2911,22 +2946,48 @@ impl SavedItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebuiltMetadataIndex {
     indexed_items: usize,
+    omitted_paths: Vec<PathBuf>,
 }
 
 impl RebuiltMetadataIndex {
     pub fn indexed_items(&self) -> usize {
         self.indexed_items
     }
+
+    pub fn omitted_paths(&self) -> &[PathBuf] {
+        &self.omitted_paths
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultProblem {
+    path: PathBuf,
+    error: String,
+}
+
+impl VaultProblem {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn error(&self) -> &str {
+        &self.error
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchResult {
     saved_item: SavedItem,
+    title: String,
 }
 
 impl SearchResult {
     pub fn saved_item(&self) -> &SavedItem {
         &self.saved_item
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
     }
 }
 
@@ -2934,6 +2995,12 @@ impl SearchResult {
 struct ItemRecordEntry {
     record_path: PathBuf,
     item_folder: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ValidItemRecord {
+    entry: ItemRecordEntry,
+    text: String,
 }
 
 #[derive(Debug)]
@@ -3679,6 +3746,60 @@ fn saved_item_from_record(record: &ItemRecordEntry, text: &str) -> Result<SavedI
         home_subvault: required_frontmatter_value(&record.record_path, text, "home_subvault")?,
         item_folder: record.item_folder.clone(),
     })
+}
+
+fn read_valid_item_record(entry: ItemRecordEntry) -> Result<ValidItemRecord, VaultProblem> {
+    let text = fs::read_to_string(&entry.record_path).map_err(|error| VaultProblem {
+        path: entry.record_path.clone(),
+        error: format!("Item Record could not be read: {error}"),
+    })?;
+    let frontmatter = text
+        .strip_prefix("---\n")
+        .and_then(|record| record.split_once("\n---\n").map(|parts| parts.0))
+        .ok_or_else(|| VaultProblem {
+            path: entry.record_path.clone(),
+            error: "Item Record frontmatter delimiters are missing".to_string(),
+        })?;
+    let mapping = serde_yaml::from_str::<serde_yaml::Mapping>(frontmatter).map_err(|error| {
+        VaultProblem {
+            path: entry.record_path.clone(),
+            error: format!("Item Record YAML parse error: {error}"),
+        }
+    })?;
+
+    let required = |key: &str| {
+        mapping
+            .get(serde_yaml::Value::String(key.to_string()))
+            .cloned()
+            .and_then(yaml_scalar_string)
+            .ok_or_else(|| VaultProblem {
+                path: entry.record_path.clone(),
+                error: format!("Item Record is missing required field `{key}`"),
+            })
+    };
+    for key in ["id", "home_subvault", "item_type", "title"] {
+        required(key)?;
+    }
+    match required("item_type")?.as_str() {
+        "artwork" => {
+            for key in ["creator", "year", "primary_file"] {
+                required(key)?;
+            }
+        }
+        "idea" => {
+            for key in ["creator", "year", "primary_file", "source_link"] {
+                required(key)?;
+            }
+        }
+        item_type => {
+            return Err(VaultProblem {
+                path: entry.record_path.clone(),
+                error: format!("Item Record has unsupported item type `{item_type}`"),
+            });
+        }
+    }
+
+    Ok(ValidItemRecord { entry, text })
 }
 
 fn required_frontmatter_value(

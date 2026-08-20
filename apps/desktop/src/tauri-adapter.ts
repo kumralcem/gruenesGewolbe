@@ -1,10 +1,10 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 import type {
   ActiveVault,
-  ArtworkSort,
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
@@ -69,8 +69,22 @@ export function createTauriAdapter(): DesktopAdapter {
       }
     },
     cancelPaintingsImport: () => invoke<void>("cancel_paintings_import"),
-    workbenchSnapshot: (artworkSort: ArtworkSort, selectedItemId: string | null) =>
-      invoke<WorkbenchSnapshot>("workbench_snapshot", { artworkSort, selectedItemId }),
+    workbenchSnapshot: (artworkSort, selectedItemId, searchQuery) =>
+      invoke<WorkbenchSnapshot>("workbench_snapshot", {
+        artworkSort,
+        selectedItemId,
+        searchQuery,
+      }),
+    refreshWorkbenchSnapshot: (artworkSort, selectedItemId, searchQuery) =>
+      invoke<WorkbenchSnapshot>("refresh_workbench", {
+        artworkSort,
+        selectedItemId,
+        searchQuery,
+      }),
+    openActivityLog: async () => {
+      const path = await invoke<string>("activity_log_path");
+      await openPath(path);
+    },
     saveItemRecord: (edit: ItemRecordEdit) =>
       invoke<ItemRecordSaveResult>("save_item_record", {
         id: edit.id,

@@ -28,6 +28,7 @@ test("shows Import Run progress, supports cancellation, and renders the partial 
       idea_sources: [],
       review_queue: [],
       search_results: [],
+      vault_problems: [],
       selected_item: null,
     });
     window.__GG_TEST_ADAPTER__ = {

@@ -94,6 +94,7 @@ test("adds selected artwork files, sorts the gallery, and opens primary-file det
           idea_sources: [],
           review_queue: [],
           search_results: [],
+          vault_problems: [],
           selected_item: selectedItemId
             ? {
                 id: selectedItemId,

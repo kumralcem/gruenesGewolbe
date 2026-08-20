@@ -24,6 +24,7 @@ interface AppState extends DesktopStartup {
   busy: boolean;
   error: string | null;
   artwork_sort: ArtworkSort;
+  search_query: string;
   workbench_snapshot: WorkbenchSnapshot | null;
   import_progress: ImportProgress | null;
   import_summary: ArtworkImportOutcome | null;
@@ -42,6 +43,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     busy: true,
     error: null,
     artwork_sort: "newest",
+    search_query: "",
     workbench_snapshot: null,
     import_progress: null,
     import_summary: null,
@@ -69,6 +71,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       busy: false,
       error: null,
       artwork_sort: "newest",
+      search_query: "",
       workbench_snapshot: null,
       import_progress: null,
       import_summary: null,
@@ -79,7 +82,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
         ...state,
-        workbench_snapshot: await adapter.workbenchSnapshot("newest", null),
+        workbench_snapshot: await adapter.workbenchSnapshot("newest", null, null),
       };
     }
   } catch (error) {
@@ -105,6 +108,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       },
       state.artwork_sort,
       state.workbench_snapshot?.selected_item?.id ?? null,
+      true,
     );
   });
 }
@@ -168,7 +172,7 @@ function bindActions(
         importExactDuplicates,
       });
       const snapshot = adapter.workbenchSnapshot
-        ? await adapter.workbenchSnapshot(state.artwork_sort, null)
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null, state.search_query)
         : state.workbench_snapshot;
       await update({
         ...state,
@@ -216,7 +220,7 @@ function bindActions(
         });
       });
       const snapshot = adapter.workbenchSnapshot
-        ? await adapter.workbenchSnapshot(state.artwork_sort, null)
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null, state.search_query)
         : state.workbench_snapshot;
       await update({
         ...state,
@@ -244,6 +248,26 @@ function bindActions(
   root.querySelector<HTMLSelectElement>("[data-artwork-sort]")?.addEventListener("change", async (event) => {
     const sort = (event.currentTarget as HTMLSelectElement).value as ArtworkSort;
     await refreshWorkbench(adapter, state, update, sort, state.workbench_snapshot?.selected_item?.id ?? null);
+  });
+
+  root.querySelector<HTMLFormElement>("[data-vault-search]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = inputValue(root, "[data-search-query]") ?? "";
+    await refreshWorkbench(
+      adapter,
+      { ...state, search_query: query },
+      update,
+      state.artwork_sort,
+      null,
+    );
+  });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-search-result-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const itemId = button.dataset.searchResultId;
+      if (!itemId) return;
+      await refreshWorkbench(adapter, state, update, state.artwork_sort, itemId);
+    });
   });
 
   root.querySelectorAll<HTMLButtonElement>("[data-artwork-id]").forEach((button) => {
@@ -308,7 +332,17 @@ function bindActions(
       update,
       state.artwork_sort,
       state.workbench_snapshot?.selected_item?.id ?? null,
+      true,
     );
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-open-activity-log]")?.addEventListener("click", async () => {
+    if (!adapter.openActivityLog) return;
+    try {
+      await adapter.openActivityLog();
+    } catch (error) {
+      await update({ ...state, error: errorMessage(error) });
+    }
   });
 
   root.querySelector<HTMLButtonElement>("[data-save-item-record]")?.addEventListener("click", async () => {
@@ -376,7 +410,7 @@ async function saveItemEdit(
       return;
     }
     const snapshot = adapter.workbenchSnapshot
-      ? await adapter.workbenchSnapshot(state.artwork_sort, edit.id)
+      ? await adapter.workbenchSnapshot(state.artwork_sort, edit.id, state.search_query)
       : state.workbench_snapshot
         ? { ...state.workbench_snapshot, selected_item: result.item }
         : null;
@@ -507,7 +541,11 @@ async function activateOpenedVault(
   if (adapter.workbenchSnapshot) {
     nextState = {
       ...nextState,
-      workbench_snapshot: await adapter.workbenchSnapshot(nextState.artwork_sort, null),
+      workbench_snapshot: await adapter.workbenchSnapshot(
+        nextState.artwork_sort,
+        null,
+        nextState.search_query,
+      ),
     };
   }
   await update(nextState);
@@ -519,11 +557,15 @@ async function refreshWorkbench(
   update: (state: AppState) => Promise<void>,
   sort: ArtworkSort,
   selectedItemId: string | null,
+  refreshRecords = false,
 ): Promise<void> {
   if (!adapter.workbenchSnapshot) return;
   await update({ ...state, artwork_sort: sort, busy: true, error: null });
   try {
-    const snapshot = await adapter.workbenchSnapshot(sort, selectedItemId);
+    const snapshot =
+      refreshRecords && adapter.refreshWorkbenchSnapshot
+        ? await adapter.refreshWorkbenchSnapshot(sort, selectedItemId, state.search_query)
+        : await adapter.workbenchSnapshot(sort, selectedItemId, state.search_query);
     await update({
       ...state,
       artwork_sort: sort,
@@ -655,6 +697,17 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
 
       ${importRunTemplate(state, adapter)}
 
+      <section class="vault-tools" aria-label="Vault tools">
+        <form class="vault-search" data-vault-search>
+          <label>Search Active Vault<input type="search" data-search-query value="${escapeHtml(state.search_query)}"></label>
+          <button class="secondary-button" type="submit" ${state.busy ? "disabled" : ""}>Search</button>
+        </form>
+        <button class="secondary-button" type="button" data-open-activity-log ${state.busy || !adapter.openActivityLog ? "disabled" : ""}>Open Activity Log</button>
+      </section>
+
+      ${vaultProblemsTemplate(snapshot)}
+      ${searchResultsTemplate(snapshot, state)}
+
       ${reviewQueueTemplate(snapshot, state)}
 
       <div class="artwork-content ${selected ? "has-selection" : ""}">
@@ -707,6 +760,41 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       </div>
     </section>
   `;
+}
+
+function vaultProblemsTemplate(snapshot: WorkbenchSnapshot): string {
+  if (snapshot.vault_problems.length === 0) return "";
+  return `
+    <section class="vault-problems" aria-label="Vault Problems">
+      <p class="eyebrow">Localized file errors</p>
+      <h2>Vault Problems</h2>
+      <ul>
+        ${snapshot.vault_problems
+          .map(
+            (problem) =>
+              `<li><strong>${escapeHtml(displayName(problem.path))}</strong><span class="file-path">${escapeHtml(problem.path)}</span><small>${escapeHtml(problem.error)}</small></li>`,
+          )
+          .join("")}
+      </ul>
+    </section>`;
+}
+
+function searchResultsTemplate(snapshot: WorkbenchSnapshot, state: AppState): string {
+  if (!state.search_query) return "";
+  return `
+    <section class="search-results" aria-label="Search Results">
+      <p class="eyebrow">Search Results</p>
+      ${
+        snapshot.search_results.length === 0
+          ? `<p>No Saved Items match “${escapeHtml(state.search_query)}”.</p>`
+          : `<div>${snapshot.search_results
+              .map(
+                (result) =>
+                  `<button type="button" data-search-result-id="${escapeHtml(result.id)}" ${state.busy ? "disabled" : ""}>${escapeHtml(result.title)}</button>`,
+              )
+              .join("")}</div>`
+      }
+    </section>`;
 }
 
 function reviewQueueTemplate(snapshot: WorkbenchSnapshot, state: AppState): string {

@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "Permissions for the main workbench window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "opener:allow-open-path"]
 }

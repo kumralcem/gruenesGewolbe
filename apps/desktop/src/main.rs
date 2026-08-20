@@ -129,6 +129,7 @@ fn cancel_paintings_import(cancellation: State<'_, ImportCancellation>) {
 fn workbench_snapshot(
     artwork_sort: String,
     selected_item_id: Option<String>,
+    search_query: Option<String>,
     state: State<'_, CommandState>,
 ) -> Result<WorkbenchSnapshotView, String> {
     state
@@ -137,9 +138,37 @@ fn workbench_snapshot(
         .workbench_snapshot(WorkbenchSnapshotCommand {
             home_subvault: "Paintings".to_string(),
             artwork_sort,
-            search_query: None,
+            search_query,
             selected_item_id,
         })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn refresh_workbench(
+    artwork_sort: String,
+    selected_item_id: Option<String>,
+    search_query: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<WorkbenchSnapshotView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .refresh_workbench(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort,
+            search_query,
+            selected_item_id,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn activity_log_path(state: State<'_, CommandState>) -> Result<String, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .activity_log_path()
         .map_err(|error| error.to_string())
 }
 
@@ -216,6 +245,7 @@ fn confirm_item_folder_rename(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_state_dir = app.path().app_data_dir()?;
             app.manage(Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
@@ -234,6 +264,8 @@ fn main() {
             run_paintings_import,
             cancel_paintings_import,
             workbench_snapshot,
+            refresh_workbench,
+            activity_log_path,
             save_item_record,
             resolve_review_reason,
             confirm_item_folder_rename

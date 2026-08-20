@@ -90,6 +90,7 @@ test("opens Review Queue reasons and resolves each concern independently", async
                 },
               ],
         search_results: [],
+        vault_problems: [],
         selected_item: selectedItemId ? { ...item } : null,
       }),
       resolveReviewReason: async ({ reason_id: reasonId, action, correction }) => {

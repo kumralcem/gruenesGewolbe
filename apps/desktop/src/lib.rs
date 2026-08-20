@@ -20,7 +20,7 @@ use gruenes_gewolbe_core::{
     ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture, ReviewQueueItem, ReviewReason,
     ReviewReasonAction, ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
     SourceCaptureResult, SourceExtractor, SourceLinkCapture, TagDefinition, UpdateItemRecord,
-    Vault, VaultError, VaultOpen, VaultRepairProposal,
+    Vault, VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
 };
 
 #[derive(Debug, Default)]
@@ -327,7 +327,11 @@ impl DesktopShell {
             .browse_artwork_items_sorted(&request.home_subvault, request.artwork_sort)
             .map_err(DesktopShellError::Vault)?;
         let selected_item = match request.selected_item_id.as_deref() {
-            Some(id) => Some(vault.item_details(id).map_err(DesktopShellError::Vault)?),
+            Some(id) => match vault.item_details(id) {
+                Ok(details) => Some(details),
+                Err(VaultError::MalformedItemRecord(_) | VaultError::SavedItemNotFound(_)) => None,
+                Err(error) => return Err(DesktopShellError::Vault(error)),
+            },
             None => None,
         };
 
@@ -342,7 +346,30 @@ impl DesktopShell {
             review_queue: vault.review_queue().map_err(DesktopShellError::Vault)?,
             search_results,
             selected_item,
+            vault_problems: vault.vault_problems().map_err(DesktopShellError::Vault)?,
         })
+    }
+
+    pub fn refresh_workbench(
+        &self,
+        request: WorkbenchRequest,
+    ) -> Result<WorkbenchSnapshot, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .rebuild_metadata_index()
+            .map_err(DesktopShellError::Vault)?;
+        self.workbench_snapshot(request)
+    }
+
+    pub fn activity_log_path(&self) -> Result<PathBuf, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        Ok(vault.activity_log_path())
     }
 
     pub fn item_details(&self, id: &str) -> Result<ItemDetails, DesktopShellError> {
@@ -631,6 +658,7 @@ pub struct WorkbenchSnapshot {
     review_queue: Vec<ReviewQueueItem>,
     search_results: Vec<SearchResult>,
     selected_item: Option<ItemDetails>,
+    vault_problems: Vec<VaultProblem>,
 }
 
 impl WorkbenchSnapshot {
@@ -664,6 +692,10 @@ impl WorkbenchSnapshot {
 
     pub fn selected_item(&self) -> Option<&ItemDetails> {
         self.selected_item.as_ref()
+    }
+
+    pub fn vault_problems(&self) -> &[VaultProblem] {
+        &self.vault_problems
     }
 }
 
@@ -794,6 +826,27 @@ impl TauriCommandState {
                 selected_item_id: command.selected_item_id,
             })
             .map(WorkbenchSnapshotView::from)
+    }
+
+    pub fn refresh_workbench(
+        &self,
+        command: WorkbenchSnapshotCommand,
+    ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
+        let artwork_sort = parse_artwork_sort(&command.artwork_sort)?;
+        self.shell
+            .refresh_workbench(WorkbenchRequest {
+                home_subvault: command.home_subvault,
+                artwork_sort,
+                search_query: command.search_query,
+                selected_item_id: command.selected_item_id,
+            })
+            .map(WorkbenchSnapshotView::from)
+    }
+
+    pub fn activity_log_path(&self) -> Result<String, DesktopShellError> {
+        self.shell
+            .activity_log_path()
+            .map(|path| path_string(&path))
     }
 
     pub fn save_item_record(
@@ -1298,6 +1351,7 @@ impl From<&ReviewReason> for ReviewReasonView {
 pub struct SearchResultView {
     pub id: String,
     pub home_subvault: String,
+    pub title: String,
 }
 
 impl From<&SearchResult> for SearchResultView {
@@ -1305,6 +1359,7 @@ impl From<&SearchResult> for SearchResultView {
         Self {
             id: result.saved_item().id().to_string(),
             home_subvault: result.saved_item().home_subvault().to_string(),
+            title: result.title().to_string(),
         }
     }
 }
@@ -1413,6 +1468,22 @@ pub struct WorkbenchSnapshotView {
     pub review_queue: Vec<ReviewQueueItemView>,
     pub search_results: Vec<SearchResultView>,
     pub selected_item: Option<ItemDetailsView>,
+    pub vault_problems: Vec<VaultProblemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VaultProblemView {
+    pub path: String,
+    pub error: String,
+}
+
+impl From<&VaultProblem> for VaultProblemView {
+    fn from(problem: &VaultProblem) -> Self {
+        Self {
+            path: path_string(problem.path()),
+            error: problem.error().to_string(),
+        }
+    }
 }
 
 impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
@@ -1446,6 +1517,11 @@ impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
                 .map(SearchResultView::from)
                 .collect(),
             selected_item: snapshot.selected_item().map(ItemDetailsView::from),
+            vault_problems: snapshot
+                .vault_problems()
+                .iter()
+                .map(VaultProblemView::from)
+                .collect(),
         }
     }
 }

@@ -96,11 +96,34 @@ fn run(args: Vec<String>) -> Result<String, String> {
             let rebuilt = vault
                 .rebuild_metadata_index()
                 .map_err(|error| error.to_string())?;
-            Ok(format!(
+            let mut lines = vec![format!(
                 "rebuilt-metadata-index\t{}\t{}",
                 vault.root().display(),
                 rebuilt.indexed_items()
-            ))
+            )];
+            lines.extend(rebuilt.omitted_paths().iter().map(|path| {
+                format!("omitted-item-record\t{}", cli_field(&path.display().to_string()))
+            }));
+            Ok(lines.join("\n"))
+        }
+        "problems" => {
+            let [vault_path] = rest else {
+                return Err(usage());
+            };
+            let vault = Vault::open(PathBuf::from(vault_path))
+                .map_err(|error| error.to_string())?;
+            let problems = vault.vault_problems().map_err(|error| error.to_string())?;
+            Ok(problems
+                .into_iter()
+                .map(|problem| {
+                    format!(
+                        "vault-problem\t{}\t{}",
+                        cli_field(&problem.path().display().to_string()),
+                        cli_field(problem.error())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
         }
         "search" => {
             let [vault_path, query] = rest else {
@@ -188,7 +211,7 @@ fn run(args: Vec<String>) -> Result<String, String> {
 }
 
 fn usage() -> String {
-    "usage: ggvault <create|open|validate|rebuild-index> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
+    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault inspect-item <vault-path> <item-id>"
         .to_string()
 }
 

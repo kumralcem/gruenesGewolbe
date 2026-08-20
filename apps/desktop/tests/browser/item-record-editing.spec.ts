@@ -78,6 +78,7 @@ test("edits an Item Record, resolves conflicts, refreshes, and confirms a folder
           idea_sources: [],
           review_queue: [],
           search_results: [],
+          vault_problems: [],
           selected_item: selectedItemId ? { ...item } : null,
         };
       },

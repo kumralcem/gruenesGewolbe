@@ -10,7 +10,7 @@ name = "gruenes_gewolbe_desktop"
 path = "src/lib.rs"
 
 [features]
-tauri-runtime = ["dep:tauri", "dep:tauri-plugin-dialog"]
+tauri-runtime = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-plugin-opener"]
 
 [[bin]]
 name = "gruenes-gewolbe"
@@ -22,6 +22,7 @@ gruenes-gewolbe-core = { path = "../../crates/archive-core" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", optional = true, features = ["protocol-asset"] }
 tauri-plugin-dialog = { version = "2", optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 
 [dev-dependencies]
 serde_json = "1"

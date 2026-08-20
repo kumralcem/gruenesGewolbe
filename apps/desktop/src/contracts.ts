@@ -178,8 +178,15 @@ export interface WorkbenchSnapshot {
   artwork_items: ArtworkGridItem[];
   idea_sources: unknown[];
   review_queue: ReviewQueueItem[];
-  search_results: unknown[];
+  search_results: SearchResult[];
   selected_item: ItemDetails | null;
+  vault_problems: ImportVaultProblem[];
+}
+
+export interface SearchResult {
+  id: string;
+  home_subvault: string;
+  title: string;
 }
 
 export interface DesktopAdapter {
@@ -204,7 +211,14 @@ export interface DesktopAdapter {
   workbenchSnapshot?(
     sort: ArtworkSort,
     selectedItemId: string | null,
+    searchQuery?: string | null,
   ): Promise<WorkbenchSnapshot>;
+  refreshWorkbenchSnapshot?(
+    sort: ArtworkSort,
+    selectedItemId: string | null,
+    searchQuery?: string | null,
+  ): Promise<WorkbenchSnapshot>;
+  openActivityLog?(): Promise<void>;
   saveItemRecord?(edit: ItemRecordEdit): Promise<ItemRecordSaveResult>;
   resolveReviewReason?(resolution: ReviewReasonResolution): Promise<ItemDetails>;
   confirmItemFolderRename?(
