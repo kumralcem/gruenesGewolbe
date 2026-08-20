@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -6,13 +7,71 @@ use gruenes_gewolbe_desktop::{
     DuplicateCandidateResolutionView, ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView,
     OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
     ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView,
-    SelectedFileImportSummaryView, TauriCommandState, WorkbenchSnapshotCommand,
-    ThumbnailPreparationView, WorkbenchSnapshotView,
+    SelectedFileImportSummaryView, TauriCommandState, ThumbnailPreparationView,
+    WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
 
 type CommandState = Arc<Mutex<TauriCommandState>>;
 type ImportCancellation = Arc<AtomicBool>;
+
+fn decode_media_path(encoded_path: &str) -> Result<PathBuf, String> {
+    let bytes = encoded_path
+        .strip_prefix('/')
+        .unwrap_or(encoded_path)
+        .as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let pair = bytes
+                .get(index + 1..index + 3)
+                .ok_or_else(|| "invalid media path encoding".to_string())?;
+            let pair =
+                std::str::from_utf8(pair).map_err(|_| "invalid media path encoding".to_string())?;
+            decoded.push(
+                u8::from_str_radix(pair, 16)
+                    .map_err(|_| "invalid media path encoding".to_string())?,
+            );
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .map(PathBuf::from)
+        .map_err(|_| "media path is not valid UTF-8".to_string())
+}
+
+fn read_active_vault_thumbnail(
+    state: &CommandState,
+    encoded_path: &str,
+) -> Result<Vec<u8>, String> {
+    let requested = decode_media_path(encoded_path)?;
+    let active_root = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .ok_or_else(|| "no Active Vault is open".to_string())?;
+    let thumbnails = active_root.join(".gruenesgewolbe").join("thumbnails");
+    let canonical_thumbnails = thumbnails
+        .canonicalize()
+        .map_err(|_| "Thumbnail Preview directory is unavailable".to_string())?;
+    let canonical_requested = requested
+        .canonicalize()
+        .map_err(|_| "Thumbnail Preview is unavailable".to_string())?;
+    if !canonical_requested.starts_with(&canonical_thumbnails)
+        || !Path::new(&canonical_requested).is_file()
+        || !canonical_requested
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
+        return Err("media path is outside the Active Vault Thumbnail Previews".to_string());
+    }
+    std::fs::read(canonical_requested).map_err(|_| "Thumbnail Preview is unavailable".to_string())
+}
 
 #[tauri::command]
 fn startup(state: State<'_, CommandState>) -> Result<DesktopStartupView, String> {
@@ -316,6 +375,23 @@ fn confirm_item_folder_rename(
 
 fn main() {
     tauri::Builder::default()
+        .register_uri_scheme_protocol("vault-media", |context, request| {
+            let state = context.app_handle().state::<CommandState>();
+            match read_active_vault_thumbnail(state.inner(), request.uri().path()) {
+                Ok(bytes) => tauri::http::Response::builder()
+                    .header(tauri::http::header::CONTENT_TYPE, "image/png")
+                    .body(bytes)
+                    .expect("valid Thumbnail Preview response"),
+                Err(message) => tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::FORBIDDEN)
+                    .header(
+                        tauri::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )
+                    .body(message.into_bytes())
+                    .expect("valid media refusal response"),
+            }
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -349,4 +425,67 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Gruenes Gewoelbe");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn media_protocol_reads_only_the_current_active_vault_thumbnails() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-media-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let first = root.join("first");
+        let second = root.join("second");
+        state
+            .lock()
+            .expect("desktop state")
+            .create_vault(first.to_string_lossy().into_owned())
+            .expect("create first Vault");
+        let first_thumbnail = first.join(".gruenesgewolbe/thumbnails/first.png");
+        std::fs::create_dir_all(first_thumbnail.parent().expect("thumbnail parent"))
+            .expect("create thumbnail directory");
+        std::fs::write(&first_thumbnail, b"first").expect("write first thumbnail");
+        let non_preview = first_thumbnail.with_extension("txt");
+        std::fs::write(&non_preview, b"not an image").expect("write non-preview file");
+        let encoded_first = first_thumbnail.to_string_lossy().replace('/', "%2F");
+        assert_eq!(
+            read_active_vault_thumbnail(&state, &format!("/{encoded_first}"))
+                .expect("read Active Vault thumbnail"),
+            b"first"
+        );
+        assert!(read_active_vault_thumbnail(
+            &state,
+            &format!("/{}", non_preview.to_string_lossy().replace('/', "%2F")),
+        )
+        .is_err());
+
+        state
+            .lock()
+            .expect("desktop state")
+            .create_vault(second.to_string_lossy().into_owned())
+            .expect("create second Vault");
+        assert!(read_active_vault_thumbnail(&state, &format!("/{encoded_first}")).is_err());
+        assert!(read_active_vault_thumbnail(
+            &state,
+            &format!(
+                "/{}",
+                first
+                    .join("vault.toml")
+                    .to_string_lossy()
+                    .replace('/', "%2F")
+            ),
+        )
+        .is_err());
+
+        std::fs::remove_dir_all(root).expect("clean fixture");
+    }
 }

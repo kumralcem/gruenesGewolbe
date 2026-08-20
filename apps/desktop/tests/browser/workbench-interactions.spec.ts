@@ -55,12 +55,15 @@ test("keeps navigation in the viewport and opens dismissible details without jum
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(650);
 
   const workspace = page.locator(".workspace");
+  const shell = await page.locator(".app-shell").elementHandle();
+  expect(shell).not.toBeNull();
   await page.locator('[data-artwork-id="item-30"]').scrollIntoViewIfNeeded();
   const scrollBefore = await workspace.evaluate((element) => element.scrollTop);
   expect(scrollBefore).toBeGreaterThan(0);
   await page.locator('[data-artwork-id="item-30"]').click();
 
   await expect(page.getByRole("heading", { name: "Artwork 30" })).toBeVisible();
+  expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
   await expect(page.getByRole("button", { name: "Close Item Details" })).toBeVisible();
   const scrollAfter = await workspace.evaluate((element) => element.scrollTop);
   expect(scrollAfter).toBeGreaterThan(0);

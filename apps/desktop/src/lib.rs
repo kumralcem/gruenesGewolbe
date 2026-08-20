@@ -748,6 +748,12 @@ impl TauriCommandState {
         self.shell.startup_state().map(DesktopStartupView::from)
     }
 
+    pub fn active_vault_root(&self) -> Option<PathBuf> {
+        self.shell
+            .active_vault()
+            .map(|vault| vault.root().to_path_buf())
+    }
+
     pub fn create_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
         self.shell
             .create_vault(root)

@@ -8,6 +8,11 @@ fn tauri_scaffold_points_at_the_vite_ui_and_linux_runtime() {
     assert!(config.contains("\"frontendDist\": \"./dist\""));
     assert!(config.contains("\"beforeDevCommand\": \"pnpm dev\""));
     assert!(config.contains("\"identifier\": \"dev.gruenesgewolbe.app\""));
+    let config_json: serde_json::Value = serde_json::from_str(&config).expect("parse Tauri config");
+    assert_eq!(
+        config_json["app"]["security"]["assetProtocol"]["enable"],
+        false
+    );
 
     let package = fs::read_to_string(app_root.join("package.json")).expect("read package");
     assert!(package.contains("\"@tauri-apps/cli\""));
@@ -20,5 +25,10 @@ fn tauri_scaffold_points_at_the_vite_ui_and_linux_runtime() {
     assert!(runtime.contains("fn open_vault("));
     assert!(runtime.contains("fn confirm_vault_repair("));
     assert!(runtime.contains("fn cancel_vault_repair("));
+    assert!(runtime.contains("register_uri_scheme_protocol(\"vault-media\""));
+    assert!(runtime.contains("read_active_vault_thumbnail"));
     assert!(runtime.contains("tauri::generate_handler!["));
+
+    let adapter = fs::read_to_string(app_root.join("src/tauri-adapter.ts")).expect("read adapter");
+    assert!(adapter.contains("convertFileSrc(path, \"vault-media\")"));
 }

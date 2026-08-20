@@ -35,6 +35,8 @@ interface AppState extends DesktopStartup {
   thumbnail_remaining: number | null;
 }
 
+type StateUpdate = (state: AppState) => Promise<void>;
+
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
   const thumbnailSnapshotBatchSize = 8;
   let state: AppState = {
@@ -57,6 +59,22 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
 
   let thumbnailPreparationRunning = false;
 
+  const update: StateUpdate = async (nextState) => {
+    state = nextState;
+    render();
+  };
+  const updateSelection: StateUpdate = async (nextState) => {
+    state = {
+      ...state,
+      workbench_snapshot: nextState.workbench_snapshot,
+      error: nextState.error,
+      selected_review_reason_id: nextState.selected_review_reason_id,
+      pending_item_edit: nextState.pending_item_edit,
+      item_record_conflict: nextState.item_record_conflict,
+    };
+    patchArtworkSelection(root, adapter, state, update, updateSelection);
+  };
+
   const render = () => {
     const workspaceScrollTop = root.querySelector<HTMLElement>(".workspace")?.scrollTop ?? 0;
     root.innerHTML = pageTemplate(state, adapter);
@@ -64,10 +82,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       icons: { Archive, CircleAlert, FolderOpen, FolderPlus, Vault },
       attrs: { "aria-hidden": "true", width: 18, height: 18 },
     });
-    bindActions(root, adapter, state, async (nextState) => {
-      state = nextState;
-      render();
-    });
+    bindActions(root, adapter, state, update, updateSelection);
     const workspace = root.querySelector<HTMLElement>(".workspace");
     if (workspace) workspace.scrollTop = workspaceScrollTop;
     scheduleThumbnailPreparation();
@@ -173,7 +188,8 @@ function bindActions(
   root: HTMLElement,
   adapter: DesktopAdapter,
   state: AppState,
-  update: (state: AppState) => Promise<void>,
+  update: StateUpdate,
+  updateSelection: StateUpdate,
 ): void {
   root.querySelectorAll<HTMLButtonElement>("[data-vault-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -330,7 +346,7 @@ function bindActions(
     button.addEventListener("click", async () => {
       const itemId = button.dataset.artworkId;
       if (!itemId) return;
-      await selectWorkbenchItem(adapter, state, update, itemId);
+      await selectWorkbenchItem(adapter, state, updateSelection, itemId);
     });
   });
 
@@ -344,7 +360,7 @@ function bindActions(
       itemRecordEditIsDirty(itemRecordEdit(form, selected, false), selected) &&
       !window.confirm("Discard unsaved Item Record changes?")
     ) return;
-    await update({
+    await updateSelection({
       ...state,
       workbench_snapshot: { ...state.workbench_snapshot, selected_item: null },
       selected_review_reason_id: null,
@@ -781,9 +797,6 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
   if (!snapshot) return "";
   const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
   const selected = snapshot.selected_item;
-  const selectedArtwork = selected
-    ? snapshot.artwork_items.find((item) => item.id === selected.id)
-    : null;
 
   return `
     <section class="artwork-workspace">
@@ -864,36 +877,66 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           }
         </div>
 
-        ${
-          selected
-            ? `
-              <aside class="artwork-details" aria-label="Artwork details">
-                <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
-                ${selectedArtwork ? `<img class="primary-file" src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
-                ${selectedArtwork ? '<p class="eyebrow">Thumbnail preview</p>' : ""}
-                <h2>${escapeHtml(selected.title)}</h2>
-                <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
-                ${itemRecordConflictTemplate(state)}
-                ${reviewReasonsTemplate(state, selected, adapter)}
-                ${itemRecordEditorTemplate(state, selected, adapter)}
-                ${folderRenameTemplate(selected, adapter)}
-                <button class="danger-button" type="button" data-move-to-trash ${adapter.moveItemToTrash ? "" : "disabled"}>Move to Vault Trash</button>
-                <dl class="record-context">
-                  <div><dt>Home Subvault</dt><dd>${escapeHtml(selected.home_subvault)}</dd></div>
-                  <div><dt>Review Status</dt><dd>${escapeHtml(selected.review_status)}</dd></div>
-                  <div><dt>Collections</dt><dd>${escapeHtml(selected.collections.join(", ") || "None")}</dd></div>
-                  <div><dt>Item Links</dt><dd>${itemLinksTemplate(selected)}</dd></div>
-                  <div><dt>File</dt><dd class="file-path">${escapeHtml(selected.primary_file)}</dd></div>
-                </dl>
-              </aside>
-            `
-            : ""
-        }
+        ${artworkDetailsTemplate(state, adapter)}
       </div>
 
       ${vaultTrashTemplate(snapshot, state, adapter)}
     </section>
   `;
+}
+
+function artworkDetailsTemplate(state: AppState, adapter: DesktopAdapter): string {
+  const snapshot = state.workbench_snapshot;
+  const selected = snapshot?.selected_item;
+  if (!snapshot || !selected) return "";
+  const selectedArtwork = snapshot.artwork_items.find((item) => item.id === selected.id);
+  const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
+  return `
+    <aside class="artwork-details" aria-label="Artwork details">
+      <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
+      ${selectedArtwork ? `<img class="primary-file" src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
+      ${selectedArtwork ? '<p class="eyebrow">Thumbnail preview</p>' : ""}
+      <h2>${escapeHtml(selected.title)}</h2>
+      <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
+      ${itemRecordConflictTemplate(state)}
+      ${reviewReasonsTemplate(state, selected, adapter)}
+      ${itemRecordEditorTemplate(state, selected, adapter)}
+      ${folderRenameTemplate(selected, adapter)}
+      <button class="danger-button" type="button" data-move-to-trash ${adapter.moveItemToTrash ? "" : "disabled"}>Move to Vault Trash</button>
+      <dl class="record-context">
+        <div><dt>Home Subvault</dt><dd>${escapeHtml(selected.home_subvault)}</dd></div>
+        <div><dt>Review Status</dt><dd>${escapeHtml(selected.review_status)}</dd></div>
+        <div><dt>Collections</dt><dd>${escapeHtml(selected.collections.join(", ") || "None")}</dd></div>
+        <div><dt>Item Links</dt><dd>${itemLinksTemplate(selected)}</dd></div>
+        <div><dt>File</dt><dd class="file-path">${escapeHtml(selected.primary_file)}</dd></div>
+      </dl>
+    </aside>`;
+}
+
+function patchArtworkSelection(
+  root: HTMLElement,
+  adapter: DesktopAdapter,
+  state: AppState,
+  update: StateUpdate,
+  updateSelection: StateUpdate,
+): void {
+  const content = root.querySelector<HTMLElement>(".artwork-content");
+  if (!content || !state.workbench_snapshot) {
+    void update(state);
+    return;
+  }
+
+  const selectedId = state.workbench_snapshot.selected_item?.id ?? null;
+  content.classList.toggle("has-selection", selectedId !== null);
+  content.querySelectorAll<HTMLElement>("[data-artwork-id]").forEach((card) => {
+    card.classList.toggle("is-selected", card.dataset.artworkId === selectedId);
+  });
+  content.querySelector<HTMLElement>(".artwork-details")?.remove();
+  if (selectedId) {
+    content.insertAdjacentHTML("beforeend", artworkDetailsTemplate(state, adapter));
+    const details = content.querySelector<HTMLElement>(".artwork-details");
+    if (details) bindActions(details, adapter, state, update, updateSelection);
+  }
 }
 
 function vaultTrashTemplate(snapshot: WorkbenchSnapshot, state: AppState, adapter: DesktopAdapter): string {

@@ -125,6 +125,6 @@ export function createTauriAdapter(): DesktopAdapter {
     moveItemToTrash: (id) => invoke<SavedItem>("move_item_to_trash", { id }),
     restoreTrashedItem: (id) => invoke<SavedItem>("restore_trashed_item", { id }),
     permanentlyDeleteTrashedItem: (id, confirmedId) => invoke("permanently_delete_trashed_item", { id, confirmedId }),
-    fileUrl: convertFileSrc,
+    fileUrl: (path) => convertFileSrc(path, "vault-media"),
   };
 }
