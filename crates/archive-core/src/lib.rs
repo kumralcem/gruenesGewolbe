@@ -2037,7 +2037,7 @@ impl Vault {
             });
         }
 
-        let pending_file = thumbnails_dir.join(format!("{}.pending.png", saved_item.id()));
+        let pending_file = thumbnails_dir.join("pending.png");
         if !pending_file.is_file() {
             write_thumbnail_placeholder(&pending_file)?;
         }
@@ -2064,7 +2064,6 @@ impl Vault {
         fs::create_dir_all(&thumbnails_dir)?;
         let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
         let placeholder_file = thumbnails_dir.join(format!("{}.placeholder.png", saved_item.id()));
-        let pending_file = thumbnails_dir.join(format!("{}.pending.png", saved_item.id()));
 
         let dimensions = fast_webp_dimensions(primary_file)
             .map(Ok)
@@ -2090,7 +2089,6 @@ impl Vault {
                     .thumbnail(480, 480)
                     .save_with_format(&thumbnail_file, image::ImageFormat::Png)
                     .map_err(|error| VaultError::PreviewGeneration(error.to_string()))?;
-                let _ = fs::remove_file(pending_file);
                 Ok(ThumbnailPreview {
                     path: thumbnail_file,
                     is_placeholder: false,
@@ -2099,7 +2097,6 @@ impl Vault {
             Err(reason) => {
                 write_thumbnail_placeholder(&placeholder_file)?;
                 self.record_thumbnail_preview_failure(saved_item, primary_file, &reason)?;
-                let _ = fs::remove_file(pending_file);
                 Ok(ThumbnailPreview {
                     path: placeholder_file,
                     is_placeholder: true,

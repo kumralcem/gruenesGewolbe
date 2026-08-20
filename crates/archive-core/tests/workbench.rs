@@ -106,9 +106,10 @@ fn gallery_browsing_is_immediate_and_thumbnail_previews_are_prepared_explicitly(
     assert_eq!(grid.len(), 1);
     assert!(grid[0].thumbnail_file().is_file());
     assert!(grid[0].thumbnail_is_placeholder());
-    assert!(grid[0]
-        .thumbnail_file()
-        .ends_with(format!("{}.pending.png", saved_item.id())));
+    assert_eq!(
+        grid[0].thumbnail_file().file_name().and_then(|name| name.to_str()),
+        Some("pending.png")
+    );
     let prepared = vault
         .prepare_thumbnail_previews("Paintings", 1)
         .expect("prepare Thumbnail Preview");
@@ -289,7 +290,10 @@ fn malformed_large_header_is_localized_during_background_preview_work() {
     let initial = vault
         .browse_artwork_items("Paintings")
         .expect("browse immediately");
-    assert!(initial[0].thumbnail_file().ends_with(format!("{}.pending.png", saved.id())));
+    assert_eq!(
+        initial[0].thumbnail_file().file_name().and_then(|name| name.to_str()),
+        Some("pending.png")
+    );
     vault
         .prepare_thumbnail_previews("Paintings", 1)
         .expect("bound oversized preview work");

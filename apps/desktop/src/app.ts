@@ -36,6 +36,7 @@ interface AppState extends DesktopStartup {
 }
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
+  const thumbnailSnapshotBatchSize = 8;
   let state: AppState = {
     active_vault: null,
     known_vaults: [],
@@ -79,11 +80,17 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     ) return;
     thumbnailPreparationRunning = true;
     void (async () => {
+      let generatedSinceSnapshot = 0;
       try {
         while (state.active_vault) {
           const prepared = await adapter.prepareThumbnailPreviews!(1);
           state = { ...state, thumbnail_remaining: prepared.remaining, error: null };
-          if (prepared.generated > 0) {
+          generatedSinceSnapshot += prepared.generated;
+          const refreshWorkbench =
+            generatedSinceSnapshot >= thumbnailSnapshotBatchSize ||
+            prepared.remaining === 0 ||
+            prepared.generated === 0;
+          if (refreshWorkbench && generatedSinceSnapshot > 0) {
             state = {
               ...state,
               workbench_snapshot: await adapter.workbenchSnapshot!(
@@ -92,10 +99,13 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
                 state.search_query,
               ),
             };
+            generatedSinceSnapshot = 0;
+            render();
+          } else {
+            updateThumbnailStatus(root, prepared.remaining);
           }
-          render();
           if (prepared.remaining === 0 || prepared.generated === 0) break;
-          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          await new Promise((resolve) => window.setTimeout(resolve, 50));
         }
       } catch (error) {
         state = { ...state, error: errorMessage(error) };
@@ -730,6 +740,9 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
   if (!snapshot) return "";
   const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
   const selected = snapshot.selected_item;
+  const selectedArtwork = selected
+    ? snapshot.artwork_items.find((item) => item.id === selected.id)
+    : null;
 
   return `
     <section class="artwork-workspace">
@@ -771,7 +784,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       </header>
 
       ${importRunTemplate(state, adapter)}
-      ${state.thumbnail_remaining && state.thumbnail_remaining > 0 ? `<p role="status">Preparing Thumbnail Previews in the background · ${state.thumbnail_remaining} remaining</p>` : ""}
+      <p class="thumbnail-status" role="status" aria-live="polite" data-thumbnail-status ${state.thumbnail_remaining && state.thumbnail_remaining > 0 ? "" : "hidden"}>${thumbnailStatusText(state.thumbnail_remaining)}</p>
 
       <section class="vault-tools" aria-label="Vault tools">
         <form class="vault-search" data-vault-search>
@@ -798,7 +811,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
                       <button class="artwork-card ${selected?.id === item.id ? "is-selected" : ""}" type="button"
                         data-artwork-id="${escapeHtml(item.id)}" ${state.busy ? "disabled" : ""}>
                         <span class="artwork-preview ${item.thumbnail_is_placeholder ? "is-placeholder" : ""}">
-                          <img src="${fileUrl(item.thumbnail_file)}" alt="${escapeHtml(item.title)}">
+                          <img src="${fileUrl(item.thumbnail_file)}" alt="${escapeHtml(item.title)}" width="480" height="360" loading="lazy" decoding="async">
                         </span>
                         <span class="artwork-caption">
                           <strong>${escapeHtml(item.title)}</strong>
@@ -815,8 +828,8 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
           selected
             ? `
               <aside class="artwork-details" aria-label="Artwork details">
-                <img class="primary-file" src="${fileUrl(selected.primary_file)}" alt="Primary File for ${escapeHtml(selected.title)}">
-                <p class="eyebrow">Primary file</p>
+                ${selectedArtwork ? `<img class="primary-file" src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
+                ${selectedArtwork ? '<p class="eyebrow">Thumbnail preview</p>' : ""}
                 <h2>${escapeHtml(selected.title)}</h2>
                 <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
                 ${itemRecordConflictTemplate(state)}
@@ -842,7 +855,18 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
 
 function vaultTrashTemplate(snapshot: WorkbenchSnapshot, state: AppState, adapter: DesktopAdapter): string {
   const items = snapshot.trashed_items ?? [];
-  return `<section class="vault-trash" aria-label="Vault Trash"><p class="eyebrow">Recoverable removal</p><h2>Vault Trash</h2>${items.length === 0 ? "<p>Vault Trash is empty.</p>" : items.map(item => `<article><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(metadataLine(item.creator ?? "", item.year ?? ""))} · ${escapeHtml(item.home_subvault)}</p><p>Review: ${escapeHtml(item.review_status ?? "Unknown")} · Tags: ${escapeHtml(item.tags?.join(", ") || "None")}</p><p class="file-path">${escapeHtml(item.item_folder)}</p><p>Collections: ${escapeHtml(item.collections.join(", ") || "None")} (target in Vault Trash)</p><p>Incoming Item Links: ${escapeHtml(item.incoming_item_links.map(link => `${link.label} (${link.source_item_id}) → target in Vault Trash`).join(", ") || "None")}</p><button class="secondary-button" type="button" data-restore-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.restoreTrashedItem ? "disabled" : ""}>Restore</button><div><label>Type stable item ID <code>${escapeHtml(item.id)}</code> to permanently delete<input data-delete-confirmation aria-label="Confirm permanent deletion for ${escapeHtml(item.title)}"></label><button class="danger-button" type="button" data-permanently-delete-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.permanentlyDeleteTrashedItem ? "disabled" : ""}>Permanently Delete</button></div></article>`).join("")}</section>`;
+  if (items.length === 0) {
+    return `<section class="vault-trash is-empty" aria-label="Vault Trash"><strong>Vault Trash</strong><span>Vault Trash is empty.</span></section>`;
+  }
+  return `
+    <section class="vault-trash" aria-label="Vault Trash">
+      <details class="vault-trash-details">
+        <summary><span><small>Recoverable removal</small><strong>Vault Trash</strong></span><span>${items.length} ${items.length === 1 ? "item" : "items"}</span></summary>
+        <div class="vault-trash-items">
+          ${items.map(item => `<article><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(metadataLine(item.creator ?? "", item.year ?? ""))} · ${escapeHtml(item.home_subvault)}</p><p>Review: ${escapeHtml(item.review_status ?? "Unknown")} · Tags: ${escapeHtml(item.tags?.join(", ") || "None")}</p><p class="file-path">${escapeHtml(item.item_folder)}</p><p>Collections: ${escapeHtml(item.collections.join(", ") || "None")} (target in Vault Trash)</p><p>Incoming Item Links: ${escapeHtml(item.incoming_item_links.map(link => `${link.label} (${link.source_item_id}) → target in Vault Trash`).join(", ") || "None")}</p><button class="secondary-button" type="button" data-restore-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.restoreTrashedItem ? "disabled" : ""}>Restore</button><div><label>Type stable item ID <code>${escapeHtml(item.id)}</code> to permanently delete<input data-delete-confirmation aria-label="Confirm permanent deletion for ${escapeHtml(item.title)}"></label><button class="danger-button" type="button" data-permanently-delete-trash-id="${escapeHtml(item.id)}" ${state.busy || !adapter.permanentlyDeleteTrashedItem ? "disabled" : ""}>Permanently Delete</button></div></article>`).join("")}
+        </div>
+      </details>
+    </section>`;
 }
 
 function vaultProblemsTemplate(snapshot: WorkbenchSnapshot): string {
@@ -882,21 +906,31 @@ function searchResultsTemplate(snapshot: WorkbenchSnapshot, state: AppState): st
 
 function reviewQueueTemplate(snapshot: WorkbenchSnapshot, state: AppState): string {
   if (snapshot.review_queue.length === 0) return "";
+  const visibleItems = snapshot.review_queue.slice(0, 12);
+  const reasonCount = snapshot.review_queue.reduce(
+    (total, item) => total + item.review_reasons.length,
+    0,
+  );
   return `
     <section class="review-queue" aria-label="Review Queue">
-      <p class="eyebrow">Review Queue</p>
+      <div class="review-queue-heading">
+        <p class="eyebrow">Review queue</p>
+        <p><strong>${reasonCount} ${reasonCount === 1 ? "concern" : "concerns"}</strong> across ${snapshot.review_queue.length} ${snapshot.review_queue.length === 1 ? "item" : "items"}${visibleItems.length < snapshot.review_queue.length ? ` · showing the first ${visibleItems.length}` : ""}</p>
+      </div>
       <div class="review-queue-items">
-        ${snapshot.review_queue
-          .flatMap((item) =>
-            item.review_reasons.map(
-              (reason) => `
-                <button type="button" data-review-item-id="${escapeHtml(item.id)}"
-                  data-review-reason-id="${escapeHtml(reason.id)}" ${state.busy ? "disabled" : ""}>
-                  <strong>${escapeHtml(item.title)}</strong>
-                  <span>${escapeHtml(reason.message)}</span>
-                </button>`,
-            ),
-          )
+        ${visibleItems
+          .map((item) => {
+            const firstReason = item.review_reasons[0];
+            if (!firstReason) return "";
+            const reasonMessages = item.review_reasons.map((reason) => reason.message).join(" · ");
+            return `
+              <button type="button" data-review-item-id="${escapeHtml(item.id)}"
+                data-review-reason-id="${escapeHtml(firstReason.id)}" aria-label="${escapeHtml(`${item.title} ${reasonMessages}`)}" ${state.busy ? "disabled" : ""}>
+                <strong>${escapeHtml(item.title)}</strong>
+                <span>${item.review_reasons.length} ${item.review_reasons.length === 1 ? "concern" : "concerns"}</span>
+                <small>${escapeHtml(reasonMessages)}</small>
+              </button>`;
+          })
           .join("")}
       </div>
     </section>`;
@@ -1094,6 +1128,19 @@ function summaryGroup(label: string, entries: string[]): string {
 
 function sortOption(value: ArtworkSort, label: string, selected: ArtworkSort): string {
   return `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`;
+}
+
+function updateThumbnailStatus(root: HTMLElement, remaining: number): void {
+  const status = root.querySelector<HTMLElement>("[data-thumbnail-status]");
+  if (!status) return;
+  status.hidden = remaining === 0;
+  status.textContent = thumbnailStatusText(remaining);
+}
+
+function thumbnailStatusText(remaining: number | null): string {
+  return remaining && remaining > 0
+    ? `Preparing thumbnail previews in the background — ${remaining} remaining`
+    : "";
 }
 
 function metadataLine(creator: string, year: string): string {

@@ -19,8 +19,11 @@ test("moves an item to visible Vault Trash and restores it", async ({ page }) =>
   await page.goto("/");
   await page.getByRole("button", { name: /Blue/ }).click();
   await page.getByRole("button", { name: "Move to Vault Trash" }).click();
-  await expect(page.getByRole("region", { name: "Vault Trash" })).toContainText("Favorites");
-  await expect(page.getByRole("region", { name: "Vault Trash" })).toContainText("Inspired by");
+  const trash = page.getByRole("region", { name: "Vault Trash" });
+  await expect(trash.locator("details")).not.toHaveAttribute("open", "");
+  await trash.locator("summary").click();
+  await expect(trash).toContainText("Favorites");
+  await expect(trash).toContainText("Inspired by");
   await page.getByRole("button", { name: "Restore" }).click();
   await expect(page.getByRole("button", { name: /Blue/ })).toBeVisible();
 });
@@ -39,10 +42,12 @@ test("permanent deletion shows impact and requires the stable item ID", async ({
   });
   await page.goto("/");
   const trash = page.getByRole("region", { name: "Vault Trash" });
+  await trash.locator("summary").click();
   await expect(trash).toContainText("Favorites");
   await expect(trash).toContainText("Inspired by");
   await trash.getByRole("button", { name: "Permanently Delete" }).click();
   await expect(page.getByText("exact item id required")).toBeVisible();
+  await trash.locator("summary").click();
   await trash.getByRole("textbox", { name: /Confirm permanent deletion/ }).fill("item-1");
   await trash.getByRole("button", { name: "Permanently Delete" }).click();
   await expect(trash).toContainText("Vault Trash is empty");

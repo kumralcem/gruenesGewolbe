@@ -111,6 +111,9 @@ test("opens Review Queue reasons and resolves each concern independently", async
   });
 
   await page.goto("/");
+  const reviewQueue = page.getByRole("region", { name: "Review Queue" });
+  await expect(reviewQueue.getByRole("button")).toHaveCount(1);
+  await expect(reviewQueue).toContainText("2 concerns");
   await page.getByRole("button", { name: /Mystery Creator is unknown/ }).click();
   const creatorReason = page.locator('[data-review-reason="unknown-creator"]');
   await expect(creatorReason).toBeFocused();

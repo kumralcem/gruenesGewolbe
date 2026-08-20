@@ -33,7 +33,11 @@ for (const choice of ["Not a Duplicate", "Keep Both", "Move This Item to Vault T
     await expect(page.getByText("https://example.com/nocturne").last()).toBeVisible();
     await page.getByRole("button", { name: choice, exact: true }).click();
     await expect(page.getByLabel("Review Queue")).toHaveCount(0);
-    if (choice === "Move This Item to Vault Trash") await expect(page.getByText("Nocturne Study copy").last()).toBeVisible();
+    if (choice === "Move This Item to Vault Trash") {
+      const trash = page.getByRole("region", { name: "Vault Trash" });
+      await trash.locator("summary").click();
+      await expect(trash.getByText("Nocturne Study copy")).toBeVisible();
+    }
     await expect.poll(() => page.evaluate(() => (window as typeof window & { __testCalls?: string[] }).__testCalls)).toHaveLength(1);
   });
 }
