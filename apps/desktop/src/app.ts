@@ -9,6 +9,7 @@ import {
 
 import type {
   ActiveVault,
+  ArtworkGridItem,
   ArtworkImportOutcome,
   ArtworkSort,
   DesktopAdapter,
@@ -33,9 +34,15 @@ interface AppState extends DesktopStartup {
   item_record_conflict: ItemDetails | null;
   selected_review_reason_id?: string | null;
   thumbnail_remaining: number | null;
+  pending_selected_artwork_id: string | null;
+  selected_artwork_error: string | null;
 }
 
 type StateUpdate = (state: AppState) => Promise<void>;
+interface ArtworkSelection {
+  select(itemId: string): Promise<void>;
+  cancel(): void;
+}
 
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
   const thumbnailSnapshotBatchSize = 8;
@@ -55,11 +62,15 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     pending_item_edit: null,
     item_record_conflict: null,
     thumbnail_remaining: null,
+    pending_selected_artwork_id: null,
+    selected_artwork_error: null,
   };
 
   let thumbnailPreparationRunning = false;
+  let selectionRequest = 0;
 
   const update: StateUpdate = async (nextState) => {
+    selectionRequest += 1;
     state = nextState;
     render();
   };
@@ -71,8 +82,47 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       selected_review_reason_id: nextState.selected_review_reason_id,
       pending_item_edit: nextState.pending_item_edit,
       item_record_conflict: nextState.item_record_conflict,
+      pending_selected_artwork_id: nextState.pending_selected_artwork_id,
+      selected_artwork_error: nextState.selected_artwork_error,
     };
-    patchArtworkSelection(root, adapter, state, update, updateSelection);
+    patchArtworkSelection(root, adapter, state, update, updateSelection, artworkSelection);
+  };
+  const selectArtwork = async (itemId: string) => {
+    if (!adapter.workbenchSnapshot) return;
+    const request = ++selectionRequest;
+    await updateSelection({
+      ...state,
+      pending_selected_artwork_id: itemId,
+      selected_artwork_error: null,
+      error: null,
+    });
+    try {
+      const snapshot = await adapter.workbenchSnapshot(
+        state.artwork_sort,
+        itemId,
+        state.search_query,
+      );
+      if (request !== selectionRequest) return;
+      await updateSelection({
+        ...state,
+        workbench_snapshot: snapshot,
+        pending_selected_artwork_id: null,
+        selected_artwork_error: null,
+        error: null,
+      });
+    } catch (error) {
+      if (request !== selectionRequest) return;
+      await updateSelection({
+        ...state,
+        pending_selected_artwork_id: itemId,
+        selected_artwork_error: errorMessage(error),
+        error: null,
+      });
+    }
+  };
+  const artworkSelection: ArtworkSelection = {
+    select: selectArtwork,
+    cancel: () => { selectionRequest += 1; },
   };
 
   const render = () => {
@@ -82,7 +132,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       icons: { Archive, CircleAlert, FolderOpen, FolderPlus, Vault },
       attrs: { "aria-hidden": "true", width: 18, height: 18 },
     });
-    bindActions(root, adapter, state, update, updateSelection);
+    bindActions(root, adapter, state, update, updateSelection, artworkSelection);
     const workspace = root.querySelector<HTMLElement>(".workspace");
     if (workspace) workspace.scrollTop = workspaceScrollTop;
     scheduleThumbnailPreparation();
@@ -109,16 +159,46 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
             prepared.remaining === 0 ||
             prepared.generated === 0;
           if (refreshWorkbench && generatedSinceSnapshot > 0) {
-            state = {
-              ...state,
-              workbench_snapshot: await adapter.workbenchSnapshot!(
-                state.artwork_sort,
-                state.workbench_snapshot?.selected_item?.id ?? null,
-                state.search_query,
-              ),
-            };
+            const snapshotVaultRoot = state.active_vault?.root;
+            if (!snapshotVaultRoot) break;
+            const refreshedSnapshot = await adapter.workbenchSnapshot!(
+              state.artwork_sort,
+              state.workbench_snapshot?.selected_item?.id ?? null,
+              state.search_query,
+            );
             generatedSinceSnapshot = 0;
-            render();
+            const currentSnapshot = state.workbench_snapshot;
+            if (
+              state.active_vault?.root === snapshotVaultRoot
+              && currentSnapshot?.active_vault.root === snapshotVaultRoot
+            ) {
+              const refreshedArtwork = new Map(
+                refreshedSnapshot.artwork_items.map((item) => [item.id, item]),
+              );
+              const mergedSnapshot = {
+                ...currentSnapshot,
+                artwork_items: currentSnapshot.artwork_items.map((item) => {
+                    const refreshed = refreshedArtwork.get(item.id);
+                    return refreshed
+                      ? {
+                          ...item,
+                          thumbnail_file: refreshed.thumbnail_file,
+                          thumbnail_is_placeholder: refreshed.thumbnail_is_placeholder,
+                        }
+                      : item;
+                  }),
+              };
+              state = {
+                ...state,
+                workbench_snapshot: mergedSnapshot,
+              };
+              patchArtworkThumbnails(
+                root,
+                mergedSnapshot.artwork_items,
+                adapter,
+              );
+              updateThumbnailStatus(root, state.thumbnail_remaining ?? 0);
+            }
           } else {
             updateThumbnailStatus(root, prepared.remaining);
           }
@@ -149,6 +229,8 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       pending_item_edit: null,
       item_record_conflict: null,
       thumbnail_remaining: null,
+      pending_selected_artwork_id: null,
+      selected_artwork_error: null,
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -169,14 +251,13 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     const stateForRefresh = {
       ...state,
       pending_item_edit: draft && selected && itemRecordEditIsDirty(draft, selected) ? draft : null,
+      pending_selected_artwork_id: null,
+      selected_artwork_error: null,
     };
     void refreshWorkbench(
       adapter,
       stateForRefresh,
-      async (nextState) => {
-        state = nextState;
-        render();
-      },
+      update,
       state.artwork_sort,
       state.workbench_snapshot?.selected_item?.id ?? null,
       true,
@@ -190,6 +271,7 @@ function bindActions(
   state: AppState,
   update: StateUpdate,
   updateSelection: StateUpdate,
+  artworkSelection: ArtworkSelection,
 ): void {
   root.querySelectorAll<HTMLButtonElement>("[data-vault-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -346,7 +428,7 @@ function bindActions(
     button.addEventListener("click", async () => {
       const itemId = button.dataset.artworkId;
       if (!itemId) return;
-      await selectWorkbenchItem(adapter, state, updateSelection, itemId);
+      await artworkSelection.select(itemId);
     });
   });
 
@@ -360,12 +442,15 @@ function bindActions(
       itemRecordEditIsDirty(itemRecordEdit(form, selected, false), selected) &&
       !window.confirm("Discard unsaved Item Record changes?")
     ) return;
+    artworkSelection.cancel();
     await updateSelection({
       ...state,
       workbench_snapshot: { ...state.workbench_snapshot, selected_item: null },
       selected_review_reason_id: null,
       pending_item_edit: null,
       item_record_conflict: null,
+      pending_selected_artwork_id: null,
+      selected_artwork_error: null,
     });
   });
 
@@ -701,25 +786,6 @@ async function refreshWorkbench(
   }
 }
 
-async function selectWorkbenchItem(
-  adapter: DesktopAdapter,
-  state: AppState,
-  update: (state: AppState) => Promise<void>,
-  itemId: string,
-): Promise<void> {
-  if (!adapter.workbenchSnapshot) return;
-  try {
-    const snapshot = await adapter.workbenchSnapshot(
-      state.artwork_sort,
-      itemId,
-      state.search_query,
-    );
-    await update({ ...state, workbench_snapshot: snapshot, error: null });
-  } catch (error) {
-    await update({ ...state, error: errorMessage(error) });
-  }
-}
-
 function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
   return `
     <div class="app-shell" aria-busy="${state.busy}">
@@ -796,7 +862,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
   const snapshot = state.workbench_snapshot;
   if (!snapshot) return "";
   const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
-  const selected = snapshot.selected_item;
+  const selectedId = state.pending_selected_artwork_id ?? snapshot.selected_item?.id ?? null;
 
   return `
     <section class="artwork-workspace">
@@ -853,7 +919,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
 
       ${reviewQueueTemplate(snapshot, state)}
 
-      <div class="artwork-content ${selected ? "has-selection" : ""}">
+      <div class="artwork-content ${selectedId ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
           ${
             snapshot.artwork_items.length === 0
@@ -861,9 +927,9 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
               : snapshot.artwork_items
                   .map(
                     (item) => `
-                      <button class="artwork-card ${selected?.id === item.id ? "is-selected" : ""}" type="button"
+                      <button class="artwork-card ${selectedId === item.id ? "is-selected" : ""}" type="button"
                         data-artwork-id="${escapeHtml(item.id)}" ${state.busy ? "disabled" : ""}>
-                        <span class="artwork-preview ${item.thumbnail_is_placeholder ? "is-placeholder" : ""}">
+                        <span class="artwork-preview ${item.thumbnail_is_placeholder ? "is-placeholder" : ""}" data-artwork-preview>
                           <img src="${fileUrl(item.thumbnail_file)}" alt="${escapeHtml(item.title)}" width="480" height="360" loading="lazy" decoding="async">
                         </span>
                         <span class="artwork-caption">
@@ -887,14 +953,29 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
 
 function artworkDetailsTemplate(state: AppState, adapter: DesktopAdapter): string {
   const snapshot = state.workbench_snapshot;
-  const selected = snapshot?.selected_item;
-  if (!snapshot || !selected) return "";
-  const selectedArtwork = snapshot.artwork_items.find((item) => item.id === selected.id);
+  if (!snapshot) return "";
+  const selectedId = state.pending_selected_artwork_id ?? snapshot.selected_item?.id ?? null;
+  if (!selectedId) return "";
+  const selected = snapshot.selected_item?.id === selectedId ? snapshot.selected_item : null;
+  const selectedArtwork = snapshot.artwork_items.find((item) => item.id === selectedId);
+  if (!selected && !selectedArtwork) return "";
   const fileUrl = (path: string) => escapeHtml(adapter.fileUrl?.(path) ?? path);
+  if (!selected) {
+    const selectionError = state.selected_artwork_error;
+    return `
+      <aside class="artwork-details" aria-label="Artwork details" aria-busy="${selectionError ? "false" : "true"}">
+        <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
+        <img class="primary-file" data-artwork-detail-preview src="${fileUrl(selectedArtwork!.thumbnail_file)}" alt="Preview of ${escapeHtml(selectedArtwork!.title)}" width="480" height="360" decoding="async">
+        <p class="eyebrow">${selectionError ? "Item Details unavailable" : "Loading Item Record…"}</p>
+        <h2>${escapeHtml(selectedArtwork!.title)}</h2>
+        <p class="detail-byline">${escapeHtml(metadataLine(selectedArtwork!.creator, selectedArtwork!.year))}</p>
+        ${selectionError ? `<p class="error-message" role="alert">${escapeHtml(selectionError)}</p>` : ""}
+      </aside>`;
+  }
   return `
     <aside class="artwork-details" aria-label="Artwork details">
       <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
-      ${selectedArtwork ? `<img class="primary-file" src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
+      ${selectedArtwork ? `<img class="primary-file" data-artwork-detail-preview src="${fileUrl(selectedArtwork.thumbnail_file)}" alt="Preview of ${escapeHtml(selected.title)}" width="480" height="360" decoding="async">` : ""}
       ${selectedArtwork ? '<p class="eyebrow">Thumbnail preview</p>' : ""}
       <h2>${escapeHtml(selected.title)}</h2>
       <p class="detail-byline">${escapeHtml(metadataLine(selected.creator, selected.year))}</p>
@@ -919,6 +1000,7 @@ function patchArtworkSelection(
   state: AppState,
   update: StateUpdate,
   updateSelection: StateUpdate,
+  artworkSelection: ArtworkSelection,
 ): void {
   const content = root.querySelector<HTMLElement>(".artwork-content");
   if (!content || !state.workbench_snapshot) {
@@ -926,7 +1008,9 @@ function patchArtworkSelection(
     return;
   }
 
-  const selectedId = state.workbench_snapshot.selected_item?.id ?? null;
+  const selectedId = state.pending_selected_artwork_id
+    ?? state.workbench_snapshot.selected_item?.id
+    ?? null;
   content.classList.toggle("has-selection", selectedId !== null);
   content.querySelectorAll<HTMLElement>("[data-artwork-id]").forEach((card) => {
     card.classList.toggle("is-selected", card.dataset.artworkId === selectedId);
@@ -935,7 +1019,9 @@ function patchArtworkSelection(
   if (selectedId) {
     content.insertAdjacentHTML("beforeend", artworkDetailsTemplate(state, adapter));
     const details = content.querySelector<HTMLElement>(".artwork-details");
-    if (details) bindActions(details, adapter, state, update, updateSelection);
+    if (details) {
+      bindActions(details, adapter, state, update, updateSelection, artworkSelection);
+    }
   }
 }
 
@@ -1221,6 +1307,31 @@ function updateThumbnailStatus(root: HTMLElement, remaining: number): void {
   if (!status) return;
   status.hidden = remaining === 0;
   status.textContent = thumbnailStatusText(remaining);
+}
+
+function patchArtworkThumbnails(
+  root: HTMLElement,
+  artworkItems: ArtworkGridItem[],
+  adapter: DesktopAdapter,
+): void {
+  const artworkById = new Map(artworkItems.map((item) => [item.id, item]));
+  root.querySelectorAll<HTMLElement>(".artwork-card[data-artwork-id]").forEach((card) => {
+    const item = artworkById.get(card.dataset.artworkId ?? "");
+    if (!item) return;
+    const preview = card.querySelector<HTMLElement>("[data-artwork-preview]");
+    preview?.classList.toggle("is-placeholder", item.thumbnail_is_placeholder);
+    const image = preview?.querySelector<HTMLImageElement>("img");
+    if (image) image.src = adapter.fileUrl?.(item.thumbnail_file) ?? item.thumbnail_file;
+  });
+
+  const selectedId = root
+    .querySelector<HTMLElement>(".artwork-card.is-selected[data-artwork-id]")
+    ?.dataset.artworkId;
+  const selected = selectedId ? artworkById.get(selectedId) : null;
+  const detailPreview = root.querySelector<HTMLImageElement>("[data-artwork-detail-preview]");
+  if (selected && detailPreview) {
+    detailPreview.src = adapter.fileUrl?.(selected.thumbnail_file) ?? selected.thumbnail_file;
+  }
 }
 
 function thumbnailStatusText(remaining: number | null): string {

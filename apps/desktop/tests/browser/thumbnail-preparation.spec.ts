@@ -6,7 +6,9 @@ test("shows the gallery before preparing missing Thumbnail Previews in backgroun
   await page.addInitScript(() => {
     let prepared = false;
     let finishBatch: (() => void) | null = null;
-    const snapshot = () => ({
+    let finishSnapshot: (() => void) | null = null;
+    let snapshotCalls = 0;
+    const snapshot = (selectedItemId: string | null = null) => ({
       active_vault: { root: "/vault" },
       subvaults: ["Paintings"],
       collections: [],
@@ -20,16 +22,33 @@ test("shows the gallery before preparing missing Thumbnail Previews in backgroun
         thumbnail_is_placeholder: !prepared,
         review_status: "reviewed",
       }],
-      idea_sources: [], review_queue: [], search_results: [], selected_item: null,
+      idea_sources: [], review_queue: [], search_results: [],
+      selected_item: selectedItemId ? {
+        id: "large", title: "Large Artwork", creator: "Artist", year: "2024",
+        primary_file: "/vault/large.webp", home_subvault: "Paintings",
+        item_folder: "/vault/large", review_status: "reviewed", review_reasons: [],
+        tags: [], collections: [], item_links: [], saving_reason: null, source_link: null,
+        summary: null, source_copy: null, record_revision: "r1", folder_rename_proposal: null,
+      } : null,
       vault_problems: [], trashed_items: [],
     });
-    Object.assign(window, { __finishThumbnailBatch: () => finishBatch?.() });
+    Object.assign(window, {
+      __finishThumbnailBatch: () => finishBatch?.(),
+      __finishThumbnailSnapshot: () => finishSnapshot?.(),
+      __thumbnailSnapshotCalls: () => snapshotCalls,
+    });
     window.__GG_TEST_ADAPTER__ = {
       startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
       selectFolder: async () => null, createVault: async root => ({ root }),
       openVault: async root => ({ status: "opened", vault: { root } }),
       confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
-      workbenchSnapshot: async () => snapshot(),
+      workbenchSnapshot: async (_sort, selectedItemId) => {
+        snapshotCalls += 1;
+        if (snapshotCalls === 2) {
+          await new Promise<void>((resolve) => { finishSnapshot = resolve; });
+        }
+        return snapshot(selectedItemId);
+      },
       prepareThumbnailPreviews: async () => {
         await new Promise<void>((resolve) => { finishBatch = resolve; });
         prepared = true;
@@ -40,10 +59,20 @@ test("shows the gallery before preparing missing Thumbnail Previews in backgroun
   });
 
   await page.goto("/");
-  const image = page.getByRole("img", { name: "Large Artwork" });
+  const image = page.locator('[data-artwork-id="large"] img');
   await expect(image).toHaveAttribute("src", "/derived/large.pending.png");
   await page.evaluate(() => (window as any).__finishThumbnailBatch());
+  await expect.poll(() => page.evaluate(() => (window as any).__thumbnailSnapshotCalls())).toBe(2);
+  await page.locator('[data-artwork-id="large"]').click();
+  await expect(page.locator("[data-item-record-form]")).toBeVisible();
+  const form = page.locator("[data-item-record-form]");
+  const title = form.locator('[name="title"]');
+  await title.fill("Unsaved title draft");
+  const originalForm = await form.elementHandle();
+  await page.evaluate(() => (window as any).__finishThumbnailSnapshot());
   await expect(image).toHaveAttribute("src", "/derived/large.png");
+  await expect(title).toHaveValue("Unsaved title draft");
+  expect(await originalForm?.evaluate((element) => element.isConnected)).toBe(true);
 });
 
 test("does not rebuild the full workbench after every background Thumbnail Preview", async ({

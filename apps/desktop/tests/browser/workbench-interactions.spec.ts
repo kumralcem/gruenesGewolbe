@@ -4,6 +4,99 @@ const pixel =
   "data:image/svg+xml," +
   encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="#315f4d"/></svg>');
 
+test("keeps delayed Item Details responsive and scoped to the latest selection", async ({ page }) => {
+  await page.addInitScript((imageUrl) => {
+    const items = [1, 2, 3].map((number) => ({
+      id: `item-${number}`, title: `Artwork ${number}`, creator: "Artist", year: "2024",
+      primary_file: `/vault/item-${number}.jpg`, thumbnail_file: `/derived/item-${number}.png`,
+      thumbnail_is_placeholder: false, review_status: "reviewed",
+    }));
+    const secondVaultItem = {
+      id: "item-b", title: "Vault B Artwork", creator: "Artist", year: "2025",
+      primary_file: "/vault-b/item-b.jpg", thumbnail_file: "/derived/item-b.png",
+      thumbnail_is_placeholder: false, review_status: "reviewed",
+    };
+    let activeRoot = "/vault";
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({
+        active_vault: { root: "/vault" }, known_vaults: [{ root: "/vault-b" }], repair_proposal: null, notice: null,
+      }),
+      selectFolder: async () => null,
+      createVault: async (root) => ({ root }),
+      openVault: async (root) => {
+        activeRoot = root;
+        return { status: "opened" as const, vault: { root } };
+      },
+      confirmVaultRepair: async (root) => ({ root }),
+      cancelVaultRepair: async () => {},
+      workbenchSnapshot: async (_sort, selectedItemId) => {
+        const requestedRoot = activeRoot;
+        if (selectedItemId === "item-1") await new Promise((resolve) => setTimeout(resolve, 600));
+        if (selectedItemId === "item-2") await new Promise((resolve) => setTimeout(resolve, 50));
+        if (selectedItemId === "item-3") {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          throw new Error("Item Record could not be read");
+        }
+        const selected = items.find((item) => item.id === selectedItemId);
+        if (requestedRoot === "/vault-b") {
+          return {
+            active_vault: { root: requestedRoot }, subvaults: ["Paintings"], collections: [],
+            artwork_items: [secondVaultItem], idea_sources: [], review_queue: [], search_results: [],
+            vault_problems: [], trashed_items: [], selected_item: null,
+          };
+        }
+        return {
+          active_vault: { root: requestedRoot }, subvaults: ["Paintings"], collections: [],
+          artwork_items: items, idea_sources: [], review_queue: [], search_results: [],
+          vault_problems: [], trashed_items: [],
+          selected_item: selected ? {
+            ...selected, home_subvault: "Paintings", item_folder: `/vault/${selected.id}`,
+            review_reasons: [], tags: [], collections: [], item_links: [], saving_reason: null,
+            source_link: null, summary: null, source_copy: null, record_revision: "r1",
+            folder_rename_proposal: null,
+          } : null,
+        };
+      },
+      fileUrl: () => imageUrl,
+    };
+  }, pixel);
+  await page.goto("/");
+
+  await page.locator('[data-artwork-id="item-1"]').click();
+  await expect(page.getByRole("img", { name: "Preview of Artwork 1" })).toBeVisible({ timeout: 150 });
+  await page.getByRole("button", { name: "Close Item Details" }).click();
+  await expect(page.getByRole("complementary", { name: "Artwork details" })).toHaveCount(0);
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("complementary", { name: "Artwork details" })).toHaveCount(0);
+
+  await page.locator('[data-artwork-id="item-1"]').click();
+  await page.locator('[data-artwork-id="item-2"]').click();
+  await expect(page.getByRole("img", { name: "Preview of Artwork 2" })).toBeVisible({ timeout: 150 });
+  await expect(page.locator('[data-item-record-form] input[name="title"]')).toHaveValue("Artwork 2");
+  await page.waitForTimeout(600);
+  await expect(page.getByRole("heading", { name: "Artwork 2" })).toBeVisible();
+
+  const shell = await page.locator(".app-shell").elementHandle();
+  await page.locator('[data-artwork-id="item-3"]').click();
+  await expect(page.getByRole("img", { name: "Preview of Artwork 3" })).toBeVisible({ timeout: 150 });
+  await expect(page.getByText("Item Record could not be read")).toBeVisible();
+  expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
+  await expect(page.getByRole("heading", { name: "Artwork 3" })).toBeVisible();
+
+  await page.locator('[data-artwork-id="item-1"]').click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("heading", { name: "Artwork 1" })).toHaveCount(0);
+  await expect(page.locator('[data-item-record-form] input[name="title"]')).toHaveValue("Artwork 2");
+
+  await page.locator('[data-artwork-id="item-1"]').click();
+  await page.locator('[data-known-vault="/vault-b"]').click();
+  await expect(page.getByTestId("active-vault")).toHaveText("/vault-b");
+  await expect(page.getByRole("button", { name: /Vault B Artwork/ })).toBeVisible();
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("heading", { name: "Artwork 1" })).toHaveCount(0);
+});
+
 test("keeps navigation in the viewport and opens dismissible details without jumping", async ({
   page,
 }) => {
