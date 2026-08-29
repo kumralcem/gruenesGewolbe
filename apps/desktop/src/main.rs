@@ -2,18 +2,28 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use gruenes_gewolbe_core::{SourceExtraction, SourceExtractionRequest, SourceExtractor};
+
 use gruenes_gewolbe_desktop::{
-    ActiveVaultView, AddArtworkFilesCommand, ConfirmItemFolderRenameCommand, DesktopStartupView,
+    source_extractor, ActiveVaultView, AddArtworkFilesCommand, CaptureSourceLinkCommand, ConfirmItemFolderRenameCommand, CopiedImageCommand, DesktopStartupView,
     DuplicateCandidateResolutionView, ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView,
-    OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
+    ManualFallbackCaptureCommand, OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
     ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView,
-    SelectedFileImportSummaryView, TauriCommandState, ThumbnailPreparationView,
+    SelectedFileImportSummaryView, SourceCaptureResultView, TauriCommandState, ThumbnailPreparationView,
     WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
 
 type CommandState = Arc<Mutex<TauriCommandState>>;
 type ImportCancellation = Arc<AtomicBool>;
+
+struct CompletedExtraction(SourceExtraction);
+
+impl SourceExtractor for CompletedExtraction {
+    fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
+        self.0.clone()
+    }
+}
 
 fn decode_media_path(encoded_path: &str) -> Result<PathBuf, String> {
     let bytes = encoded_path
@@ -183,6 +193,66 @@ async fn run_paintings_import(
 #[tauri::command]
 fn cancel_paintings_import(cancellation: State<'_, ImportCancellation>) {
     cancellation.store(true, Ordering::Release);
+}
+
+#[tauri::command]
+async fn capture_source_link(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<SourceCaptureResultView, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let extractor = source_extractor::BoundedSourceExtractor::new()?;
+        let active_root = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let extraction = extractor.extract(SourceExtractionRequest {
+            source_link: source_link.clone(),
+        });
+        let guard = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?;
+        guard
+            .capture_source_link(
+                CaptureSourceLinkCommand { source_link, title, saving_reason },
+                &CompletedExtraction(extraction),
+                Some(active_root.as_path()),
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("capture task failed: {error}"))?
+}
+
+#[tauri::command]
+fn capture_manual_fallback(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    copied_image_file_name: Option<String>,
+    copied_image_bytes: Option<Vec<u8>>,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    let copied_image = match (copied_image_file_name, copied_image_bytes) {
+        (Some(file_name), Some(bytes)) if !bytes.is_empty() => Some(CopiedImageCommand { file_name, bytes }),
+        _ => None,
+    };
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .capture_manual_fallback(ManualFallbackCaptureCommand {
+            source_link,
+            title,
+            saving_reason,
+            copied_text,
+            copied_image,
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -411,6 +481,8 @@ fn main() {
             add_artwork_files,
             run_paintings_import,
             cancel_paintings_import,
+            capture_source_link,
+            capture_manual_fallback,
             workbench_snapshot,
             refresh_workbench,
             prepare_thumbnail_previews,

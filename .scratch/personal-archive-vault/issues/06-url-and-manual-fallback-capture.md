@@ -14,8 +14,8 @@ Manual fallback should accept a source link, saving reason, copied image data, a
 
 ## Acceptance criteria
 
-- [ ] A user can save a source link with an optional saving reason from the native workbench into the Active Vault.
-- [ ] A native visual capture preserves the Best Available File from the chosen source without silently replacing it later.
+- [x] A user can save a source link with an optional saving reason from the native workbench into the Active Vault.
+- [x] A native visual capture preserves the Best Available File from the chosen source without silently replacing it later.
 - [x] An idea capture preserves cleaned text as the source copy when extraction succeeds.
 - [x] Failed or incomplete extraction offers manual fallback instead of blocking capture.
 - [x] Manual fallback records the source link, saving reason, copied image data and/or copied text, and review status.
@@ -31,3 +31,19 @@ Manual fallback should accept a source link, saving reason, copied image data, a
 Implemented with TDD. Evidence: `crates/archive-core/tests/capture.rs`, `apps/desktop/tests/capture.rs`, `crates/archive-core/tests/workbench.rs`, and `crates/archive-cli/tests/capture.rs`. URL capture now goes through a source-extraction boundary: successful extraction persists cleaned text into the vault, while blocked extraction returns a prefilled manual fallback prompt rather than creating a partial item or failing hard.
 
 - 2026-08-20 dogfood correction: the checked evidence above proves archive-core, desktop-shell, and CLI boundaries with fake extractors, but the Tauri command is not registered and the workbench exposes neither URL Capture nor Manual Fallback. The remaining agent-ready slice must add the native capture surface and real bounded extractor adapters (with X.com fallback and Wikimedia handling); it must not present manual URL storage as automatic extraction.
+
+- 2026-08-29 native capture slice: Capture Link is on the workbench. Wikimedia Commons pages and `upload.wikimedia.org` media persist as Paintings artwork with Source Link provenance and `capture_method: extracted-image`. X.com, Wikipedia article hosts, generic pages, non-HTTPS, and credentialed URLs return a prefilled Manual Fallback into Idea Sources. Copied text and pasted image bytes keep the Source Link. Surrounding discussion is not fetched. Network extraction runs outside the desktop state mutex; persistence is rejected if the Active Vault changes. Wikimedia records omit Import Provenance and never point at `.gruenesgewolbe/capture-staging`. Local imports still omit `source_link` / `capture_method`. Bounded `reqwest` (optional, rustls, blocking, 15s timeout, 2 MiB page / 50 MiB image, max 4 Wikimedia-only redirects) is the HTTPS adapter; generic crawling remains out of this slice. Native GUI smoke of one Wikimedia URL and one X/manual-fallback URL is still requested separately and was not run here.
+
+  Verification (serial; Steam closed; Playwright `--workers=2`; no native window):
+  - `cargo test -p gruenes-gewolbe-core --test capture --test artwork_items --test paintings_import`
+  - `cargo test -p gruenes-gewolbe-desktop --test tauri_commands --test capture --test tauri_scaffold`
+  - `cargo test -p gruenes-gewolbe-desktop --all-features source_extractor` (7/7)
+  - `cargo check -p gruenes-gewolbe-desktop --all-features`
+  - `pnpm build` in `apps/desktop`
+  - `pnpm exec playwright test --workers=2 tests/browser/url-capture.spec.ts` (2/2)
+  - `cargo test -p gruenes-gewolbe-core`
+  - `cargo test -p gruenes-gewolbe-desktop`
+  - `cargo test -p gruenes-gewolbe-cli`
+  - `pnpm exec playwright test --workers=2` in `apps/desktop` (30/30 after layout snapshot update)
+
+  Review vs `c7431cc`: Manual Fallback title is optional (Untitled Capture). Wikimedia extraction prefers the original upload over `/thumb/` and unwraps Commons thumbnail Open Graph URLs. Capture draft reset is centralized. Active Vault change is enforced once at persist time. `imported_at` remains on captured artwork because gallery newest-sort already reads it as added_at; Import Provenance path/filename fields stay omitted. Generic cleaned-text extraction and native GUI smoke were not added.

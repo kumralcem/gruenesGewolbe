@@ -234,6 +234,70 @@ fn url_capture_persists_extracted_cleaned_text_when_extraction_succeeds() {
     fs::remove_dir_all(&root).expect("clean temp vault");
 }
 
+#[test]
+fn url_capture_preserves_extracted_visual_bytes_with_source_provenance() {
+    let root = temp_path("capture-url-image-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let extractor = FakeExtractor::new(SourceExtraction::ExtractedImage {
+        title: Some("The Great Wave".to_string()),
+        file_name: "great-wave.jpg".to_string(),
+        bytes: b"best available image bytes".to_vec(),
+    });
+
+    let result = vault
+        .capture_source_link(
+            SourceLinkCapture {
+                source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+                title: "Wikimedia capture".into(),
+                saving_reason: Some("Composition reference".into()),
+            },
+            &extractor,
+        )
+        .expect("capture extracted image");
+
+    let SourceCaptureResult::Captured(captured) = result else {
+        panic!("expected captured visual source");
+    };
+    assert_eq!(captured.home_subvault(), "Paintings");
+    assert_eq!(
+        fs::read(captured.item_folder().join("files/great-wave.jpg"))
+            .expect("read preserved image"),
+        b"best available image bytes"
+    );
+    let record = fs::read_to_string(captured.item_folder().join("record.md"))
+        .expect("read Item Record");
+    assert!(record.contains("item_type: artwork"));
+    assert!(record.contains("title: The Great Wave"));
+    assert!(record.contains("source_link: https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg"));
+    assert!(record.contains("primary_file: files/great-wave.jpg"));
+    assert!(record.contains("capture_method: extracted-image"));
+    assert!(record.contains("imported_at: "));
+    assert!(!record.contains("capture-staging"));
+    assert!(!record.contains("import_original_filename:"));
+    assert!(!record.contains("import_source_path:"));
+    assert!(!record.contains("import_source_folder:"));
+    let staging = root.join(".gruenesgewolbe").join("capture-staging");
+    assert!(
+        !staging.exists()
+            || fs::read_dir(&staging)
+                .expect("read capture staging")
+                .next()
+                .is_none()
+    );
+    assert_eq!(
+        vault.item_details(captured.id()).expect("read captured details").source_link(),
+        Some("https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg")
+    );
+    assert_eq!(
+        vault.browse_artwork_items("Paintings").expect("browse captured artwork")[0]
+            .saved_item()
+            .id(),
+        captured.id()
+    );
+
+    fs::remove_dir_all(root).expect("clean temp vault");
+}
+
 #[derive(Debug)]
 struct FakeExtractor {
     response: SourceExtraction,

@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gruenes_gewolbe_desktop::{
-    AddArtworkFilesCommand, CaptureIdeaCommand, ImportPaintingsCommand, OpenVaultView,
+    AddArtworkFilesCommand, CaptureIdeaCommand, CaptureSourceLinkCommand, CopiedImageCommand,
+    ImportPaintingsCommand, ManualFallbackCaptureCommand, OpenVaultView,
     ResolveDuplicateCandidateCommand, RunPaintingsImportCommand, TauriCommandState,
     WorkbenchSnapshotCommand,
 };
+use gruenes_gewolbe_core::{SourceExtraction, SourceExtractionRequest, SourceExtractor};
 
 #[test]
 fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
@@ -68,6 +70,124 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn tauri_command_captures_extracted_wikimedia_bytes_into_the_active_vault() {
+    let root = temp_path("tauri-url-image-vault");
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).expect("create Vault");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedImage {
+        title: Some("The Great Wave".into()),
+        file_name: "wave.jpg".into(),
+        bytes: b"preserved Wikimedia bytes".to_vec(),
+    });
+
+    let result = state.capture_source_link(
+        CaptureSourceLinkCommand {
+            source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+            title: String::new(),
+            saving_reason: Some("Print reference".into()),
+        },
+        &extractor,
+        Some(root.as_path()),
+    ).expect("capture source through command");
+    let value = serde_json::to_value(result).expect("serialize result");
+    assert_eq!(value["status"], "captured");
+    assert_eq!(value["item"]["home_subvault"], "Paintings");
+    let folder = PathBuf::from(value["item"]["item_folder"].as_str().expect("item folder"));
+    assert_eq!(fs::read(folder.join("files/wave.jpg")).expect("read preserved file"), b"preserved Wikimedia bytes");
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+#[test]
+fn tauri_command_rejects_capture_when_the_active_vault_changed() {
+    let first = temp_path("tauri-url-vault-switch-a");
+    let second = temp_path("tauri-url-vault-switch-b");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(first.display().to_string())
+        .expect("create first Vault");
+    let first_root = state.active_vault_root().expect("first Active Vault");
+    state
+        .create_vault(second.display().to_string())
+        .expect("create second Vault");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedImage {
+        title: Some("The Great Wave".into()),
+        file_name: "wave.jpg".into(),
+        bytes: b"should not be preserved".to_vec(),
+    });
+
+    let error = state
+        .capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+                title: String::new(),
+                saving_reason: None,
+            },
+            &extractor,
+            Some(first_root.as_path()),
+        )
+        .expect_err("reject capture after Active Vault switch");
+    assert!(error
+        .to_string()
+        .contains("Active Vault changed while the Source Link was being captured"));
+    assert!(!first
+        .join("subvaults")
+        .join("Paintings")
+        .join("items")
+        .exists());
+    assert!(!second
+        .join("subvaults")
+        .join("Paintings")
+        .join("items")
+        .exists());
+
+    fs::remove_dir_all(first).expect("clean first Vault");
+    fs::remove_dir_all(second).expect("clean second Vault");
+}
+
+#[test]
+fn tauri_command_saves_manual_fallback_into_idea_sources() {
+    let root = temp_path("tauri-manual-fallback-vault");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
+
+    let captured = state
+        .capture_manual_fallback(ManualFallbackCaptureCommand {
+            source_link: "https://x.com/example/status/1".into(),
+            title: "Saved post".into(),
+            saving_reason: Some("Remember the composition notes".into()),
+            copied_text: Some("The post text, without surrounding replies.".into()),
+            copied_image: Some(CopiedImageCommand {
+                file_name: "pasted.png".into(),
+                bytes: vec![1, 2, 3],
+            }),
+        })
+        .expect("save Manual Fallback");
+    assert_eq!(captured.home_subvault, "Idea Sources");
+    let folder = PathBuf::from(&captured.item_folder);
+    assert_eq!(
+        fs::read(folder.join("files/pasted.png")).expect("read copied image"),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("source-copies/cleaned-text.md")).expect("read copied text"),
+        "The post text, without surrounding replies.\n"
+    );
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+struct FakeExtractor(SourceExtraction);
+
+impl SourceExtractor for FakeExtractor {
+    fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
+        self.0.clone()
+    }
 }
 
 #[test]

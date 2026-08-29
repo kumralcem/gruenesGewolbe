@@ -12,10 +12,13 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
 
+#[cfg(feature = "tauri-runtime")]
+pub mod source_extractor;
+
 use gruenes_gewolbe_core::{
     AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
-    CollectionDefinition, DuplicateCandidateAction, DuplicateCandidateResolution,
+    CollectionDefinition, CopiedImage, DuplicateCandidateAction, DuplicateCandidateResolution,
     DuplicateCandidateResolutionOutcome, ExactDuplicatePolicy, ExtractedTextCapture,
     IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails,
     ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture,
@@ -852,6 +855,47 @@ impl TauriCommandState {
             .map(SavedItemView::from)
     }
 
+    pub fn capture_source_link(
+        &self,
+        command: CaptureSourceLinkCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        if let Some(expected_root) = expected_active_root {
+            if self.active_vault_root().as_deref() != Some(expected_root) {
+                return Err(DesktopShellError::ActiveVaultChanged);
+            }
+        }
+        self.shell
+            .capture_source_link(
+                SourceLinkCapture {
+                    source_link: command.source_link,
+                    title: command.title,
+                    saving_reason: command.saving_reason,
+                },
+                extractor,
+            )
+            .map(SourceCaptureResultView::from)
+    }
+
+    pub fn capture_manual_fallback(
+        &self,
+        command: ManualFallbackCaptureCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .manual_fallback_capture(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: command.copied_image.map(|image| CopiedImage {
+                    file_name: image.file_name,
+                    bytes: image.bytes,
+                }),
+            })
+            .map(SavedItemView::from)
+    }
+
     pub fn workbench_snapshot(
         &self,
         command: WorkbenchSnapshotCommand,
@@ -1246,6 +1290,28 @@ pub struct CaptureIdeaCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureSourceLinkCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualFallbackCaptureCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+    pub copied_text: Option<String>,
+    pub copied_image: Option<CopiedImageCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopiedImageCommand {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbenchSnapshotCommand {
     pub home_subvault: String,
     pub artwork_sort: String,
@@ -1365,6 +1431,34 @@ impl From<SavedItem> for SavedItemView {
             id: item.id().to_string(),
             home_subvault: item.home_subvault().to_string(),
             item_folder: path_string(item.item_folder()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SourceCaptureResultView {
+    Captured { item: SavedItemView },
+    NeedsManualFallback {
+        source_link: String,
+        title: String,
+        saving_reason: Option<String>,
+        reason: String,
+    },
+}
+
+impl From<SourceCaptureResult> for SourceCaptureResultView {
+    fn from(result: SourceCaptureResult) -> Self {
+        match result {
+            SourceCaptureResult::Captured(item) => Self::Captured {
+                item: SavedItemView::from(item),
+            },
+            SourceCaptureResult::NeedsManualFallback(prompt) => Self::NeedsManualFallback {
+                source_link: prompt.source_link().to_string(),
+                title: prompt.title().to_string(),
+                saving_reason: prompt.saving_reason().map(str::to_string),
+                reason: prompt.reason().to_string(),
+            },
         }
     }
 }
@@ -1848,6 +1942,7 @@ impl OpenAiProviderConfig {
 #[derive(Debug)]
 pub enum DesktopShellError {
     NoActiveVault,
+    ActiveVaultChanged,
     NoPendingVaultRepair(PathBuf),
     AppStateNotConfigured,
     MalformedProviderConfig(PathBuf),
@@ -1861,6 +1956,10 @@ impl std::fmt::Display for DesktopShellError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoActiveVault => write!(f, "no active vault is open"),
+            Self::ActiveVaultChanged => write!(
+                f,
+                "Active Vault changed while the Source Link was being captured"
+            ),
             Self::NoPendingVaultRepair(path) => {
                 write!(f, "no vault repair is pending for: {}", path.display())
             }
@@ -1882,6 +1981,7 @@ impl std::error::Error for DesktopShellError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NoActiveVault => None,
+            Self::ActiveVaultChanged => None,
             Self::NoPendingVaultRepair(_) => None,
             Self::AppStateNotConfigured => None,
             Self::MalformedProviderConfig(_) => None,

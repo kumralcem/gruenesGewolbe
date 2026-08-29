@@ -78,6 +78,15 @@ for (const viewport of [
           ],
         }),
         fileUrl: () => imageUrl,
+        captureSourceLink: async () => ({
+          status: "captured" as const,
+          item: { id: item.id, home_subvault: "Paintings", item_folder: "/vault/items/nocturne" },
+        }),
+        captureManualFallback: async () => ({
+          id: "idea-1",
+          home_subvault: "Idea Sources",
+          item_folder: "/vault/ideas/idea-1",
+        }),
       };
     }, pixel);
 

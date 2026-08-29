@@ -883,6 +883,89 @@ button:disabled {
   font-size: 13px;
 }
 
+.capture-panel {
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #c7d0cc;
+  border-radius: 8px;
+  background: #f3f6f4;
+}
+
+.capture-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.capture-heading h3,
+.idea-sources h2,
+.idea-source-card h3 {
+  margin: 0;
+}
+
+.capture-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(180px, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.capture-form label,
+.capture-form textarea {
+  min-width: 0;
+}
+
+.capture-form .capture-span,
+.capture-form .form-hint,
+.capture-form .primary-button {
+  grid-column: 1 / -1;
+}
+
+.capture-form .primary-button {
+  justify-self: start;
+}
+
+.capture-fallback-reason {
+  margin: 0 0 14px;
+  color: #66716c;
+}
+
+.idea-sources {
+  margin: 22px 0;
+}
+
+.idea-source-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.idea-source-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d5dcda;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.idea-source-card p {
+  margin: 8px 0;
+}
+
+.idea-source-card .source-link {
+  overflow-wrap: anywhere;
+  color: #66716c;
+}
+
+@media (max-width: 760px) {
+  .capture-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .vault-trash.is-empty {
   display: flex;
   align-items: baseline;

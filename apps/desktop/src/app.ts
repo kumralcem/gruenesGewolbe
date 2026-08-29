@@ -12,6 +12,7 @@ import type {
   ArtworkGridItem,
   ArtworkImportOutcome,
   ArtworkSort,
+  SourceLinkCaptureResult,
   DesktopAdapter,
   DesktopStartup,
   FolderPurpose,
@@ -36,6 +37,13 @@ interface AppState extends DesktopStartup {
   thumbnail_remaining: number | null;
   pending_selected_artwork_id: string | null;
   selected_artwork_error: string | null;
+  capture_open: boolean;
+  capture_fallback: Extract<SourceLinkCaptureResult, { status: "needs_manual_fallback" }> | null;
+  capture_pasted_image: { fileName: string; bytes: number[] } | null;
+  capture_copied_text: string;
+  capture_source_link: string;
+  capture_title: string;
+  capture_saving_reason: string;
 }
 
 type StateUpdate = (state: AppState) => Promise<void>;
@@ -64,6 +72,13 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     thumbnail_remaining: null,
     pending_selected_artwork_id: null,
     selected_artwork_error: null,
+    capture_open: false,
+    capture_fallback: null,
+    capture_pasted_image: null,
+    capture_copied_text: "",
+    capture_source_link: "",
+    capture_title: "",
+    capture_saving_reason: "",
   };
 
   let thumbnailPreparationRunning = false;
@@ -231,6 +246,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       thumbnail_remaining: null,
       pending_selected_artwork_id: null,
       selected_artwork_error: null,
+      ...clearedCapture(),
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
       state = {
@@ -278,6 +294,121 @@ function bindActions(
       const purpose = button.dataset.vaultAction as FolderPurpose;
       await chooseVault(purpose, adapter, state, update);
     });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-open-link-capture]")?.addEventListener("click", async () => {
+    await update({ ...state, ...clearedCapture(), capture_open: true, error: null });
+  });
+  root.querySelector<HTMLButtonElement>("[data-close-link-capture]")?.addEventListener("click", async () => {
+    await update({ ...state, ...clearedCapture() });
+  });
+  root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.addEventListener("paste", async (event) => {
+    const image = Array.from(event.clipboardData?.items ?? [])
+      .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+      ?.getAsFile();
+    if (!image) return;
+    event.preventDefault();
+    const capturePastedImage = {
+      fileName: image.name || `pasted-image.${image.type.split("/")[1] || "png"}`,
+      bytes: Array.from(new Uint8Array(await image.arrayBuffer())),
+    };
+    const fallback = state.capture_fallback;
+    const title = inputValue(root, '[name="capture_title"]') ?? "";
+    const savingReason = inputValue(root, '[name="capture_saving_reason"]');
+    await update({
+      ...state,
+      capture_pasted_image: capturePastedImage,
+      capture_copied_text: root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value ?? "",
+      capture_title: title,
+      capture_saving_reason: savingReason ?? "",
+      capture_fallback: fallback ? {
+        ...fallback,
+        title,
+        saving_reason: savingReason,
+      } : null,
+    });
+  });
+  root.querySelector<HTMLFormElement>("[data-source-link-capture]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!adapter.captureSourceLink) return;
+    const sourceLink = inputValue(root, '[name="source_link"]');
+    if (!sourceLink) return;
+    const title = inputValue(root, '[name="capture_title"]') ?? "";
+    const savingReason = inputValue(root, '[name="capture_saving_reason"]');
+    try {
+      await update({
+        ...state,
+        busy: true,
+        error: null,
+        capture_source_link: sourceLink,
+        capture_title: title,
+        capture_saving_reason: savingReason ?? "",
+      });
+      const result = await adapter.captureSourceLink({ sourceLink, title, savingReason });
+      if (result.status === "needs_manual_fallback") {
+        await update({
+          ...state,
+          busy: false,
+          capture_open: true,
+          capture_fallback: result,
+          capture_source_link: result.source_link,
+          capture_title: result.title,
+          capture_saving_reason: result.saving_reason ?? "",
+        });
+        return;
+      }
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null, state.search_query)
+        : state.workbench_snapshot;
+      await update({
+        ...state,
+        busy: false,
+        ...clearedCapture(),
+        workbench_snapshot: snapshot,
+      });
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
+  });
+  root.querySelector<HTMLFormElement>("[data-manual-fallback-capture]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!adapter.captureManualFallback || !state.capture_fallback) return;
+    const title = inputValue(root, '[name="capture_title"]') ?? "Untitled Capture";
+    const savingReason = inputValue(root, '[name="capture_saving_reason"]');
+    const copiedText = root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value ?? "";
+    try {
+      await update({
+        ...state,
+        busy: true,
+        error: null,
+        capture_title: title,
+        capture_saving_reason: savingReason ?? "",
+        capture_copied_text: copiedText,
+        capture_fallback: {
+          ...state.capture_fallback,
+          title,
+          saving_reason: savingReason,
+        },
+      });
+      await adapter.captureManualFallback({
+        sourceLink: state.capture_fallback.source_link,
+        title,
+        savingReason,
+        copiedText: copiedText.trim() || null,
+        copiedImage: state.capture_pasted_image,
+      });
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, null, state.search_query)
+        : state.workbench_snapshot;
+      await update({
+        ...state,
+        busy: false,
+        ...clearedCapture(),
+        workbench_snapshot: snapshot,
+      });
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
   });
 
   root.querySelectorAll<HTMLButtonElement>("[data-known-vault]").forEach((button) => {
@@ -891,6 +1022,9 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
               ${sortOption("year", "Year", state.artwork_sort)}
             </select>
           </label>
+          <button class="secondary-button" type="button" data-open-link-capture ${state.busy || !adapter.captureSourceLink ? "disabled" : ""}>
+            Capture Link
+          </button>
           <button class="primary-button" type="button" data-add-artwork ${state.busy || !adapter.addArtworkFiles || !adapter.selectArtworkFiles ? "disabled" : ""}>
             <i data-lucide="folder-plus"></i>Add Artwork
           </button>
@@ -903,6 +1037,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
         </div>
       </header>
 
+      ${captureLinkTemplate(state, adapter)}
       ${importRunTemplate(state, adapter)}
       <p class="thumbnail-status" role="status" aria-live="polite" data-thumbnail-status ${state.thumbnail_remaining && state.thumbnail_remaining > 0 ? "" : "hidden"}>${thumbnailStatusText(state.thumbnail_remaining)}</p>
 
@@ -918,6 +1053,7 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       ${searchResultsTemplate(snapshot, state)}
 
       ${reviewQueueTemplate(snapshot, state)}
+      ${ideaSourcesTemplate(snapshot)}
 
       <div class="artwork-content ${selectedId ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
@@ -949,6 +1085,54 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       ${vaultTrashTemplate(snapshot, state, adapter)}
     </section>
   `;
+}
+
+function captureLinkTemplate(state: AppState, adapter: DesktopAdapter): string {
+  if (!state.capture_open) return "";
+  const fallback = state.capture_fallback;
+  return `
+    <section class="capture-panel" aria-label="Capture Link">
+      <div class="capture-heading">
+        <div><p class="eyebrow">Source capture</p><h3>${fallback ? "Manual Fallback" : "Capture a Source Link"}</h3></div>
+        <button class="detail-close" type="button" data-close-link-capture aria-label="Close Capture Link"><span aria-hidden="true">×</span></button>
+      </div>
+      ${fallback ? `
+        <p class="capture-fallback-reason" role="status">${escapeHtml(fallback.reason)}</p>
+        <form class="capture-form" data-manual-fallback-capture>
+          <label>Source Link<input name="source_link" type="url" value="${escapeHtml(fallback.source_link)}" readonly></label>
+          <label>Title <span>(optional)</span><input name="capture_title" value="${escapeHtml(fallback.title)}"></label>
+          <label>Saving Reason<input name="capture_saving_reason" value="${escapeHtml(fallback.saving_reason ?? "")}"></label>
+          <label class="capture-span">Copied Text<textarea name="copied_text" rows="5" placeholder="Paste the post or page text without surrounding discussion">${escapeHtml(state.capture_copied_text)}</textarea></label>
+          <p class="form-hint">Paste an image into the Copied Text field to preserve its bytes too. <span data-pasted-image-status>${state.capture_pasted_image ? `${escapeHtml(state.capture_pasted_image.fileName)} ready to preserve` : ""}</span></p>
+          <button class="primary-button" type="submit" ${state.busy || !adapter.captureManualFallback ? "disabled" : ""}>Save Manual Fallback</button>
+        </form>
+      ` : `
+        <form class="capture-form" data-source-link-capture>
+          <label>Source Link<input name="source_link" type="url" placeholder="https://…" value="${escapeHtml(state.capture_source_link)}" required></label>
+          <label>Title <span>(optional)</span><input name="capture_title" placeholder="Use the extracted title when available" value="${escapeHtml(state.capture_title)}"></label>
+          <label>Saving Reason <span>(optional)</span><input name="capture_saving_reason" value="${escapeHtml(state.capture_saving_reason)}"></label>
+          <p class="form-hint">Wikimedia media is preserved automatically. X.com and blocked sources continue as Manual Fallback.</p>
+          <button class="primary-button" type="submit" ${state.busy ? "disabled" : ""}>Try Capture</button>
+        </form>
+      `}
+    </section>`;
+}
+
+function ideaSourcesTemplate(snapshot: WorkbenchSnapshot): string {
+  if (snapshot.idea_sources.length === 0) return "";
+  return `
+    <section class="idea-sources" aria-labelledby="idea-sources-title">
+      <div class="section-heading"><p class="eyebrow">Text and link archive</p><h2 id="idea-sources-title">Idea Sources</h2></div>
+      <div class="idea-source-list">
+        ${snapshot.idea_sources.map((item) => `
+          <article class="idea-source-card">
+            <h3>${escapeHtml(item.title)}</h3>
+            <p>${escapeHtml(item.saving_reason ?? "No saving reason")}</p>
+            <p class="source-link">${escapeHtml(item.source_link)}</p>
+            <small>${escapeHtml(item.review_status)}${item.source_copy ? " · Source copy preserved" : ""}</small>
+          </article>`).join("")}
+      </div>
+    </section>`;
 }
 
 function artworkDetailsTemplate(state: AppState, adapter: DesktopAdapter): string {
@@ -1347,6 +1531,27 @@ function metadataLine(creator: string, year: string): string {
 function inputValue(root: HTMLElement, selector: string): string | null {
   const value = root.querySelector<HTMLInputElement>(selector)?.value.trim();
   return value || null;
+}
+
+function clearedCapture(): Pick<
+  AppState,
+  | "capture_open"
+  | "capture_fallback"
+  | "capture_pasted_image"
+  | "capture_copied_text"
+  | "capture_source_link"
+  | "capture_title"
+  | "capture_saving_reason"
+> {
+  return {
+    capture_open: false,
+    capture_fallback: null,
+    capture_pasted_image: null,
+    capture_copied_text: "",
+    capture_source_link: "",
+    capture_title: "",
+    capture_saving_reason: "",
+  };
 }
 
 function inputChecked(root: HTMLElement, selector: string): boolean {

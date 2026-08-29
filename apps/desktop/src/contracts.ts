@@ -31,6 +31,27 @@ export interface SavedItem {
   item_folder: string;
 }
 
+export interface SourceLinkCaptureRequest {
+  sourceLink: string;
+  title: string;
+  savingReason: string | null;
+}
+
+export interface ManualFallbackCaptureRequest extends SourceLinkCaptureRequest {
+  copiedText: string | null;
+  copiedImage: { fileName: string; bytes: number[] } | null;
+}
+
+export type SourceLinkCaptureResult =
+  | { status: "captured"; item: SavedItem }
+  | {
+      status: "needs_manual_fallback";
+      source_link: string;
+      title: string;
+      saving_reason: string | null;
+      reason: string;
+    };
+
 export interface ArtworkImportMetadata {
   creator: string | null;
   year: string | null;
@@ -243,6 +264,8 @@ export interface DesktopAdapter {
   moveItemToTrash?(id: string): Promise<SavedItem>;
   restoreTrashedItem?(id: string): Promise<SavedItem>;
   permanentlyDeleteTrashedItem?(id: string, confirmedId: string): Promise<PermanentDeletion>;
+  captureSourceLink?(request: SourceLinkCaptureRequest): Promise<SourceLinkCaptureResult>;
+  captureManualFallback?(request: ManualFallbackCaptureRequest): Promise<SavedItem>;
   fileUrl?(path: string): string;
 }
 

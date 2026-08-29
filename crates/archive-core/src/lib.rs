@@ -290,7 +290,7 @@ impl Vault {
     }
 
     pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, VaultError> {
-        self.preserve_artwork_item(item, true, &[], Vec::new())
+        self.preserve_artwork_item(item, true, &[], Vec::new(), None, None)
             .map(|outcome| outcome.saved_item)
     }
 
@@ -300,6 +300,8 @@ impl Vault {
         refresh_metadata_index: bool,
         excluded_duplicate_candidate_ids: &[String],
         additional_review_reasons: Vec<ReviewReason>,
+        source_link: Option<&str>,
+        capture_method: Option<&str>,
     ) -> Result<PreservedArtwork, VaultError> {
         let file_name = item
             .source_file
@@ -335,8 +337,8 @@ impl Vault {
             item.creator.as_deref(),
             item.year.as_deref(),
             Some(item.title.as_str()),
-            Some(&item.source_file),
-            None,
+            source_link.is_none().then_some(item.source_file.as_path()),
+            source_link,
             excluded_duplicate_candidate_ids,
         )?;
         let primary_file = format!("files/{}", file_name.to_string_lossy());
@@ -350,6 +352,8 @@ impl Vault {
             &file_fingerprint,
             &duplicate_candidates,
             &additional_review_reasons,
+            source_link,
+            capture_method,
         )?;
         fs::write(item_folder.join("record.md"), record)?;
         if refresh_metadata_index {
@@ -579,6 +583,8 @@ impl Vault {
                 false,
                 &duplicate_check.existing_item_ids,
                 metadata_conflicts,
+                None,
+                None,
             ) {
                 Ok(outcome) => {
                     if outcome.duplicate_candidate_count > 0 {
@@ -683,6 +689,19 @@ impl Vault {
                     cleaned_text,
                 })
                 .map(SourceCaptureResult::Captured),
+            SourceExtraction::ExtractedImage {
+                title,
+                file_name,
+                bytes,
+            } => self
+                .capture_extracted_image(
+                    capture.source_link,
+                    title.unwrap_or(capture.title),
+                    capture.saving_reason,
+                    file_name,
+                    bytes,
+                )
+                .map(SourceCaptureResult::Captured),
             SourceExtraction::NeedsManualFallback { reason } => Ok(
                 SourceCaptureResult::NeedsManualFallback(ManualFallbackPrompt {
                     source_link: capture.source_link,
@@ -692,6 +711,49 @@ impl Vault {
                 }),
             ),
         }
+    }
+
+    fn capture_extracted_image(
+        &self,
+        source_link: String,
+        title: String,
+        saving_reason: Option<String>,
+        file_name: String,
+        bytes: Vec<u8>,
+    ) -> Result<SavedItem, VaultError> {
+        let staging_root = self.root.join(HIDDEN_STATE_DIR).join("capture-staging");
+        let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&staging)?;
+        let source_file = staging.join(readable_part(Some(&file_name), "captured-image"));
+        let result = fs::write(&source_file, bytes)
+            .map_err(VaultError::from)
+            .and_then(|_| {
+                self.preserve_artwork_item(
+                    AddArtworkItem {
+                        source_file,
+                        home_subvault: "Paintings".to_string(),
+                        creator: None,
+                        year: None,
+                        title,
+                        saving_reason,
+                    },
+                    true,
+                    &[],
+                    Vec::new(),
+                    Some(&source_link),
+                    Some("extracted-image"),
+                )
+                .map(|outcome| outcome.saved_item)
+            });
+        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir(&staging_root);
+        if let Ok(saved) = &result {
+            self.append_activity_log(&format!(
+                "capture\t{}\tPaintings\textracted-image",
+                saved.id()
+            ))?;
+        }
+        result
     }
 
     fn capture_idea_source(&self, capture: IdeaSourceCapture) -> Result<SavedItem, VaultError> {
@@ -3398,6 +3460,11 @@ pub enum SourceExtraction {
         title: Option<String>,
         cleaned_text: String,
     },
+    ExtractedImage {
+        title: Option<String>,
+        file_name: String,
+        bytes: Vec<u8>,
+    },
     NeedsManualFallback {
         reason: String,
     },
@@ -4089,9 +4156,17 @@ struct ArtworkFrontmatter<'a> {
     creator: &'a str,
     year: &'a str,
     primary_file: &'a str,
-    import_original_filename: &'a str,
-    import_source_path: String,
-    import_source_folder: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_link: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_method: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_original_filename: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_source_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_source_folder: Option<String>,
+    // Gallery newest-sort reads this as added_at for every artwork item, including Source Link captures.
     imported_at: &'a str,
     file_fingerprint: &'a str,
     duplicate_candidates: Vec<String>,
@@ -4109,6 +4184,8 @@ fn artwork_record(
     file_fingerprint: &str,
     duplicate_candidates: &[DuplicateCandidate],
     additional_review_reasons: &[ReviewReason],
+    source_link: Option<&str>,
+    capture_method: Option<&str>,
 ) -> Result<String, VaultError> {
     let creator = item.creator.as_deref().unwrap_or("Unknown Creator");
     let year = item.year.as_deref().unwrap_or("Unknown Year");
@@ -4122,11 +4199,22 @@ fn artwork_record(
     } else {
         "needs-review"
     };
-    let import_source_folder = import_source_path
-        .parent()
-        .map(Path::display)
-        .map(|display| display.to_string())
-        .unwrap_or_default();
+    let (import_original_filename, import_source_path, import_source_folder) =
+        if source_link.is_some() {
+            (None, None, None)
+        } else {
+            (
+                Some(import_original_filename),
+                Some(import_source_path.display().to_string()),
+                Some(
+                    import_source_path
+                        .parent()
+                        .map(Path::display)
+                        .map(|display| display.to_string())
+                        .unwrap_or_default(),
+                ),
+            )
+        };
 
     let frontmatter = ArtworkFrontmatter {
         id,
@@ -4136,8 +4224,10 @@ fn artwork_record(
         creator,
         year,
         primary_file,
+        source_link,
+        capture_method,
         import_original_filename,
-        import_source_path: import_source_path.display().to_string(),
+        import_source_path,
         import_source_folder,
         imported_at,
         file_fingerprint,
