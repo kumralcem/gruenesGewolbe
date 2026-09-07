@@ -1,8 +1,10 @@
 import {
   Archive,
+  BookOpen,
   CircleAlert,
   FolderOpen,
   FolderPlus,
+  Images,
   Vault,
   createIcons,
 } from "lucide";
@@ -17,12 +19,15 @@ import type {
   DesktopStartup,
   FolderPurpose,
   ImportProgress,
+  IdeaSourceContent,
   ItemDetails,
   ItemRecordEdit,
+  OpenAiProviderStatus,
   WorkbenchSnapshot,
 } from "./contracts";
 
 interface AppState extends DesktopStartup {
+  active_view: "paintings" | "idea-sources";
   busy: boolean;
   error: string | null;
   artwork_sort: ArtworkSort;
@@ -44,6 +49,9 @@ interface AppState extends DesktopStartup {
   capture_source_link: string;
   capture_title: string;
   capture_saving_reason: string;
+  idea_source_reading: IdeaSourceContent | null;
+  summary_provider: OpenAiProviderStatus | null;
+  summary_notice: string | null;
 }
 
 type StateUpdate = (state: AppState) => Promise<void>;
@@ -55,6 +63,7 @@ interface ArtworkSelection {
 export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Promise<void> {
   const thumbnailSnapshotBatchSize = 8;
   let state: AppState = {
+    active_view: "paintings",
     active_vault: null,
     known_vaults: [],
     repair_proposal: null,
@@ -79,10 +88,14 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     capture_source_link: "",
     capture_title: "",
     capture_saving_reason: "",
+    idea_source_reading: null,
+    summary_provider: null,
+    summary_notice: null,
   };
 
   let thumbnailPreparationRunning = false;
   let selectionRequest = 0;
+  const requestEpoch = { value: 0 };
 
   const update: StateUpdate = async (nextState) => {
     selectionRequest += 1;
@@ -99,8 +112,10 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       item_record_conflict: nextState.item_record_conflict,
       pending_selected_artwork_id: nextState.pending_selected_artwork_id,
       selected_artwork_error: nextState.selected_artwork_error,
+      idea_source_reading: nextState.idea_source_reading,
+      summary_notice: nextState.summary_notice,
     };
-    patchArtworkSelection(root, adapter, state, update, updateSelection, artworkSelection);
+    patchArtworkSelection(root, adapter, state, update, updateSelection, artworkSelection, requestEpoch);
   };
   const selectArtwork = async (itemId: string) => {
     if (!adapter.workbenchSnapshot) return;
@@ -112,11 +127,16 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       error: null,
     });
     try {
-      const snapshot = await adapter.workbenchSnapshot(
-        state.artwork_sort,
-        itemId,
-        state.search_query,
-      );
+      const snapshot = adapter.getItemDetails && state.workbench_snapshot
+        ? {
+            ...state.workbench_snapshot,
+            selected_item: await adapter.getItemDetails(itemId),
+          }
+        : await adapter.workbenchSnapshot(
+            state.artwork_sort,
+            itemId,
+            state.search_query,
+          );
       if (request !== selectionRequest) return;
       await updateSelection({
         ...state,
@@ -144,10 +164,10 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     const workspaceScrollTop = root.querySelector<HTMLElement>(".workspace")?.scrollTop ?? 0;
     root.innerHTML = pageTemplate(state, adapter);
     createIcons({
-      icons: { Archive, CircleAlert, FolderOpen, FolderPlus, Vault },
+      icons: { Archive, BookOpen, CircleAlert, FolderOpen, FolderPlus, Images, Vault },
       attrs: { "aria-hidden": "true", width: 18, height: 18 },
     });
-    bindActions(root, adapter, state, update, updateSelection, artworkSelection);
+    bindActions(root, adapter, state, update, updateSelection, artworkSelection, requestEpoch);
     const workspace = root.querySelector<HTMLElement>(".workspace");
     if (workspace) workspace.scrollTop = workspaceScrollTop;
     scheduleThumbnailPreparation();
@@ -156,6 +176,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
   const scheduleThumbnailPreparation = () => {
     if (
       thumbnailPreparationRunning ||
+      state.pending_selected_artwork_id !== null ||
       !state.active_vault ||
       !state.workbench_snapshot ||
       !adapter.prepareThumbnailPreviews ||
@@ -233,6 +254,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
   try {
     state = {
       ...(await adapter.startup()),
+      active_view: "paintings",
       busy: false,
       error: null,
       artwork_sort: "newest",
@@ -246,6 +268,9 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       thumbnail_remaining: null,
       pending_selected_artwork_id: null,
       selected_artwork_error: null,
+      idea_source_reading: null,
+      summary_provider: null,
+      summary_notice: null,
       ...clearedCapture(),
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
@@ -253,6 +278,9 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
         ...state,
         workbench_snapshot: await adapter.workbenchSnapshot("newest", null, null),
       };
+    }
+    if (state.active_vault && adapter.openAiProviderStatus) {
+      state = { ...state, summary_provider: await adapter.openAiProviderStatus() };
     }
   } catch (error) {
     state = { ...state, busy: false, error: errorMessage(error) };
@@ -288,6 +316,7 @@ function bindActions(
   update: StateUpdate,
   updateSelection: StateUpdate,
   artworkSelection: ArtworkSelection,
+  requestEpoch: { value: number },
 ): void {
   root.querySelectorAll<HTMLButtonElement>("[data-vault-action]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -296,10 +325,32 @@ function bindActions(
     });
   });
 
+  root.querySelectorAll<HTMLButtonElement>("[data-archive-view]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const activeView = button.dataset.archiveView as AppState["active_view"];
+      if (activeView !== "paintings" && activeView !== "idea-sources") return;
+      requestEpoch.value += 1;
+      artworkSelection.cancel();
+      await update({
+        ...state,
+        active_view: activeView,
+        workbench_snapshot: state.workbench_snapshot
+          ? { ...state.workbench_snapshot, selected_item: null }
+          : null,
+        pending_selected_artwork_id: null,
+        selected_artwork_error: null,
+        idea_source_reading: null,
+        summary_notice: null,
+        ...clearedCapture(),
+      });
+    });
+  });
+
   root.querySelector<HTMLButtonElement>("[data-open-link-capture]")?.addEventListener("click", async () => {
     await update({ ...state, ...clearedCapture(), capture_open: true, error: null });
   });
   root.querySelector<HTMLButtonElement>("[data-close-link-capture]")?.addEventListener("click", async () => {
+    requestEpoch.value += 1;
     await update({ ...state, ...clearedCapture() });
   });
   root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.addEventListener("paste", async (event) => {
@@ -328,6 +379,15 @@ function bindActions(
       } : null,
     });
   });
+  root.querySelector<HTMLInputElement>('[name="source_link"]:not([readonly])')?.addEventListener("paste", (event) => {
+    const text = event.clipboardData?.getData("text/plain")?.trim() ?? "";
+    if (!/^https:\/\//i.test(text)) return;
+    event.preventDefault();
+    const input = event.currentTarget as HTMLInputElement;
+    input.value = text;
+    if (input.form?.matches("[data-idea-source-capture]")) return;
+    input.form?.requestSubmit();
+  });
   root.querySelector<HTMLFormElement>("[data-source-link-capture]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!adapter.captureSourceLink) return;
@@ -335,6 +395,7 @@ function bindActions(
     if (!sourceLink) return;
     const title = inputValue(root, '[name="capture_title"]') ?? "";
     const savingReason = inputValue(root, '[name="capture_saving_reason"]');
+    const request = ++requestEpoch.value;
     try {
       await update({
         ...state,
@@ -345,6 +406,7 @@ function bindActions(
         capture_saving_reason: savingReason ?? "",
       });
       const result = await adapter.captureSourceLink({ sourceLink, title, savingReason });
+      if (request !== requestEpoch.value) return;
       if (result.status === "needs_manual_fallback") {
         await update({
           ...state,
@@ -352,7 +414,7 @@ function bindActions(
           capture_open: true,
           capture_fallback: result,
           capture_source_link: result.source_link,
-          capture_title: result.title,
+          capture_title: derivedCaptureTitle(result.source_link, result.title),
           capture_saving_reason: result.saving_reason ?? "",
         });
         return;
@@ -367,6 +429,62 @@ function bindActions(
         workbench_snapshot: snapshot,
       });
     } catch (error) {
+      if (request !== requestEpoch.value) return;
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
+  });
+  root.querySelector<HTMLFormElement>("[data-idea-source-capture]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!adapter.captureIdeaSource) return;
+    const sourceLink = inputValue(root, '[name="source_link"]');
+    if (!sourceLink) return;
+    const title = inputValue(root, '[name="capture_title"]') ?? "";
+    const savingReason = inputValue(root, '[name="capture_saving_reason"]');
+    const copiedText = root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value.trim() || null;
+    const request = ++requestEpoch.value;
+    try {
+      await update({
+        ...state,
+        busy: true,
+        error: null,
+        capture_source_link: sourceLink,
+        capture_title: title,
+        capture_saving_reason: savingReason ?? "",
+        capture_copied_text: copiedText ?? "",
+        summary_notice: null,
+      });
+      const result = await adapter.captureIdeaSource({ sourceLink, title, savingReason, copiedText });
+      if (request !== requestEpoch.value) return;
+      if (result.status === "needs_manual_fallback") {
+        await update({
+          ...state,
+          busy: false,
+          capture_open: true,
+          capture_fallback: result,
+          capture_source_link: result.source_link,
+          capture_title: derivedCaptureTitle(result.source_link, result.title),
+          capture_saving_reason: result.saving_reason ?? "",
+          capture_copied_text: copiedText ?? "",
+          error: null,
+        });
+        return;
+      }
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, result.item.id, state.search_query)
+        : state.workbench_snapshot;
+      const reading = adapter.readIdeaSource
+        ? await adapter.readIdeaSource(result.item.id)
+        : null;
+      await update({
+        ...state,
+        busy: false,
+        ...clearedCapture(),
+        workbench_snapshot: snapshot,
+        idea_source_reading: reading,
+        summary_notice: captureSummaryNotice(result.summary_status),
+      });
+    } catch (error) {
+      if (request !== requestEpoch.value) return;
       await update({ ...state, busy: false, error: errorMessage(error) });
     }
   });
@@ -376,6 +494,17 @@ function bindActions(
     const title = inputValue(root, '[name="capture_title"]') ?? "Untitled Capture";
     const savingReason = inputValue(root, '[name="capture_saving_reason"]');
     const copiedText = root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value ?? "";
+    if (!copiedText.trim() && !state.capture_pasted_image) {
+      await update({
+        ...state,
+        capture_title: title,
+        capture_saving_reason: savingReason ?? "",
+        capture_copied_text: copiedText,
+        error: "Paste source text or an image before saving this fallback.",
+      });
+      return;
+    }
+    const request = ++requestEpoch.value;
     try {
       await update({
         ...state,
@@ -397,6 +526,7 @@ function bindActions(
         copiedText: copiedText.trim() || null,
         copiedImage: state.capture_pasted_image,
       });
+      if (request !== requestEpoch.value) return;
       const snapshot = adapter.workbenchSnapshot
         ? await adapter.workbenchSnapshot(state.artwork_sort, null, state.search_query)
         : state.workbench_snapshot;
@@ -407,6 +537,7 @@ function bindActions(
         workbench_snapshot: snapshot,
       });
     } catch (error) {
+      if (request !== requestEpoch.value) return;
       await update({ ...state, busy: false, error: errorMessage(error) });
     }
   });
@@ -551,6 +682,38 @@ function bindActions(
     button.addEventListener("click", async () => {
       const itemId = button.dataset.searchResultId;
       if (!itemId) return;
+      const isIdeaSource = state.workbench_snapshot?.idea_sources.some((item) => item.id === itemId) ?? false;
+      if (isIdeaSource && adapter.workbenchSnapshot) {
+        const request = ++requestEpoch.value;
+        try {
+          await update({
+            ...state,
+            active_view: "idea-sources",
+            busy: true,
+            error: null,
+            workbench_snapshot: state.workbench_snapshot
+              ? { ...state.workbench_snapshot, selected_item: null }
+              : null,
+            idea_source_reading: null,
+            summary_notice: null,
+          });
+          const snapshot = await adapter.workbenchSnapshot(state.artwork_sort, itemId, state.search_query);
+          const reading = adapter.readIdeaSource ? await adapter.readIdeaSource(itemId) : null;
+          if (request !== requestEpoch.value) return;
+          await update({
+            ...state,
+            active_view: "idea-sources",
+            busy: false,
+            workbench_snapshot: snapshot,
+            idea_source_reading: reading,
+            error: null,
+          });
+        } catch (error) {
+          if (request !== requestEpoch.value) return;
+          await update({ ...state, active_view: "idea-sources", busy: false, error: errorMessage(error) });
+        }
+        return;
+      }
       await refreshWorkbench(adapter, state, update, state.artwork_sort, itemId);
     });
   });
@@ -561,6 +724,72 @@ function bindActions(
       if (!itemId) return;
       await artworkSelection.select(itemId);
     });
+  });
+
+  root.querySelectorAll<HTMLButtonElement>("[data-idea-source-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const itemId = button.dataset.ideaSourceId;
+      if (!itemId || !adapter.workbenchSnapshot) return;
+      const request = ++requestEpoch.value;
+      try {
+        await update({ ...state, busy: true, error: null, idea_source_reading: null, summary_notice: null });
+        const snapshot = await adapter.workbenchSnapshot(state.artwork_sort, itemId, state.search_query);
+        const reading = adapter.readIdeaSource ? await adapter.readIdeaSource(itemId) : null;
+        if (request !== requestEpoch.value) return;
+        await update({ ...state, busy: false, workbench_snapshot: snapshot, idea_source_reading: reading, error: null });
+      } catch (error) {
+        if (request !== requestEpoch.value) return;
+        await update({ ...state, busy: false, error: errorMessage(error) });
+      }
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-summarize-idea-source]")?.addEventListener("click", async () => {
+    const selected = state.workbench_snapshot?.selected_item;
+    if (!selected || !adapter.summarizeIdeaSource) return;
+    const request = ++requestEpoch.value;
+    try {
+      await update({ ...state, busy: true, error: null, summary_notice: "Creating summary…" });
+      const result = await adapter.summarizeIdeaSource(selected.id, "standard");
+      const snapshot = adapter.workbenchSnapshot
+        ? await adapter.workbenchSnapshot(state.artwork_sort, selected.id, state.search_query)
+        : state.workbench_snapshot;
+      const reading = adapter.readIdeaSource
+        ? await adapter.readIdeaSource(selected.id)
+        : state.idea_source_reading;
+      if (request !== requestEpoch.value) return;
+      await update({
+        ...state,
+        busy: false,
+        workbench_snapshot: snapshot,
+        idea_source_reading: reading,
+        summary_notice: summaryResultNotice(result),
+      });
+    } catch (error) {
+      if (request !== requestEpoch.value) return;
+      await update({ ...state, busy: false, summary_notice: null, error: errorMessage(error) });
+    }
+  });
+
+  root.querySelector<HTMLFormElement>("[data-summary-provider-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!adapter.configureOpenAiProvider || !adapter.openAiProviderStatus) return;
+    const apiKey = root.querySelector<HTMLInputElement>('[name="openai_api_key"]')?.value.trim() ?? "";
+    const model = inputValue(root, '[name="openai_model"]');
+    if (!apiKey) return;
+    try {
+      await update({ ...state, busy: true, error: null, summary_notice: null });
+      await adapter.configureOpenAiProvider({ apiKey, model: model ?? "gpt-4.1-mini" });
+      const provider = await adapter.openAiProviderStatus();
+      await update({
+        ...state,
+        busy: false,
+        summary_provider: provider,
+        summary_notice: provider.configured ? "Summary provider configured for this computer." : null,
+      });
+    } catch (error) {
+      await update({ ...state, busy: false, error: errorMessage(error) });
+    }
   });
 
   root.querySelector<HTMLButtonElement>("[data-close-item-details]")?.addEventListener("click", async () => {
@@ -590,6 +819,28 @@ function bindActions(
       const itemId = button.dataset.reviewItemId;
       const reasonId = button.dataset.reviewReasonId;
       if (!itemId || !reasonId) return;
+      const isIdeaSource = state.workbench_snapshot?.idea_sources.some((item) => item.id === itemId) ?? false;
+      if (isIdeaSource && adapter.workbenchSnapshot) {
+        const request = ++requestEpoch.value;
+        try {
+          await update({
+            ...state,
+            active_view: "idea-sources",
+            selected_review_reason_id: reasonId,
+            busy: true,
+            error: null,
+            idea_source_reading: null,
+          });
+          const snapshot = await adapter.workbenchSnapshot(state.artwork_sort, itemId, state.search_query);
+          const reading = adapter.readIdeaSource ? await adapter.readIdeaSource(itemId) : null;
+          if (request !== requestEpoch.value) return;
+          await update({ ...state, active_view: "idea-sources", busy: false, workbench_snapshot: snapshot, idea_source_reading: reading, error: null });
+        } catch (error) {
+          if (request !== requestEpoch.value) return;
+          await update({ ...state, active_view: "idea-sources", busy: false, error: errorMessage(error) });
+        }
+        return;
+      }
       await refreshWorkbench(
         adapter,
         { ...state, selected_review_reason_id: reasonId },
@@ -870,12 +1121,15 @@ async function activateOpenedVault(
     : [...state.known_vaults, activeVault];
   let nextState: AppState = {
     ...state,
+    ...clearedCapture(),
     active_vault: activeVault,
     known_vaults: knownVaults,
     repair_proposal: null,
     notice: null,
     busy: false,
     error: null,
+    idea_source_reading: null,
+    summary_notice: null,
   };
   if (adapter.workbenchSnapshot) {
     nextState = {
@@ -885,6 +1139,12 @@ async function activateOpenedVault(
         null,
         nextState.search_query,
       ),
+    };
+  }
+  if (adapter.openAiProviderStatus) {
+    nextState = {
+      ...nextState,
+      summary_provider: await adapter.openAiProviderStatus(),
     };
   }
   await update(nextState);
@@ -941,6 +1201,7 @@ function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
           </div>
           <nav class="vault-list">
             ${knownVaultTemplate(state)}
+            ${state.active_vault && state.workbench_snapshot ? archiveNavigationTemplate(state) : ""}
           </nav>
           <div class="rail-actions">
             <button class="secondary-button" type="button" data-vault-action="open" ${state.busy ? "disabled" : ""}>
@@ -958,7 +1219,9 @@ function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
             state.repair_proposal
               ? repairVaultTemplate(state)
               : state.active_vault && state.workbench_snapshot
-                ? artworkWorkbenchTemplate(state, adapter)
+                ? state.active_view === "idea-sources"
+                  ? ideaSourcesWorkbenchTemplate(state, adapter)
+                  : artworkWorkbenchTemplate(state, adapter)
                 : state.active_vault
                   ? activeVaultTemplate(state.active_vault)
                   : emptyVaultTemplate(state.busy)
@@ -1053,7 +1316,6 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
       ${searchResultsTemplate(snapshot, state)}
 
       ${reviewQueueTemplate(snapshot, state)}
-      ${ideaSourcesTemplate(snapshot)}
 
       <div class="artwork-content ${selectedId ? "has-selection" : ""}">
         <div class="artwork-gallery" aria-label="Artwork gallery">
@@ -1087,9 +1349,98 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
   `;
 }
 
-function captureLinkTemplate(state: AppState, adapter: DesktopAdapter): string {
+function archiveNavigationTemplate(state: AppState): string {
+  const snapshot = state.workbench_snapshot;
+  if (!snapshot) return "";
+  return `
+    <section class="archive-navigation" aria-label="Saved Item areas">
+      <p>Browse</p>
+      <button type="button" data-archive-view="paintings" class="archive-navigation-item ${state.active_view === "paintings" ? "is-current" : ""}" aria-current="${state.active_view === "paintings" ? "page" : "false"}">
+        <i data-lucide="images"></i><span><strong>Paintings</strong><small>${snapshot.artwork_items.length}</small></span>
+      </button>
+      <button type="button" data-archive-view="idea-sources" class="archive-navigation-item ${state.active_view === "idea-sources" ? "is-current" : ""}" aria-current="${state.active_view === "idea-sources" ? "page" : "false"}">
+        <i data-lucide="book-open"></i><span><strong>Idea Sources</strong><small>${snapshot.idea_sources.length}</small></span>
+      </button>
+    </section>`;
+}
+
+function ideaSourcesWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): string {
+  const snapshot = state.workbench_snapshot;
+  if (!snapshot) return "";
+  const selected = snapshot.selected_item;
+  const selectedIdea = selected && snapshot.idea_sources.some((item) => item.id === selected.id)
+    ? selected
+    : null;
+  return `
+    <section class="artwork-workspace idea-sources-workspace">
+      <header class="artwork-toolbar idea-sources-toolbar">
+        <div>
+          <p class="eyebrow">Readable source archive</p>
+          <h2>Idea Sources</h2>
+          <p class="section-intro">Keep the source material and its summary in your Vault, so the idea survives after the tab or page is gone.</p>
+        </div>
+        <div class="idea-source-actions">
+          ${summaryProviderTemplate(state, adapter)}
+          <button class="primary-button" type="button" data-open-link-capture ${state.busy || !adapter.captureIdeaSource ? "disabled" : ""}>Add Idea Source</button>
+        </div>
+      </header>
+
+      ${captureLinkTemplate(state, adapter, true)}
+      <section class="vault-tools" aria-label="Vault tools">
+        <form class="vault-search" data-vault-search>
+          <label>Search Active Vault<input type="search" data-search-query value="${escapeHtml(state.search_query)}"></label>
+          <button class="secondary-button" type="submit" ${state.busy ? "disabled" : ""}>Search</button>
+        </form>
+        <button class="secondary-button" type="button" data-open-activity-log ${state.busy || !adapter.openActivityLog ? "disabled" : ""}>Open Activity Log</button>
+      </section>
+      ${vaultProblemsTemplate(snapshot)}
+      ${searchResultsTemplate(snapshot, state)}
+      ${reviewQueueTemplate(snapshot, state)}
+
+      <div class="idea-source-browser ${selectedIdea ? "has-selection" : ""}">
+        ${ideaSourcesTemplate(snapshot, state)}
+        ${selectedIdea ? ideaSourceDetailsTemplate(state, selectedIdea, adapter) : ""}
+      </div>
+      ${vaultTrashTemplate(snapshot, state, adapter)}
+    </section>`;
+}
+
+function summaryProviderTemplate(state: AppState, adapter: DesktopAdapter): string {
+  if (!adapter.configureOpenAiProvider) return "";
+  const provider = state.summary_provider;
+  return `
+    <details class="summary-provider">
+      <summary>${provider?.configured ? `Summaries: ${escapeHtml(provider.model ?? "configured")}` : "Set up summaries"}</summary>
+      <form data-summary-provider-form>
+        <p>The API key is stored for this app on this computer, outside the Vault. When you create a summary, the saved source text is sent to OpenAI.</p>
+        <label>OpenAI API Key<input name="openai_api_key" type="password" autocomplete="off" required></label>
+        <label>Model<input name="openai_model" value="${escapeHtml(provider?.model ?? "gpt-4.1-mini")}" required></label>
+        <button class="secondary-button" type="submit" ${state.busy ? "disabled" : ""}>Save Summary Settings</button>
+      </form>
+    </details>`;
+}
+
+function captureLinkTemplate(state: AppState, adapter: DesktopAdapter, ideaCapture = false): string {
   if (!state.capture_open) return "";
   const fallback = state.capture_fallback;
+  if (ideaCapture) {
+    return `
+      <section class="capture-panel" aria-label="Add Idea Source">
+        <div class="capture-heading">
+          <div><p class="eyebrow">Close the tab with confidence</p><h3>${fallback ? "Paste the source text" : "Add an Idea Source"}</h3></div>
+          <button class="detail-close" type="button" data-close-link-capture aria-label="Close Add Idea Source"><span aria-hidden="true">×</span></button>
+        </div>
+        ${fallback ? `<p class="capture-fallback-reason" role="status">${escapeHtml(fallback.reason)} Paste the readable post or page text below; the draft has been kept.</p>` : ""}
+        <form class="capture-form idea-capture-form" data-idea-source-capture>
+          <label class="capture-span">Source Link<input name="source_link" type="url" placeholder="https://…" value="${escapeHtml(fallback?.source_link ?? state.capture_source_link)}" required></label>
+          <label>Title <span>(optional)</span><input name="capture_title" placeholder="Use the page title when available" value="${escapeHtml(fallback?.title ?? state.capture_title)}"></label>
+          <label>Saving Reason <span>(optional)</span><input name="capture_saving_reason" placeholder="How might you use this later?" value="${escapeHtml(fallback?.saving_reason ?? state.capture_saving_reason)}"></label>
+          <label class="capture-span">Source Text <span>(${fallback ? "required to preserve this source" : "optional fallback"})</span><textarea name="copied_text" rows="8" placeholder="Paste the article or post text here when the page cannot be read automatically" ${fallback ? "required" : ""}>${escapeHtml(state.capture_copied_text)}</textarea></label>
+          <p class="form-hint">The readable source is saved locally before summarization. Automatic summaries are attempted only when a provider is configured.</p>
+          <button class="primary-button" type="submit" ${state.busy || !adapter.captureIdeaSource ? "disabled" : ""}>${fallback ? "Save Source Text" : "Save Idea Source"}</button>
+        </form>
+      </section>`;
+  }
   return `
     <section class="capture-panel" aria-label="Capture Link">
       <div class="capture-heading">
@@ -1109,30 +1460,61 @@ function captureLinkTemplate(state: AppState, adapter: DesktopAdapter): string {
       ` : `
         <form class="capture-form" data-source-link-capture>
           <label>Source Link<input name="source_link" type="url" placeholder="https://…" value="${escapeHtml(state.capture_source_link)}" required></label>
-          <label>Title <span>(optional)</span><input name="capture_title" placeholder="Use the extracted title when available" value="${escapeHtml(state.capture_title)}"></label>
           <label>Saving Reason <span>(optional)</span><input name="capture_saving_reason" value="${escapeHtml(state.capture_saving_reason)}"></label>
-          <p class="form-hint">Wikimedia media is preserved automatically. X.com and blocked sources continue as Manual Fallback.</p>
-          <button class="primary-button" type="submit" ${state.busy ? "disabled" : ""}>Try Capture</button>
+          <p class="form-hint">Paste a public HTTPS link. Wikimedia and public X images keep the Best Available File; other sources save the Source Link as an Idea Source.</p>
+          <button class="primary-button" type="submit" ${state.busy ? "disabled" : ""}>Capture</button>
         </form>
       `}
     </section>`;
 }
 
-function ideaSourcesTemplate(snapshot: WorkbenchSnapshot): string {
-  if (snapshot.idea_sources.length === 0) return "";
+function ideaSourcesTemplate(snapshot: WorkbenchSnapshot, state: AppState): string {
+  if (snapshot.idea_sources.length === 0) {
+    return '<div class="idea-source-empty"><strong>No Idea Sources yet</strong><p>Add a post, blog, or web page to keep its readable text in this Vault.</p></div>';
+  }
   return `
-    <section class="idea-sources" aria-labelledby="idea-sources-title">
-      <div class="section-heading"><p class="eyebrow">Text and link archive</p><h2 id="idea-sources-title">Idea Sources</h2></div>
+    <section class="idea-sources" aria-label="Saved Idea Sources">
       <div class="idea-source-list">
         ${snapshot.idea_sources.map((item) => `
-          <article class="idea-source-card">
-            <h3>${escapeHtml(item.title)}</h3>
-            <p>${escapeHtml(item.saving_reason ?? "No saving reason")}</p>
-            <p class="source-link">${escapeHtml(item.source_link)}</p>
-            <small>${escapeHtml(item.review_status)}${item.source_copy ? " · Source copy preserved" : ""}</small>
-          </article>`).join("")}
+          <button type="button" class="idea-source-card ${snapshot.selected_item?.id === item.id ? "is-selected" : ""}" data-idea-source-id="${escapeHtml(item.id)}" ${state.busy ? "disabled" : ""}>
+            <span class="idea-source-card-heading"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(sourceHost(item.source_link))}</small></span>
+            <span>${escapeHtml(item.saving_reason ?? "No saving reason yet")}</span>
+            <span class="preservation-state ${item.source_copy ? "is-preserved" : "is-incomplete"}">${item.source_copy ? "Readable source preserved" : "Source text still needed"}</span>
+          </button>`).join("")}
       </div>
     </section>`;
+}
+
+function ideaSourceDetailsTemplate(state: AppState, selected: ItemDetails, adapter: DesktopAdapter): string {
+  const reading = state.idea_source_reading?.id === selected.id ? state.idea_source_reading : null;
+  const provider = state.summary_provider;
+  const canSummarize = provider?.configured === true && Boolean(adapter.summarizeIdeaSource);
+  const sourceText = reading?.cleaned_text.trim() ?? "";
+  const summary = reading?.summary ?? selected.summary;
+  return `
+    <aside class="idea-source-details" aria-label="Idea Source details">
+      <button class="detail-close" type="button" data-close-item-details aria-label="Close Item Details"><span aria-hidden="true">×</span></button>
+      <p class="eyebrow">Idea Source</p>
+      <h2>${escapeHtml(selected.title)}</h2>
+      ${selected.source_link ? `<a class="source-link" href="${escapeHtml(selected.source_link)}" target="_blank" rel="noreferrer">${escapeHtml(selected.source_link)}</a>` : ""}
+      ${selected.saving_reason ? `<section class="saving-reason"><strong>Why you saved it</strong><p>${escapeHtml(selected.saving_reason)}</p></section>` : ""}
+      <section class="source-summary" aria-labelledby="idea-summary-title">
+        <div class="source-section-heading"><h3 id="idea-summary-title">Summary</h3>${canSummarize ? `<button class="secondary-button" type="button" data-summarize-idea-source ${state.busy ? "disabled" : ""}>${summary ? "Refresh Summary" : "Create Summary"}</button>` : ""}</div>
+        ${summary ? `<p>${escapeHtml(summary)}</p>` : `<p class="empty-copy">${provider?.configured === false ? "No summary yet. Automatic summarization is unavailable until a provider is configured." : "No summary has been saved for this source."}</p>`}
+        ${state.summary_notice ? `<p class="summary-notice" role="status">${escapeHtml(state.summary_notice)}</p>` : ""}
+      </section>
+      <section class="source-reading" aria-labelledby="source-reading-title">
+        <div class="source-section-heading"><h3 id="source-reading-title">Preserved source</h3>${selected.source_copy ? '<span>Saved locally</span>' : ""}</div>
+        ${sourceText
+          ? `<div class="source-text">${sourceText.split(/\n{2,}/).map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")}</div>`
+          : selected.source_copy
+            ? `<p class="empty-copy">The source copy is saved locally, but this app version cannot display it here yet.</p><p class="file-path">${escapeHtml(selected.source_copy)}</p>`
+            : '<p class="empty-copy">This item only has a Source Link. Add the source text before treating it as preserved.</p>'}
+      </section>
+      ${itemRecordConflictTemplate(state)}
+      ${itemRecordEditorTemplate(state, selected, adapter)}
+      <button class="danger-button" type="button" data-move-to-trash ${adapter.moveItemToTrash ? "" : "disabled"}>Move to Vault Trash</button>
+    </aside>`;
 }
 
 function artworkDetailsTemplate(state: AppState, adapter: DesktopAdapter): string {
@@ -1185,6 +1567,7 @@ function patchArtworkSelection(
   update: StateUpdate,
   updateSelection: StateUpdate,
   artworkSelection: ArtworkSelection,
+  requestEpoch: { value: number },
 ): void {
   const content = root.querySelector<HTMLElement>(".artwork-content");
   if (!content || !state.workbench_snapshot) {
@@ -1204,7 +1587,7 @@ function patchArtworkSelection(
     content.insertAdjacentHTML("beforeend", artworkDetailsTemplate(state, adapter));
     const details = content.querySelector<HTMLElement>(".artwork-details");
     if (details) {
-      bindActions(details, adapter, state, update, updateSelection, artworkSelection);
+      bindActions(details, adapter, state, update, updateSelection, artworkSelection, requestEpoch);
     }
   }
 }
@@ -1526,6 +1909,52 @@ function thumbnailStatusText(remaining: number | null): string {
 
 function metadataLine(creator: string, year: string): string {
   return [creator, year].filter(Boolean).join(" · ") || "Unknown creator";
+}
+
+function derivedCaptureTitle(sourceLink: string, fallbackTitle: string): string {
+  const trimmed = fallbackTitle.trim();
+  if (trimmed) return trimmed;
+  try {
+    const parsed = new URL(sourceLink);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host === "x.com" || host === "twitter.com") {
+      const handle = parsed.pathname.split("/").filter(Boolean)[0];
+      if (handle) return `X post by ${handle}`;
+    }
+    if (host === "commons.wikimedia.org") {
+      const leaf = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
+      const stem = leaf.replace(/^File:/i, "").replace(/_/g, " ").replace(/\.[^.]+$/, "");
+      if (stem) return stem;
+    }
+  } catch {
+    /* keep default title */
+  }
+  return "Untitled Capture";
+}
+
+function sourceHost(sourceLink: string): string {
+  try {
+    return new URL(sourceLink).hostname.replace(/^www\./, "");
+  } catch {
+    return "Saved source";
+  }
+}
+
+function captureSummaryNotice(status: "generated" | "unavailable" | "skipped"): string {
+  if (status === "generated") return "Summary created and saved with the source.";
+  if (status === "unavailable") return "Source saved; summary unavailable. Check settings or retry.";
+  return "Source saved without an automatic summary.";
+}
+
+function summaryResultNotice(result: {
+  status: "generated" | "unavailable" | "skipped" | "failed";
+  reason?: string | null;
+}): string {
+  if (result.status === "generated") return "Summary created and saved.";
+  if (result.reason) return result.reason;
+  if (result.status === "unavailable") return "Automatic summarization is not configured.";
+  if (result.status === "failed") return "The summary could not be created. The preserved source is unchanged.";
+  return "No summary was created. The preserved source is unchanged.";
 }
 
 function inputValue(root: HTMLElement, selector: string): string | null {

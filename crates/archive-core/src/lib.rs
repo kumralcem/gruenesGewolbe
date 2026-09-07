@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +19,7 @@ const THUMBNAILS_DIR: &str = "thumbnails";
 const MAX_THUMBNAIL_SOURCE_PIXELS: u64 = 24_000_000;
 const TAG_REGISTRY_FILE: &str = "tag-registry.md";
 const DEFAULT_VAULT_NAME: &str = "Personal Archive";
+const MAX_IDEA_SOURCE_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vault {
@@ -211,9 +212,9 @@ impl Vault {
         let log_path = self.activity_log_path();
         let index_before = fs::read(&index_path).ok();
         let log_before = fs::read(&log_path).ok();
-        let maintenance = self.rebuild_metadata_index().and_then(|_| {
-            self.append_activity_log(&format!("permanently-delete-item\t{}", id))
-        });
+        let maintenance = self
+            .rebuild_metadata_index()
+            .and_then(|_| self.append_activity_log(&format!("permanently-delete-item\t{}", id)));
         if let Err(error) = maintenance {
             rollback_text_mutations(&applied)?;
             restore_file_snapshot(&index_path, index_before.as_deref())?;
@@ -757,6 +758,15 @@ impl Vault {
     }
 
     fn capture_idea_source(&self, capture: IdeaSourceCapture) -> Result<SavedItem, VaultError> {
+        if capture
+            .copied_text
+            .as_ref()
+            .is_some_and(|text| text.len() as u64 + 1 > MAX_IDEA_SOURCE_TEXT_BYTES)
+        {
+            return Err(VaultError::IdeaSourceCopyTooLarge(PathBuf::from(
+                "source-copies/cleaned-text.md",
+            )));
+        }
         let folder_name = readable_part(Some(&capture.title), "Untitled Capture");
         let items_root = self
             .root
@@ -1007,7 +1017,10 @@ impl Vault {
             self.generate_thumbnail_for(&saved_item, &primary_file)?;
             generated += 1;
         }
-        Ok(ThumbnailPreparation { generated, remaining })
+        Ok(ThumbnailPreparation {
+            generated,
+            remaining,
+        })
     }
 
     pub fn browse_idea_sources(&self) -> Result<Vec<IdeaSourceListItem>, VaultError> {
@@ -1136,6 +1149,23 @@ impl Vault {
         }
 
         Err(VaultError::SavedItemNotFound(id.to_string()))
+    }
+
+    pub fn read_idea_source(&self, id: &str) -> Result<IdeaSourceContent, VaultError> {
+        let details = self.item_details(id)?;
+        if details.home_subvault() != "Idea Sources" {
+            return Err(VaultError::SavedItemNotFound(id.to_string()));
+        }
+        let source_copy = details
+            .source_copy()
+            .ok_or_else(|| VaultError::MissingIdeaSourceCopy(id.to_string()))?;
+        let cleaned_text = read_bounded_idea_source(details.item_folder(), source_copy)?;
+        Ok(IdeaSourceContent {
+            id: id.to_string(),
+            source_link: details.source_link().unwrap_or_default().to_string(),
+            cleaned_text: cleaned_text.trim_end_matches('\n').to_string(),
+            summary: details.summary().map(str::to_string),
+        })
     }
 
     pub fn update_item_record(&self, update: UpdateItemRecord) -> Result<ItemDetails, VaultError> {
@@ -1478,7 +1508,7 @@ impl Vault {
         let details = self.item_details(id)?;
         let cleaned_text = details
             .source_copy()
-            .map(|path| fs::read_to_string(details.item_folder().join(path)))
+            .map(|path| read_bounded_idea_source(details.item_folder(), path))
             .transpose()?
             .map(|text| text.trim_end_matches('\n').to_string());
 
@@ -1491,7 +1521,12 @@ impl Vault {
             related_item_records: Vec::new(),
         });
 
-        self.apply_ai_enrichment_response(id, budget_mode, response)
+        self.apply_ai_enrichment_response(
+            id,
+            budget_mode,
+            response,
+            provider.cost_estimate_is_known(),
+        )
     }
 
     pub fn suggest_artwork_metadata_with_ai(
@@ -1522,7 +1557,12 @@ impl Vault {
             related_item_records: Vec::new(),
         });
 
-        self.apply_ai_enrichment_response(id, budget_mode, response)
+        self.apply_ai_enrichment_response(
+            id,
+            budget_mode,
+            response,
+            provider.cost_estimate_is_known(),
+        )
     }
 
     pub fn upsert_tag(&self, tag: TagDefinition) -> Result<(), VaultError> {
@@ -1807,9 +1847,11 @@ impl Vault {
 
     fn incoming_item_links(&self, id: &str) -> Result<Vec<IncomingItemLink>, VaultError> {
         let mut links = Vec::new();
-        let records = self.item_record_scan()?.valid_records.into_iter().chain(
-            self.trashed_item_record_scan()?.valid_records,
-        );
+        let records = self
+            .item_record_scan()?
+            .valid_records
+            .into_iter()
+            .chain(self.trashed_item_record_scan()?.valid_records);
         for record in records {
             for link in item_links(&record.text)
                 .into_iter()
@@ -2081,7 +2123,10 @@ impl Vault {
         Ok(())
     }
 
-    fn thumbnail_for_gallery(&self, saved_item: &SavedItem) -> Result<ThumbnailPreview, VaultError> {
+    fn thumbnail_for_gallery(
+        &self,
+        saved_item: &SavedItem,
+    ) -> Result<ThumbnailPreview, VaultError> {
         let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
         fs::create_dir_all(&thumbnails_dir)?;
         let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
@@ -2111,7 +2156,9 @@ impl Vault {
 
     fn thumbnail_is_final(&self, saved_item: &SavedItem) -> bool {
         let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
-        thumbnails_dir.join(format!("{}.png", saved_item.id())).is_file()
+        thumbnails_dir
+            .join(format!("{}.png", saved_item.id()))
+            .is_file()
             || thumbnails_dir
                 .join(format!("{}.placeholder.png", saved_item.id()))
                 .is_file()
@@ -2224,6 +2271,7 @@ impl Vault {
         id: &str,
         budget_mode: AiBudgetMode,
         response: AiProviderResponse,
+        cost_estimate_is_known: bool,
     ) -> Result<AiEnrichmentResult, VaultError> {
         let registry = self.read_tag_registry()?;
         let mut accepted_tags = Vec::new();
@@ -2370,13 +2418,15 @@ impl Vault {
             }
 
             fs::write(&record.record_path, updated)?;
-            self.append_ai_cost_log(id, budget_mode, estimated_cost_cents)?;
-            self.append_activity_log(&format!(
-                "ai-cost\t{}\t{}\t{}",
-                id,
-                budget_mode.as_log_value(),
-                estimated_cost_cents
-            ))?;
+            if cost_estimate_is_known {
+                self.append_ai_cost_log(id, budget_mode, estimated_cost_cents)?;
+                self.append_activity_log(&format!(
+                    "ai-cost\t{}\t{}\t{}",
+                    id,
+                    budget_mode.as_log_value(),
+                    estimated_cost_cents
+                ))?;
+            }
             self.append_activity_log(&format!(
                 "enrichment\t{}\t{}\t{}\t{}",
                 id,
@@ -2636,6 +2686,29 @@ pub struct IdeaSourceListItem {
     source_copy: Option<PathBuf>,
     review_status: String,
     saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaSourceContent {
+    id: String,
+    source_link: String,
+    cleaned_text: String,
+    summary: Option<String>,
+}
+
+impl IdeaSourceContent {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn source_link(&self) -> &str {
+        &self.source_link
+    }
+    pub fn cleaned_text(&self) -> &str {
+        &self.cleaned_text
+    }
+    pub fn summary(&self) -> Option<&str> {
+        self.summary.as_deref()
+    }
 }
 
 impl IdeaSourceListItem {
@@ -3301,6 +3374,9 @@ impl AiBudgetMode {
 
 pub trait AiProvider {
     fn enrich(&self, request: AiProviderRequest) -> AiProviderResponse;
+    fn cost_estimate_is_known(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3700,6 +3776,10 @@ pub enum VaultError {
     },
     UnsupportedFormat(PathBuf),
     MissingSourceFile(PathBuf),
+    MissingIdeaSourceCopy(String),
+    UnsafeIdeaSourceCopy(PathBuf),
+    EmptyIdeaSourceCopy(PathBuf),
+    IdeaSourceCopyTooLarge(PathBuf),
     MissingFileName(PathBuf),
     UnsupportedImageFile(PathBuf),
     MissingImportFolder(PathBuf),
@@ -3764,6 +3844,22 @@ impl fmt::Display for VaultError {
             Self::MissingSourceFile(path) => {
                 write!(f, "source file does not exist: {}", path.display())
             }
+            Self::MissingIdeaSourceCopy(id) => {
+                write!(f, "Idea Source has no preserved readable source copy: {id}")
+            }
+            Self::UnsafeIdeaSourceCopy(path) => write!(
+                f,
+                "Idea Source copy is outside its item folder: {}",
+                path.display()
+            ),
+            Self::EmptyIdeaSourceCopy(path) => {
+                write!(f, "Idea Source copy is empty: {}", path.display())
+            }
+            Self::IdeaSourceCopyTooLarge(path) => write!(
+                f,
+                "Idea Source copy exceeds the 2 MiB read limit: {}",
+                path.display()
+            ),
             Self::MissingFileName(path) => {
                 write!(f, "source file has no file name: {}", path.display())
             }
@@ -3896,6 +3992,47 @@ fn missing_repairable_directories(root: &Path) -> Result<Vec<PathBuf>, VaultErro
         missing.push(path);
     }
     Ok(missing)
+}
+
+fn read_bounded_idea_source(item_folder: &Path, source_copy: &Path) -> Result<String, VaultError> {
+    if source_copy.is_absolute()
+        || source_copy.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(VaultError::UnsafeIdeaSourceCopy(source_copy.to_path_buf()));
+    }
+    let canonical_item = item_folder.canonicalize()?;
+    let canonical_source_copies = item_folder.join("source-copies").canonicalize()?;
+    let path = item_folder.join(source_copy);
+    let canonical_source = path.canonicalize()?;
+    if !canonical_source.starts_with(&canonical_item)
+        || !canonical_source.starts_with(&canonical_source_copies)
+        || !canonical_source.is_file()
+    {
+        return Err(VaultError::UnsafeIdeaSourceCopy(path));
+    }
+    if canonical_source.metadata()?.len() > MAX_IDEA_SOURCE_TEXT_BYTES {
+        return Err(VaultError::IdeaSourceCopyTooLarge(canonical_source));
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&canonical_source)?
+        .take(MAX_IDEA_SOURCE_TEXT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_IDEA_SOURCE_TEXT_BYTES {
+        return Err(VaultError::IdeaSourceCopyTooLarge(canonical_source));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| VaultError::UnsafeIdeaSourceCopy(canonical_source.clone()))?;
+    if text.trim().is_empty() {
+        return Err(VaultError::EmptyIdeaSourceCopy(canonical_source));
+    }
+    Ok(text)
 }
 
 fn default_config() -> String {

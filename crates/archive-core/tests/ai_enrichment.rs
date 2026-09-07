@@ -98,6 +98,32 @@ fn idea_enrichment_uses_cleaned_text_budget_mode_and_persists_summary_tags_and_s
 }
 
 #[test]
+fn provider_with_unknown_cost_does_not_record_a_zero_cost_entry() {
+    let root = temp_path("ai-unknown-cost-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let captured = vault
+        .capture_extracted_text(ExtractedTextCapture {
+            source_link: "https://example.com/essay".to_string(),
+            title: "Essay source".to_string(),
+            saving_reason: None,
+            cleaned_text: "Cleaned main content only.".to_string(),
+        })
+        .expect("capture source");
+    let provider = UnknownCostProvider;
+
+    vault
+        .enrich_idea_with_ai(captured.id(), AiBudgetMode::Standard, &provider)
+        .expect("enrich idea");
+
+    assert!(!root.join(".gruenesgewolbe/ai-cost-log.tsv").exists());
+    let activity = fs::read_to_string(root.join(".gruenesgewolbe/activity-log.tsv"))
+        .expect("read activity log");
+    assert!(!activity.contains("\tai-cost\t"));
+    assert!(activity.contains(&format!("\tenrichment\t{}\tstandard", captured.id())));
+    fs::remove_dir_all(root).expect("clean vault");
+}
+
+#[test]
 fn idea_enrichment_normalizes_ai_tags_through_the_vault_tag_registry() {
     let root = temp_path("ai-tag-registry-vault");
     let vault = Vault::create(&root).expect("create vault");
@@ -471,6 +497,24 @@ impl AiProvider for FakeProvider {
     fn enrich(&self, request: AiProviderRequest) -> AiProviderResponse {
         self.requests.borrow_mut().push(request);
         self.response.clone()
+    }
+}
+
+struct UnknownCostProvider;
+
+impl AiProvider for UnknownCostProvider {
+    fn enrich(&self, _request: AiProviderRequest) -> AiProviderResponse {
+        AiProviderResponse {
+            summary: Some("Summary with unknown billed cost.".to_string()),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 0,
+        }
+    }
+
+    fn cost_estimate_is_known(&self) -> bool {
+        false
     }
 }
 

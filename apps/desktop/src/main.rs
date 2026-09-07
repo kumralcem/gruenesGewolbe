@@ -2,14 +2,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use gruenes_gewolbe_core::{SourceExtraction, SourceExtractionRequest, SourceExtractor};
+use gruenes_gewolbe_core::{
+    AiProvider, AiProviderRequest, AiProviderResponse, SourceExtraction, SourceExtractionRequest,
+    SourceExtractor,
+};
 
 use gruenes_gewolbe_desktop::{
-    source_extractor, ActiveVaultView, AddArtworkFilesCommand, CaptureSourceLinkCommand, ConfirmItemFolderRenameCommand, CopiedImageCommand, DesktopStartupView,
-    DuplicateCandidateResolutionView, ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView,
-    ManualFallbackCaptureCommand, OpenVaultView, PermanentDeletionView, ResolveDuplicateCandidateCommand,
-    ResolveReviewReasonCommand, RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView,
-    SelectedFileImportSummaryView, SourceCaptureResultView, TauriCommandState, ThumbnailPreparationView,
+    source_extractor, ActiveVaultView, AddArtworkFilesCommand, CaptureIdeaCommand,
+    CaptureSourceLinkCommand, ConfirmItemFolderRenameCommand, CopiedImageCommand,
+    DesktopStartupView, DuplicateCandidateResolutionView, IdeaSourceContentView,
+    ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, ManualFallbackCaptureCommand,
+    OpenAiProviderConfig, OpenAiProviderStatusView, OpenAiResponsesProvider, OpenVaultView,
+    PermanentDeletionView, ResolveDuplicateCandidateCommand, ResolveReviewReasonCommand,
+    RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView, SelectedFileImportSummaryView,
+    SourceCaptureResultView, SummarizeIdeaSourceView, TauriCommandState, ThumbnailPreparationView,
     WorkbenchSnapshotCommand, WorkbenchSnapshotView,
 };
 use tauri::{Emitter, Manager, State};
@@ -22,6 +28,149 @@ struct CompletedExtraction(SourceExtraction);
 impl SourceExtractor for CompletedExtraction {
     fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
         self.0.clone()
+    }
+}
+
+struct CompletedAiResponse(AiProviderResponse);
+
+impl AiProvider for CompletedAiResponse {
+    fn enrich(&self, _request: AiProviderRequest) -> AiProviderResponse {
+        self.0.clone()
+    }
+
+    fn cost_estimate_is_known(&self) -> bool {
+        false
+    }
+}
+
+fn summarize_live(
+    state: &CommandState,
+    id: String,
+    budget_mode: &str,
+    expected_active_root: Option<&Path>,
+) -> SummarizeIdeaSourceView {
+    summarize_live_with(
+        state,
+        id,
+        budget_mode,
+        expected_active_root,
+        |config, cleaned_text, budget| {
+            OpenAiResponsesProvider::new(config)?.summarize(cleaned_text, budget)
+        },
+    )
+}
+
+fn summarize_live_with<F>(
+    state: &CommandState,
+    id: String,
+    budget_mode: &str,
+    expected_active_root: Option<&Path>,
+    summarize: F,
+) -> SummarizeIdeaSourceView
+where
+    F: FnOnce(
+        OpenAiProviderConfig,
+        &str,
+        gruenes_gewolbe_core::AiBudgetMode,
+    ) -> Result<AiProviderResponse, String>,
+{
+    let (config, source_before, active_root, record_revision) = match state.lock() {
+        Ok(guard) => {
+            let active_root = match guard.active_vault_root() {
+                Some(root) => root,
+                None => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some("no Active Vault is open".to_string()),
+                    }
+                }
+            };
+            if expected_active_root.is_some_and(|expected| expected != active_root) {
+                return SummarizeIdeaSourceView::Failed {
+                    reason: Some(
+                        "Active Vault changed before summary generation started".to_string(),
+                    ),
+                };
+            }
+            let details = match guard.get_item_details(id.clone()) {
+                Ok(details) => details,
+                Err(error) => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some(error.to_string()),
+                    }
+                }
+            };
+            match (
+                guard.openai_provider_status(),
+                guard.read_idea_source(id.clone()),
+            ) {
+                (status, _) if !status.configured => {
+                    return SummarizeIdeaSourceView::Unavailable {
+                        reason: Some("Configure OpenAI to generate a summary".to_string()),
+                    }
+                }
+                (_, Ok(source)) => match guard.shell_openai_provider_config() {
+                    Ok(config) => (config, source, active_root, details.record_revision),
+                    Err(error) => {
+                        return SummarizeIdeaSourceView::Failed {
+                            reason: Some(error.to_string()),
+                        }
+                    }
+                },
+                (_, Err(error)) => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some(error.to_string()),
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("desktop state is unavailable".to_string()),
+            }
+        }
+    };
+    let budget = match budget_mode {
+        "cheap" => gruenes_gewolbe_core::AiBudgetMode::Cheap,
+        "standard" => gruenes_gewolbe_core::AiBudgetMode::Standard,
+        "deep" => gruenes_gewolbe_core::AiBudgetMode::Deep,
+        "off" => {
+            return SummarizeIdeaSourceView::Skipped {
+                reason: Some("AI budget is off".to_string()),
+            }
+        }
+        _ => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("unsupported AI budget mode".to_string()),
+            }
+        }
+    };
+    let response = match summarize(config, &source_before.cleaned_text, budget) {
+        Ok(response) => response,
+        Err(reason) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some(reason),
+            }
+        }
+    };
+    let guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("desktop state is unavailable".to_string()),
+            }
+        }
+    };
+    let current_root = guard.active_vault_root();
+    let current_details = guard.get_item_details(id.clone());
+    match (guard.read_idea_source(id.clone()), current_details) {
+        (Ok(current), Ok(details))
+            if current_root.as_deref() == Some(active_root.as_path())
+                && details.record_revision == record_revision
+                && current.cleaned_text == source_before.cleaned_text => guard
+            .summarize_idea_source(id, budget_mode, &CompletedAiResponse(response))
+            .unwrap_or_else(|error| SummarizeIdeaSourceView::Failed { reason: Some(error.to_string()) }),
+        (Ok(_), Ok(_)) => SummarizeIdeaSourceView::Failed { reason: Some("Active Vault or Item Record changed while its summary was being generated; retry to summarize the current source".to_string()) },
+        (Err(error), _) | (_, Err(error)) => SummarizeIdeaSourceView::Failed { reason: Some(error.to_string()) },
     }
 }
 
@@ -218,7 +367,11 @@ async fn capture_source_link(
             .map_err(|_| "desktop state is unavailable".to_string())?;
         guard
             .capture_source_link(
-                CaptureSourceLinkCommand { source_link, title, saving_reason },
+                CaptureSourceLinkCommand {
+                    source_link,
+                    title,
+                    saving_reason,
+                },
                 &CompletedExtraction(extraction),
                 Some(active_root.as_path()),
             )
@@ -226,6 +379,108 @@ async fn capture_source_link(
     })
     .await
     .map_err(|error| format!("capture task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn capture_idea_source(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let extractor = source_extractor::BoundedSourceExtractor::new()?;
+        let active_root = state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root().ok_or_else(|| "no Active Vault is open".to_string())?;
+        let extraction = if copied_text.as_deref().is_some_and(|text| !text.trim().is_empty()) {
+            None
+        } else {
+            Some(extractor.extract_idea(SourceExtractionRequest { source_link: source_link.clone() }))
+        };
+        let result = state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+            .capture_idea_source(
+                CaptureIdeaCommand { source_link, title, saving_reason, copied_text },
+                &CompletedExtraction(extraction.unwrap_or(SourceExtraction::NeedsManualFallback { reason: "pasted text".to_string() })),
+                Some(active_root.as_path()),
+            ).map_err(|error| error.to_string())?;
+        match result {
+            SourceCaptureResultView::Captured { item } => {
+                let summary = summarize_live(&state, item.id.clone(), "standard", Some(active_root.as_path()));
+                Ok(serde_json::json!({
+                    "status": "captured",
+                    "item": item,
+                    "summary_status": match &summary {
+                        SummarizeIdeaSourceView::Generated { .. } => "generated",
+                        SummarizeIdeaSourceView::Skipped { .. } => "skipped",
+                        _ => "unavailable",
+                    },
+                    "summary": match summary { SummarizeIdeaSourceView::Generated { summary } => Some(summary), _ => None }
+                }))
+            }
+            fallback => serde_json::to_value(fallback).map_err(|error| error.to_string()),
+        }
+    }).await.map_err(|error| format!("Idea Source capture task failed: {error}"))?
+}
+
+#[tauri::command]
+fn get_item_details(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<gruenes_gewolbe_desktop::ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .get_item_details(id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_idea_source(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<IdeaSourceContentView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .read_idea_source(id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn summarize_idea_source(
+    id: String,
+    budget_mode: String,
+    state: State<'_, CommandState>,
+) -> Result<SummarizeIdeaSourceView, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || Ok(summarize_live(&state, id, &budget_mode, None)))
+        .await
+        .map_err(|error| format!("summary task failed: {error}"))?
+}
+
+#[tauri::command]
+fn configure_openai_provider(
+    api_key: String,
+    model: String,
+    state: State<'_, CommandState>,
+) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .configure_openai_provider(OpenAiProviderConfig { api_key, model })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn openai_provider_status(
+    state: State<'_, CommandState>,
+) -> Result<OpenAiProviderStatusView, String> {
+    Ok(state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .openai_provider_status())
 }
 
 #[tauri::command]
@@ -239,7 +494,9 @@ fn capture_manual_fallback(
     state: State<'_, CommandState>,
 ) -> Result<SavedItemView, String> {
     let copied_image = match (copied_image_file_name, copied_image_bytes) {
-        (Some(file_name), Some(bytes)) if !bytes.is_empty() => Some(CopiedImageCommand { file_name, bytes }),
+        (Some(file_name), Some(bytes)) if !bytes.is_empty() => {
+            Some(CopiedImageCommand { file_name, bytes })
+        }
         _ => None,
     };
     state
@@ -482,7 +739,13 @@ fn main() {
             run_paintings_import,
             cancel_paintings_import,
             capture_source_link,
+            capture_idea_source,
             capture_manual_fallback,
+            get_item_details,
+            read_idea_source,
+            summarize_idea_source,
+            configure_openai_provider,
+            openai_provider_status,
             workbench_snapshot,
             refresh_workbench,
             prepare_thumbnail_previews,
@@ -501,6 +764,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -559,5 +824,166 @@ mod tests {
         .is_err());
 
         std::fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_after_switching_to_an_identical_copied_vault() {
+        let (root, state, id, _) = summary_fixture("summary-stale-vault");
+        let first = state
+            .lock()
+            .expect("desktop state")
+            .active_vault_root()
+            .expect("active vault");
+        let second = root.join("copied-vault");
+        copy_directory(&first, &second);
+        let switch_state = Arc::clone(&state);
+
+        let result = summarize_live_with(
+            &state,
+            id.clone(),
+            "standard",
+            Some(first.as_path()),
+            move |_, _, _| {
+                switch_state
+                    .lock()
+                    .expect("desktop state")
+                    .open_vault(second.to_string_lossy().into_owned())
+                    .expect("switch to copied vault");
+                Ok(summary_response())
+            },
+        );
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        assert_eq!(
+            state
+                .lock()
+                .expect("desktop state")
+                .read_idea_source(id)
+                .expect("read copied source")
+                .summary,
+            None
+        );
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_when_preserved_source_changes_during_provider_call() {
+        let (root, state, id, item_folder) = summary_fixture("summary-stale-source");
+        let source_path = item_folder.join("source-copies/cleaned-text.md");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, move |_, _, _| {
+            fs::write(source_path, "A newer preserved source.\n").expect("replace source");
+            Ok(summary_response())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        let source = state
+            .lock()
+            .expect("desktop state")
+            .read_idea_source(id)
+            .expect("read current source");
+        assert_eq!(source.cleaned_text, "A newer preserved source.");
+        assert_eq!(source.summary, None);
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_when_item_record_changes_during_provider_call() {
+        let (root, state, id, item_folder) = summary_fixture("summary-stale-record");
+        let record_path = item_folder.join("record.md");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, move |_, _, _| {
+            let record = fs::read_to_string(&record_path).expect("read record");
+            fs::write(
+                &record_path,
+                record.replace("title: Source", "title: Revised source"),
+            )
+            .expect("revise record");
+            Ok(summary_response())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        assert_eq!(
+            state
+                .lock()
+                .expect("desktop state")
+                .read_idea_source(id)
+                .expect("read source")
+                .summary,
+            None
+        );
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn provider_failure_keeps_the_preserved_source_without_a_summary() {
+        let (root, state, id, _) = summary_fixture("summary-provider-failure");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, |_, text, _| {
+            assert_eq!(text, "Original preserved source.");
+            Err("simulated provider failure".to_string())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        let source = state
+            .lock()
+            .expect("desktop state")
+            .read_idea_source(id)
+            .expect("read source after failure");
+        assert_eq!(source.cleaned_text, "Original preserved source.");
+        assert_eq!(source.summary, None);
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    fn summary_fixture(name: &str) -> (PathBuf, CommandState, String, PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-{name}-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let saved = {
+            let mut guard = state.lock().expect("desktop state");
+            guard
+                .create_vault(root.join("vault").to_string_lossy().into_owned())
+                .expect("create vault");
+            guard
+                .configure_openai_provider(OpenAiProviderConfig {
+                    api_key: "test-key".to_string(),
+                    model: "test-model".to_string(),
+                })
+                .expect("configure provider");
+            guard
+                .capture_idea(CaptureIdeaCommand {
+                    source_link: "https://example.com/source".to_string(),
+                    title: "Source".to_string(),
+                    saving_reason: None,
+                    copied_text: Some("Original preserved source.".to_string()),
+                })
+                .expect("capture source")
+        };
+        (root, state, saved.id, PathBuf::from(saved.item_folder))
+    }
+
+    fn summary_response() -> AiProviderResponse {
+        AiProviderResponse {
+            summary: Some("Generated summary.".to_string()),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 0,
+        }
+    }
+
+    fn copy_directory(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).expect("create copied directory");
+        for entry in fs::read_dir(source).expect("read source directory") {
+            let entry = entry.expect("read source entry");
+            let target = destination.join(entry.file_name());
+            if entry.file_type().expect("read source type").is_dir() {
+                copy_directory(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).expect("copy source file");
+            }
+        }
     }
 }

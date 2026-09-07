@@ -97,6 +97,123 @@ test("keeps delayed Item Details responsive and scoped to the latest selection",
   await expect(page.getByRole("heading", { name: "Artwork 1" })).toHaveCount(0);
 });
 
+test("uses lightweight Item Details for artwork selection and ignores stale responses", async ({ page }) => {
+  await page.addInitScript((imageUrl) => {
+    const items = [1, 2].map((number) => ({
+      id: `item-${number}`, title: `Artwork ${number}`, creator: "Artist", year: "2024",
+      primary_file: `/vault/item-${number}.jpg`, thumbnail_file: `/derived/item-${number}.png`,
+      thumbnail_is_placeholder: false, review_status: "reviewed",
+    }));
+    const details = (item: (typeof items)[number]) => ({
+      ...item, home_subvault: "Paintings", item_folder: `/vault/${item.id}`,
+      review_reasons: [], tags: [], collections: [], item_links: [], saving_reason: null,
+      source_link: null, summary: null, source_copy: null, record_revision: "r1",
+      folder_rename_proposal: null,
+    });
+    let snapshotCalls = 0;
+    (window as any).__selectionSnapshotCalls = () => snapshotCalls;
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null,
+      createVault: async (root) => ({ root }),
+      openVault: async (root) => ({ status: "opened" as const, vault: { root } }),
+      confirmVaultRepair: async (root) => ({ root }),
+      cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => {
+        snapshotCalls += 1;
+        return {
+          active_vault: { root: "/vault" }, subvaults: ["Paintings"], collections: [], artwork_items: items,
+          idea_sources: [], review_queue: [], search_results: [], vault_problems: [], trashed_items: [], selected_item: null,
+        };
+      },
+      getItemDetails: async (id) => {
+        await new Promise((resolve) => setTimeout(resolve, id === "item-1" ? 180 : 10));
+        return details(items.find((item) => item.id === id)!);
+      },
+      fileUrl: () => imageUrl,
+    };
+  }, pixel);
+  await page.goto("/");
+
+  await page.locator('[data-artwork-id="item-1"]').click();
+  await page.locator('[data-artwork-id="item-2"]').click();
+  await expect(page.getByRole("heading", { name: "Artwork 2" })).toBeVisible();
+  await page.waitForTimeout(220);
+  await expect(page.getByRole("heading", { name: "Artwork 2" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__selectionSnapshotCalls())).toBe(1);
+});
+
+test("opens an Idea Source reader when selected from search results", async ({ page }) => {
+  await page.addInitScript(() => {
+    const idea = {
+      id: "idea-1", title: "Useful source", home_subvault: "Idea Sources", source_link: "https://example.com/post",
+      source_copy: "source-copies/cleaned-text.md", review_status: "reviewed", saving_reason: null,
+    };
+    const details = {
+      ...idea, home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1", creator: "Unknown Creator",
+      year: "Unknown Year", primary_file: "", review_reasons: [], tags: [], collections: [], item_links: [],
+      summary: null, record_revision: "r1", folder_rename_proposal: null,
+    };
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null,
+      createVault: async (root) => ({ root }),
+      openVault: async (root) => ({ status: "opened" as const, vault: { root } }),
+      confirmVaultRepair: async (root) => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async (_sort, selectedItemId, query) => ({
+        active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [],
+        idea_sources: [idea], review_queue: [], search_results: query ? [idea] : [], vault_problems: [], trashed_items: [],
+        selected_item: selectedItemId === idea.id ? details : null,
+      }),
+      readIdeaSource: async () => ({ id: idea.id, source_link: idea.source_link, cleaned_text: "Preserved source text.", summary: null }),
+    };
+  });
+  await page.goto("/");
+  await page.getByLabel("Search Active Vault").fill("Useful");
+  await page.getByRole("button", { name: "Search" }).click();
+  await page.getByRole("button", { name: "Useful source" }).click();
+  await expect(page.getByRole("button", { name: /Idea Sources/ })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("complementary", { name: "Idea Source details" })).toContainText("Preserved source text.");
+});
+
+test("ignores a delayed Idea Source reader after switching to Paintings", async ({ page }) => {
+  await page.addInitScript(() => {
+    const idea = {
+      id: "idea-1", title: "Delayed source", home_subvault: "Idea Sources",
+      source_link: "https://example.com/post", source_copy: "source-copies/text.md",
+      review_status: "reviewed", saving_reason: null,
+    };
+    const details = {
+      ...idea, item_folder: "/vault/ideas/idea-1", creator: "Unknown Creator", year: "Unknown Year",
+      primary_file: "", review_reasons: [], tags: [], collections: [], item_links: [], summary: null,
+      record_revision: "r1", folder_rename_proposal: null,
+    };
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null,
+      createVault: async (root) => ({ root }),
+      openVault: async (root) => ({ status: "opened" as const, vault: { root } }),
+      confirmVaultRepair: async (root) => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async (_sort, selectedItemId) => ({
+        active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [],
+        artwork_items: [], idea_sources: [idea], review_queue: [], search_results: [], vault_problems: [], trashed_items: [],
+        selected_item: selectedItemId === idea.id ? details : null,
+      }),
+      readIdeaSource: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        return { id: idea.id, source_link: idea.source_link, cleaned_text: "Late source text.", summary: null };
+      },
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: "Delayed source" }).click();
+  await page.getByRole("button", { name: "Paintings" }).click();
+  await page.waitForTimeout(220);
+  await expect(page.getByRole("button", { name: "Paintings" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("complementary", { name: "Idea Source details" })).toHaveCount(0);
+});
+
 test("keeps navigation in the viewport and opens dismissible details without jumping", async ({
   page,
 }) => {

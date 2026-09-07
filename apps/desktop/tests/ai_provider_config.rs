@@ -31,6 +31,18 @@ fn desktop_shell_stores_openai_provider_config_in_user_app_state_not_the_vault()
     assert!(!root.join("openai-provider.toml").exists());
     assert!(!root.join("openai-config.toml").exists());
     assert!(!vault_files_contain(&root, "sk-test-key"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(app_state.join("openai-provider.toml"))
+                .expect("provider config metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
 
     fs::remove_dir_all(&root).expect("clean temp vault");
     fs::remove_dir_all(&app_state).expect("clean app state");

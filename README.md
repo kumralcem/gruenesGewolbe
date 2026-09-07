@@ -18,10 +18,12 @@ The main implementation surfaces are:
 - Metadata search: a derived index under `.gruenesgewolbe/` can be rebuilt from visible item records and queried through the core, CLI, and desktop shell.
 - Workbench operations: the desktop shell can build a first-screen workbench snapshot with active vault, subvault navigation, collections, artwork grid items, Idea Sources, Review Queue, search results, and selected item details. It can also browse artwork grid items with rebuildable cached Thumbnail Previews, inspect item details, edit common Item Record fields, suggest safer folder renames after metadata cleanup, and accept, correct, or dismiss individual Review Reasons while deriving Review Status automatically.
 - Thumbnail preparation: uncached previews are decoded one at a time on one background worker after the gallery becomes usable, with a short yield between files. The first import does CPU and disk work proportional to the number and size of images and can take minutes for a large library, but cached previews are reused on later launches. Sources above the safe 24-megapixel decode limit receive a placeholder and Review Reason instead of monopolizing memory or freezing the window.
-- URL Capture: the native workbench accepts a Source Link and optional Saving Reason. Wikimedia Commons pages and direct Wikimedia media preserve the bounded Best Available File automatically; X.com, unsupported, oversized, or blocked sources continue in a prefilled Manual Fallback where copied text and pasted image bytes keep the Source Link as provenance. Surrounding discussion is excluded unless pasted deliberately as its own Saved Item.
+- Image URL Capture: Paintings preserves bounded image files from Wikimedia Commons and public X post images when available. Unsupported sources retain a manual fallback draft; an empty URL-only fallback is not reported as preserved content.
+- Idea Sources: a separate navigation destination captures blog, post, and website text. Paste a public HTTPS URL for bounded main-content extraction, or supply copied source text directly. Blocked or unclear pages request pasted text. Saved source text and its separate editable summary can be read locally after reopening the Vault.
+- Summaries: Idea Sources offers user-specific OpenAI API-key/model configuration outside the Vault. When configured, capture attempts a summary after preserving the source; provider failure leaves the source readable with a retry action. Source text is sent to OpenAI for this optional operation. API requests are bounded, and no provider is required to own or read the archive.
 - Organization: saved items can use a vault-level tag registry with aliases, durable collection files with item backreferences, and item links without changing their home subvault.
 - Duplicate candidates: import and capture workflows record nonblocking duplicate warnings from local file fingerprints, source links, import provenance, and strong descriptive metadata.
-- Deferred work: broad web extraction/crawling, logged-in source access, live AI Enrichment, installers/AppImage, automatic updates, automated native-window WebDriver testing, and verified Windows/macOS support are not part of this milestone.
+- Deferred work: broad crawling, logged-in source access, advanced AI Enrichment, installers/AppImage, automatic updates, automated native-window WebDriver testing, and verified Windows/macOS support are not part of this milestone.
 - Activity log and agent CLI: capture, import, metadata rebuild, enrichment, AI cost, and selected error events append to a hidden noncanonical activity log. The CLI exposes structured TSV-style output for validation, opening, import, rebuild, search, capture, item inspection, and selected errors.
 
 The current test seam is the archive core public interface, with thin CLI, desktop command, and browser workflow tests around the same behavior.
@@ -47,10 +49,10 @@ Build the release binary without creating an installer:
 
 ## Verification
 
-Run the Rust test suite with:
+Run a focused Rust test through the bounded Linux runner first:
 
 ```sh
-cargo test
+bash scripts/check-bounded.sh cargo test -p gruenes-gewolbe-core --test capture -- --test-threads=1
 ```
 
 Run the desktop type checks and browser workflow tests with:
@@ -63,9 +65,11 @@ pnpm typecheck
 pnpm test
 ```
 
+`pnpm test` uses the same bounded runner, and Playwright defaults to one worker. The runner caps memory at 2 GiB with no swap, limits CPU and task count, and prevents overlapping verification jobs. It requires a systemd user session and fails rather than running uncapped when that session is unavailable. See [bounded verification](docs/bounded-verification.md) for limits and failure handling.
+
 The browser tests use controlled desktop-command responses; the Rust command tests cover persistence and the on-disk Vault behavior.
 
-The manual Linux acceptance path, edge-case fixtures, restart checks, and expected evidence are documented in [the Offline Archive Loop smoke run](docs/offline-archive-loop-smoke.md). Native-window WebDriver automation remains deferred until native integration regressions justify its maintenance cost.
+The manual Linux acceptance paths and expected evidence are documented in [the Offline Archive Loop smoke run](docs/offline-archive-loop-smoke.md) and [Idea archive acceptance](docs/idea-archive-smoke.md). Native-window WebDriver automation remains deferred until native integration regressions justify its maintenance cost.
 
 On systems without a C compiler on `PATH`, the current suite can be run through Rust's musl target and bundled linker:
 

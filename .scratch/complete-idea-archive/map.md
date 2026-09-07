@@ -9,6 +9,7 @@ A decision-complete specification and implementation route for a responsive desk
 
 ## Notes
 
+- Implementation checkpoint, 2026-09-08: Idea Sources navigation, URL/text capture, local source reading, configured summaries, and lightweight artwork selection are implemented and automatically verified. See [validation and remaining acceptance](VALIDATION.md). The open native acceptance and performance tickets remain open; passing mocks does not resolve them.
 - Execution override, 2026-09-06: the user asked to start implementing step by step with lower-cost subagents and code review. Continue through implementation with reasonable defaults grounded in the stated workflow; do not re-request approval for the accepted URL/text fallback or visible Idea Sources destination. Planned features still cannot be reported as delivered without verification.
 - User input, 2026-09-06: many open browser tabs are the current holding system. URL paste should be the normal entry; pasted source text followed by app summarization is an acceptable fallback. Posts, blogs, and web pages need an obvious area in the left navigation. Image archiving already works, but image clicks feel delayed. Test execution freezes the machine; neither OOM nor Playwright has been proved as the cause.
 - Product acceptance includes both images and Idea Sources. A link-only record must never be presented as preserved source content. Source preservation and summary generation can fail independently and need honest visible outcomes.

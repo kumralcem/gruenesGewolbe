@@ -37,6 +37,34 @@ export interface SourceLinkCaptureRequest {
   savingReason: string | null;
 }
 
+export interface IdeaSourceCaptureRequest extends SourceLinkCaptureRequest {
+  copiedText: string | null;
+}
+
+export type IdeaSourceCaptureResult =
+  | { status: "captured"; item: SavedItem; summary_status: "generated" | "unavailable" | "skipped"; summary: string | null }
+  | {
+      status: "needs_manual_fallback";
+      source_link: string;
+      title: string;
+      saving_reason: string | null;
+      reason: string;
+    };
+
+export interface IdeaSourceContent {
+  id: string;
+  source_link: string;
+  cleaned_text: string;
+  summary: string | null;
+}
+
+export type AiBudgetMode = "off" | "cheap" | "standard" | "deep";
+export type IdeaSummaryResult =
+  | { status: "generated"; summary: string }
+  | { status: "unavailable" | "skipped" | "failed"; reason?: string | null };
+export interface OpenAiProviderStatus { configured: boolean; model: string | null; }
+export interface OpenAiProviderConfiguration { apiKey: string; model: string; }
+
 export interface ManualFallbackCaptureRequest extends SourceLinkCaptureRequest {
   copiedText: string | null;
   copiedImage: { fileName: string; bytes: number[] } | null;
@@ -264,6 +292,12 @@ export interface DesktopAdapter {
   moveItemToTrash?(id: string): Promise<SavedItem>;
   restoreTrashedItem?(id: string): Promise<SavedItem>;
   permanentlyDeleteTrashedItem?(id: string, confirmedId: string): Promise<PermanentDeletion>;
+  getItemDetails?(id: string): Promise<ItemDetails>;
+  captureIdeaSource?(request: IdeaSourceCaptureRequest): Promise<IdeaSourceCaptureResult>;
+  readIdeaSource?(id: string): Promise<IdeaSourceContent>;
+  summarizeIdeaSource?(id: string, budgetMode: AiBudgetMode): Promise<IdeaSummaryResult>;
+  configureOpenAiProvider?(configuration: OpenAiProviderConfiguration): Promise<void>;
+  openAiProviderStatus?(): Promise<OpenAiProviderStatus>;
   captureSourceLink?(request: SourceLinkCaptureRequest): Promise<SourceLinkCaptureResult>;
   captureManualFallback?(request: ManualFallbackCaptureRequest): Promise<SavedItem>;
   fileUrl?(path: string): string;

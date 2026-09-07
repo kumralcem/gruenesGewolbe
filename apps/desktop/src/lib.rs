@@ -1,5 +1,6 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -20,10 +21,11 @@ use gruenes_gewolbe_core::{
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
     CollectionDefinition, CopiedImage, DuplicateCandidateAction, DuplicateCandidateResolution,
     DuplicateCandidateResolutionOutcome, ExactDuplicatePolicy, ExtractedTextCapture,
-    IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary, ItemDetails,
-    ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit, ManualFallbackCapture,
-    PermanentDeletion, ReviewQueueItem, ReviewReason, ReviewReasonAction, ReviewReasonResolution,
-    SavedItem, SearchResult, SelectedFileImportSummary, SourceCaptureResult, SourceExtractor,
+    IdeaSourceContent, IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary,
+    ItemDetails, ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit,
+    ManualFallbackCapture, PermanentDeletion, ReviewQueueItem, ReviewReason, ReviewReasonAction,
+    ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
+    SourceCaptureResult, SourceExtraction, SourceExtractionRequest, SourceExtractor,
     SourceLinkCapture, TagDefinition, ThumbnailPreparation, TrashedItem, UpdateItemRecord, Vault,
     VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
 };
@@ -409,6 +411,14 @@ impl DesktopShell {
         }
     }
 
+    pub fn read_idea_source(&self, id: &str) -> Result<IdeaSourceContent, DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .read_idea_source(id)
+            .map_err(DesktopShellError::Vault)
+    }
+
     pub fn update_item_record(
         &self,
         update: UpdateItemRecord,
@@ -628,11 +638,23 @@ impl DesktopShell {
             .as_ref()
             .ok_or(DesktopShellError::AppStateNotConfigured)?;
         fs::create_dir_all(app_state_dir).map_err(DesktopShellError::Io)?;
-        fs::write(
-            app_state_dir.join(OPENAI_PROVIDER_FILE),
-            openai_provider_config_toml(&config),
+        let path = app_state_dir.join(OPENAI_PROVIDER_FILE);
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(DesktopShellError::Io)?;
+        #[cfg(unix)]
+        fs::set_permissions(
+            &path,
+            <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
         )
-        .map_err(DesktopShellError::Io)
+        .map_err(DesktopShellError::Io)?;
+        file.write_all(openai_provider_config_toml(&config).as_bytes())
+            .map_err(DesktopShellError::Io)
     }
 
     pub fn openai_provider_config(&self) -> Result<OpenAiProviderConfig, DesktopShellError> {
@@ -855,6 +877,48 @@ impl TauriCommandState {
             .map(SavedItemView::from)
     }
 
+    pub fn capture_idea_source(
+        &self,
+        command: CaptureIdeaCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        if let Some(expected_root) = expected_active_root {
+            if self.active_vault_root().as_deref() != Some(expected_root) {
+                return Err(DesktopShellError::ActiveVaultChanged);
+            }
+        }
+        if non_empty(command.copied_text.clone()).is_some() {
+            return self
+                .capture_idea(command)
+                .map(|item| SourceCaptureResultView::Captured { item });
+        }
+        let extraction = match extractor.extract(SourceExtractionRequest {
+            source_link: command.source_link.clone(),
+        }) {
+            SourceExtraction::ExtractedText { title, cleaned_text } => SourceExtraction::ExtractedText { title, cleaned_text },
+            SourceExtraction::ExtractedImage { .. } => SourceExtraction::NeedsManualFallback {
+                reason: "This URL exposed an image but no readable Idea Source text; paste the source text instead".to_string(),
+            },
+            fallback => fallback,
+        };
+        struct Completed(SourceExtraction);
+        impl SourceExtractor for Completed {
+            fn extract(&self, _: SourceExtractionRequest) -> SourceExtraction {
+                self.0.clone()
+            }
+        }
+        self.capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+            },
+            &Completed(extraction),
+            expected_active_root,
+        )
+    }
+
     pub fn capture_source_link(
         &self,
         command: CaptureSourceLinkCommand,
@@ -927,6 +991,68 @@ impl TauriCommandState {
         self.shell
             .activity_log_path()
             .map(|path| path_string(&path))
+    }
+
+    pub fn get_item_details(&self, id: String) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .item_details(&id)
+            .map(|details| ItemDetailsView::from(&details))
+    }
+
+    pub fn read_idea_source(&self, id: String) -> Result<IdeaSourceContentView, DesktopShellError> {
+        self.shell
+            .read_idea_source(&id)
+            .map(IdeaSourceContentView::from)
+    }
+
+    pub fn configure_openai_provider(
+        &self,
+        config: OpenAiProviderConfig,
+    ) -> Result<(), DesktopShellError> {
+        self.shell.configure_openai_provider(config)
+    }
+
+    pub fn openai_provider_status(&self) -> OpenAiProviderStatusView {
+        match self.shell.openai_provider_config() {
+            Ok(config) if !config.api_key.trim().is_empty() && !config.model.trim().is_empty() => {
+                OpenAiProviderStatusView {
+                    configured: true,
+                    model: Some(config.model),
+                }
+            }
+            _ => OpenAiProviderStatusView {
+                configured: false,
+                model: None,
+            },
+        }
+    }
+
+    pub fn shell_openai_provider_config(&self) -> Result<OpenAiProviderConfig, DesktopShellError> {
+        self.shell.openai_provider_config()
+    }
+
+    pub fn summarize_idea_source(
+        &self,
+        id: String,
+        budget_mode: &str,
+        provider: &dyn AiProvider,
+    ) -> Result<SummarizeIdeaSourceView, DesktopShellError> {
+        let budget_mode = parse_ai_budget_mode(budget_mode)?;
+        if budget_mode == AiBudgetMode::Off {
+            return Ok(SummarizeIdeaSourceView::Skipped {
+                reason: Some("AI budget is off".to_string()),
+            });
+        }
+        self.shell
+            .enrich_idea_with_ai(&id, budget_mode, provider)
+            .map(|result| match result.accepted_summary() {
+                Some(summary) => SummarizeIdeaSourceView::Generated {
+                    summary: summary.to_string(),
+                },
+                None => SummarizeIdeaSourceView::Unavailable {
+                    reason: Some("The provider returned no summary".to_string()),
+                },
+            })
     }
 
     pub fn move_item_to_trash(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
@@ -1425,6 +1551,40 @@ pub struct SavedItemView {
     pub item_folder: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IdeaSourceContentView {
+    pub id: String,
+    pub source_link: String,
+    pub cleaned_text: String,
+    pub summary: Option<String>,
+}
+
+impl From<IdeaSourceContent> for IdeaSourceContentView {
+    fn from(source: IdeaSourceContent) -> Self {
+        Self {
+            id: source.id().to_string(),
+            source_link: source.source_link().to_string(),
+            cleaned_text: source.cleaned_text().to_string(),
+            summary: source.summary().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenAiProviderStatusView {
+    pub configured: bool,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SummarizeIdeaSourceView {
+    Generated { summary: String },
+    Unavailable { reason: Option<String> },
+    Skipped { reason: Option<String> },
+    Failed { reason: Option<String> },
+}
+
 impl From<SavedItem> for SavedItemView {
     fn from(item: SavedItem) -> Self {
         Self {
@@ -1438,7 +1598,9 @@ impl From<SavedItem> for SavedItemView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SourceCaptureResultView {
-    Captured { item: SavedItemView },
+    Captured {
+        item: SavedItemView,
+    },
     NeedsManualFallback {
         source_link: String,
         title: String,
@@ -1947,6 +2109,7 @@ pub enum DesktopShellError {
     AppStateNotConfigured,
     MalformedProviderConfig(PathBuf),
     UnsupportedArtworkSort(String),
+    UnsupportedAiBudgetMode(String),
     InvalidReviewReasonAction(String),
     Io(io::Error),
     Vault(VaultError),
@@ -1968,6 +2131,7 @@ impl std::fmt::Display for DesktopShellError {
                 write!(f, "provider config is malformed: {}", path.display())
             }
             Self::UnsupportedArtworkSort(sort) => write!(f, "unsupported artwork sort: {sort}"),
+            Self::UnsupportedAiBudgetMode(mode) => write!(f, "unsupported AI budget mode: {mode}"),
             Self::InvalidReviewReasonAction(action) => {
                 write!(f, "invalid review reason action: {action}")
             }
@@ -1986,6 +2150,7 @@ impl std::error::Error for DesktopShellError {
             Self::AppStateNotConfigured => None,
             Self::MalformedProviderConfig(_) => None,
             Self::UnsupportedArtworkSort(_) => None,
+            Self::UnsupportedAiBudgetMode(_) => None,
             Self::InvalidReviewReasonAction(_) => None,
             Self::Io(error) => Some(error),
             Self::Vault(error) => Some(error),
@@ -2040,6 +2205,18 @@ fn parse_artwork_sort(sort: &str) -> Result<ArtworkSort, DesktopShellError> {
     }
 }
 
+fn parse_ai_budget_mode(mode: &str) -> Result<AiBudgetMode, DesktopShellError> {
+    match mode {
+        "off" => Ok(AiBudgetMode::Off),
+        "cheap" => Ok(AiBudgetMode::Cheap),
+        "standard" => Ok(AiBudgetMode::Standard),
+        "deep" => Ok(AiBudgetMode::Deep),
+        value => Err(DesktopShellError::UnsupportedAiBudgetMode(
+            value.to_string(),
+        )),
+    }
+}
+
 fn read_known_vault_roots(app_state_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let path = app_state_dir.join(KNOWN_VAULTS_FILE);
     if !path.is_file() {
@@ -2086,4 +2263,92 @@ fn write_last_active_vault_root(app_state_dir: &Path, root: &Path) -> Result<(),
         root.display().to_string(),
     )?;
     Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub struct OpenAiResponsesProvider {
+    client: reqwest::blocking::Client,
+    api_key: String,
+    model: String,
+}
+
+#[cfg(feature = "tauri-runtime")]
+impl OpenAiResponsesProvider {
+    pub fn new(config: OpenAiProviderConfig) -> Result<Self, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|error| format!("OpenAI client could not start: {error}"))?;
+        Ok(Self {
+            client,
+            api_key: config.api_key,
+            model: config.model,
+        })
+    }
+
+    pub fn summarize(
+        &self,
+        cleaned_text: &str,
+        budget_mode: AiBudgetMode,
+    ) -> Result<gruenes_gewolbe_core::AiProviderResponse, String> {
+        let (max_input_chars, max_output_tokens) = match budget_mode {
+            AiBudgetMode::Off => return Err("AI budget is off".to_string()),
+            AiBudgetMode::Cheap => (40_000, 250),
+            AiBudgetMode::Standard => (100_000, 500),
+            AiBudgetMode::Deep => (200_000, 800),
+        };
+        if cleaned_text.chars().count() > max_input_chars {
+            return Err(format!("Preserved source is too long for the selected AI budget (limit: {max_input_chars} characters)"));
+        }
+        let response = self.client
+            .post("https://api.openai.com/v1/responses")
+            .bearer_auth(&self.api_key)
+            .json(&serde_json::json!({
+                "model": self.model,
+                "instructions": "Summarize this preserved source faithfully. State its central point, the main supporting ideas, and why it may be useful later. Do not invent facts. Return only the summary in compact prose.",
+                "input": cleaned_text,
+                "max_output_tokens": max_output_tokens,
+                "store": false
+            }))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map_err(|error| format!("OpenAI summary request failed: {error}"))?;
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        response
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("OpenAI summary response could not be read: {error}"))?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("OpenAI summary response exceeded the 1 MiB limit".to_string());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("OpenAI summary response was invalid: {error}"))?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+            return Err("OpenAI did not complete the summary response".to_string());
+        }
+        let summary = value
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+            .flatten()
+            .find_map(|content| {
+                (content.get("type").and_then(serde_json::Value::as_str) == Some("output_text"))
+                    .then(|| content.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+            })
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| "OpenAI returned no summary text".to_string())?
+            .to_string();
+        Ok(gruenes_gewolbe_core::AiProviderResponse {
+            summary: Some(summary),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 0,
+        })
+    }
 }

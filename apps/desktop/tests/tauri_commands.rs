@@ -2,13 +2,16 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gruenes_gewolbe_core::{
+    AiMetadataSuggestion, AiProvider, AiProviderRequest, AiProviderResponse, SourceExtraction,
+    SourceExtractionRequest, SourceExtractor,
+};
 use gruenes_gewolbe_desktop::{
     AddArtworkFilesCommand, CaptureIdeaCommand, CaptureSourceLinkCommand, CopiedImageCommand,
     ImportPaintingsCommand, ManualFallbackCaptureCommand, OpenVaultView,
     ResolveDuplicateCandidateCommand, RunPaintingsImportCommand, TauriCommandState,
     WorkbenchSnapshotCommand,
 };
-use gruenes_gewolbe_core::{SourceExtraction, SourceExtractionRequest, SourceExtractor};
 
 #[test]
 fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
@@ -76,27 +79,34 @@ fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
 fn tauri_command_captures_extracted_wikimedia_bytes_into_the_active_vault() {
     let root = temp_path("tauri-url-image-vault");
     let mut state = TauriCommandState::default();
-    state.create_vault(root.display().to_string()).expect("create Vault");
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
     let extractor = FakeExtractor(SourceExtraction::ExtractedImage {
         title: Some("The Great Wave".into()),
         file_name: "wave.jpg".into(),
         bytes: b"preserved Wikimedia bytes".to_vec(),
     });
 
-    let result = state.capture_source_link(
-        CaptureSourceLinkCommand {
-            source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
-            title: String::new(),
-            saving_reason: Some("Print reference".into()),
-        },
-        &extractor,
-        Some(root.as_path()),
-    ).expect("capture source through command");
+    let result = state
+        .capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+                title: String::new(),
+                saving_reason: Some("Print reference".into()),
+            },
+            &extractor,
+            Some(root.as_path()),
+        )
+        .expect("capture source through command");
     let value = serde_json::to_value(result).expect("serialize result");
     assert_eq!(value["status"], "captured");
     assert_eq!(value["item"]["home_subvault"], "Paintings");
     let folder = PathBuf::from(value["item"]["item_folder"].as_str().expect("item folder"));
-    assert_eq!(fs::read(folder.join("files/wave.jpg")).expect("read preserved file"), b"preserved Wikimedia bytes");
+    assert_eq!(
+        fs::read(folder.join("files/wave.jpg")).expect("read preserved file"),
+        b"preserved Wikimedia bytes"
+    );
 
     fs::remove_dir_all(root).expect("clean Vault");
 }
@@ -180,6 +190,81 @@ fn tauri_command_saves_manual_fallback_into_idea_sources() {
     );
 
     fs::remove_dir_all(root).expect("clean Vault");
+}
+
+#[test]
+fn tauri_commands_capture_read_and_summarize_an_idea_source() {
+    let root = temp_path("tauri-complete-idea-vault");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
+    let active_root = state.active_vault_root().expect("active root");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedText {
+        title: Some("Extracted title".into()),
+        cleaned_text: "The complete argument remains locally readable after capture.".into(),
+    });
+
+    let result = state
+        .capture_idea_source(
+            CaptureIdeaCommand {
+                source_link: "https://example.com/argument".into(),
+                title: String::new(),
+                saving_reason: Some("Use in the archive essay".into()),
+                copied_text: None,
+            },
+            &extractor,
+            Some(active_root.as_path()),
+        )
+        .expect("capture Idea Source");
+    let value = serde_json::to_value(result).expect("serialize capture");
+    assert_eq!(value["status"], "captured");
+    assert_eq!(value["item"]["home_subvault"], "Idea Sources");
+    let id = value["item"]["id"].as_str().expect("item id").to_string();
+
+    let source = state
+        .read_idea_source(id.clone())
+        .expect("read source offline");
+    assert_eq!(
+        source.cleaned_text,
+        "The complete argument remains locally readable after capture."
+    );
+    assert_eq!(
+        state.get_item_details(id.clone()).unwrap().title,
+        "Extracted title"
+    );
+
+    let summary = state
+        .summarize_idea_source(id.clone(), "standard", &SummaryProvider)
+        .expect("summarize source");
+    assert_eq!(
+        serde_json::to_value(summary).unwrap(),
+        serde_json::json!({"status": "generated", "summary": "A durable summary."})
+    );
+    assert_eq!(
+        state.read_idea_source(id).unwrap().summary.as_deref(),
+        Some("A durable summary.")
+    );
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+struct SummaryProvider;
+
+impl AiProvider for SummaryProvider {
+    fn enrich(&self, request: AiProviderRequest) -> AiProviderResponse {
+        assert_eq!(
+            request.cleaned_text.as_deref(),
+            Some("The complete argument remains locally readable after capture.")
+        );
+        AiProviderResponse {
+            summary: Some("A durable summary.".into()),
+            tags: Vec::new(),
+            suggestions: Vec::<AiMetadataSuggestion>::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 2,
+        }
+    }
 }
 
 struct FakeExtractor(SourceExtraction);

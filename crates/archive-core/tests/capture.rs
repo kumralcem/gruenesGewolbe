@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gruenes_gewolbe_core::{
     CopiedImage, ExtractedTextCapture, ManualFallbackCapture, SourceCaptureResult,
     SourceExtraction, SourceExtractionRequest, SourceExtractor, SourceLinkCapture, Vault,
+    VaultError,
 };
 
 #[test]
@@ -140,6 +141,131 @@ fn user_can_capture_a_source_link_with_extracted_cleaned_text() {
 }
 
 #[test]
+fn preserved_idea_source_can_be_read_after_reopening_offline() {
+    let root = temp_path("read-idea-source-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let captured = vault
+        .capture_extracted_text(ExtractedTextCapture {
+            source_link: "https://example.com/vanishing-essay".to_string(),
+            title: "Vanishing essay".to_string(),
+            saving_reason: None,
+            cleaned_text: "The durable argument remains readable without the original website."
+                .to_string(),
+        })
+        .expect("capture source");
+    let id = captured.id().to_string();
+    drop(vault);
+
+    let reopened = Vault::open(&root).expect("reopen vault without network");
+    let source = reopened
+        .read_idea_source(&id)
+        .expect("read preserved source");
+    assert_eq!(source.source_link(), "https://example.com/vanishing-essay");
+    assert_eq!(
+        source.cleaned_text(),
+        "The durable argument remains readable without the original website."
+    );
+    assert_eq!(source.summary(), None);
+
+    fs::remove_dir_all(root).expect("clean vault");
+}
+
+#[test]
+fn oversized_pasted_text_is_rejected_before_an_item_folder_is_created() {
+    let root = temp_path("oversized-pasted-idea-source-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let result = vault.manual_fallback_capture(ManualFallbackCapture {
+        source_link: "https://example.com/oversized".to_string(),
+        title: "Oversized source".to_string(),
+        saving_reason: None,
+        copied_text: Some("x".repeat(2 * 1024 * 1024)),
+        copied_image: None,
+    });
+
+    assert!(matches!(result, Err(VaultError::IdeaSourceCopyTooLarge(_))));
+    let items = root.join("subvaults/Idea Sources/items");
+    assert!(!items.exists() || fs::read_dir(items).expect("read items").next().is_none());
+
+    fs::remove_dir_all(root).expect("clean vault");
+}
+
+#[test]
+fn idea_source_reader_rejects_traversal_and_empty_source_copies() {
+    let root = temp_path("unsafe-idea-source-vault");
+    let vault = Vault::create(&root).expect("create vault");
+    let captured = vault
+        .capture_extracted_text(ExtractedTextCapture {
+            source_link: "https://example.com/source".to_string(),
+            title: "Source".to_string(),
+            saving_reason: None,
+            cleaned_text: "Preserved source text".to_string(),
+        })
+        .expect("capture source");
+    let record_path = captured.item_folder().join("record.md");
+    let record = fs::read_to_string(&record_path).expect("read record");
+    fs::write(
+        &record_path,
+        record.replace(
+            "source_copy: source-copies/cleaned-text.md",
+            "source_copy: ../../../../vault.toml",
+        ),
+    )
+    .expect("write traversal record");
+    assert!(vault.read_idea_source(captured.id()).is_err());
+
+    let record = fs::read_to_string(&record_path).expect("read record");
+    fs::write(
+        &record_path,
+        record.replace(
+            "source_copy: ../../../../vault.toml",
+            "source_copy: source-copies/cleaned-text.md",
+        ),
+    )
+    .expect("restore record");
+    fs::write(
+        captured.item_folder().join("source-copies/cleaned-text.md"),
+        "   \n",
+    )
+    .expect("empty source copy");
+    assert!(vault.read_idea_source(captured.id()).is_err());
+
+    fs::write(
+        captured.item_folder().join("source-copies/cleaned-text.md"),
+        vec![b'x'; 2 * 1024 * 1024 + 1],
+    )
+    .expect("oversized source copy");
+    assert!(vault.read_idea_source(captured.id()).is_err());
+
+    fs::remove_dir_all(root).expect("clean vault");
+}
+
+#[cfg(unix)]
+#[test]
+fn idea_source_reader_rejects_symlinks_outside_the_item_folder() {
+    use std::os::unix::fs::symlink;
+
+    let root = temp_path("symlink-idea-source-vault");
+    let outside = temp_path("symlink-idea-source-secret");
+    fs::write(&outside, "must not be exposed").expect("write outside file");
+    let vault = Vault::create(&root).expect("create vault");
+    let captured = vault
+        .capture_extracted_text(ExtractedTextCapture {
+            source_link: "https://example.com/source".to_string(),
+            title: "Source".to_string(),
+            saving_reason: None,
+            cleaned_text: "Preserved source text".to_string(),
+        })
+        .expect("capture source");
+    let copy = captured.item_folder().join("source-copies/cleaned-text.md");
+    fs::remove_file(&copy).expect("remove source copy");
+    symlink(&outside, &copy).expect("link outside file");
+    assert!(vault.read_idea_source(captured.id()).is_err());
+
+    fs::remove_dir_all(root).expect("clean vault");
+    fs::remove_file(outside).expect("clean outside file");
+}
+
+#[test]
 fn url_capture_returns_a_manual_fallback_prompt_when_extraction_is_blocked() {
     let root = temp_path("capture-url-fallback-vault");
     let vault = Vault::create(&root).expect("create vault");
@@ -264,11 +390,13 @@ fn url_capture_preserves_extracted_visual_bytes_with_source_provenance() {
             .expect("read preserved image"),
         b"best available image bytes"
     );
-    let record = fs::read_to_string(captured.item_folder().join("record.md"))
-        .expect("read Item Record");
+    let record =
+        fs::read_to_string(captured.item_folder().join("record.md")).expect("read Item Record");
     assert!(record.contains("item_type: artwork"));
     assert!(record.contains("title: The Great Wave"));
-    assert!(record.contains("source_link: https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg"));
+    assert!(
+        record.contains("source_link: https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg")
+    );
     assert!(record.contains("primary_file: files/great-wave.jpg"));
     assert!(record.contains("capture_method: extracted-image"));
     assert!(record.contains("imported_at: "));
@@ -285,11 +413,16 @@ fn url_capture_preserves_extracted_visual_bytes_with_source_provenance() {
                 .is_none()
     );
     assert_eq!(
-        vault.item_details(captured.id()).expect("read captured details").source_link(),
+        vault
+            .item_details(captured.id())
+            .expect("read captured details")
+            .source_link(),
         Some("https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg")
     );
     assert_eq!(
-        vault.browse_artwork_items("Paintings").expect("browse captured artwork")[0]
+        vault
+            .browse_artwork_items("Paintings")
+            .expect("browse captured artwork")[0]
             .saved_item()
             .id(),
         captured.id()

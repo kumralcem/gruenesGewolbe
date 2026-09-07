@@ -1,64 +1,149 @@
 import { expect, test } from "@playwright/test";
 
-test("offers Manual Fallback when a pasted source link cannot be extracted", async ({ page }) => {
+test("keeps an unsupported Idea Source draft until readable source text is supplied", async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     let captured = false;
-    let manualImageBytes: number[] | null = null;
-    (window as any).__manualImageBytes = () => manualImageBytes;
+    const sourceText = "The post argues that references are most useful when the reason for saving them stays attached.";
+    const details = {
+      id: "idea-1", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1",
+      title: "X post by example", creator: "Unknown Creator", year: "Unknown Year", primary_file: "",
+      review_status: "needs-review", review_reasons: [], tags: [], collections: [], item_links: [],
+      saving_reason: "Remember the composition notes", source_link: "https://x.com/example/status/1",
+      summary: null, source_copy: "source-copies/cleaned-text.md", record_revision: "r1", folder_rename_proposal: null,
+    };
     const snapshot = () => ({
-      active_vault: { root: "/vault" },
-      subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [],
-      idea_sources: captured ? [{
-        id: "idea-1", title: "Saved post", source_link: "https://x.com/example/status/1",
-        source_copy: "source-copies/cleaned-text.md", review_status: "needs-review",
-        saving_reason: "Remember the composition notes",
-      }] : [],
-      review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: [],
+      active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [],
+      idea_sources: captured ? [{ id: "idea-1", title: details.title, source_link: details.source_link, source_copy: details.source_copy, review_status: details.review_status, saving_reason: details.saving_reason }] : [],
+      review_queue: [], search_results: [], selected_item: captured ? details : null, vault_problems: [], trashed_items: [],
     });
     window.__GG_TEST_ADAPTER__ = {
       startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
-      selectFolder: async () => null, createVault: async root => ({ root }),
-      openVault: async root => ({ status: "opened", vault: { root } }),
-      confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
+      selectFolder: async () => null, createVault: async (root: string) => ({ root }),
+      openVault: async (root: string) => ({ status: "opened", vault: { root } }),
+      confirmVaultRepair: async (root: string) => ({ root }), cancelVaultRepair: async () => {},
       workbenchSnapshot: async () => snapshot(),
-      captureSourceLink: async (request) => ({
-        status: "needs_manual_fallback", source_link: request.sourceLink,
-        title: "", saving_reason: request.savingReason,
-        reason: "X.com requires pasted content",
-      }),
-      captureManualFallback: async (request) => {
-        manualImageBytes = request.copiedImage?.bytes ?? null;
-        captured = true;
-        return { id: "idea-1", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1" };
+      captureIdeaSource: async (request) => {
+        if (!request.copiedText) return { status: "needs_manual_fallback", source_link: request.sourceLink, title: details.title, saving_reason: request.savingReason, reason: "This page could not be read automatically." };
+        captured = request.copiedText === sourceText;
+        return { status: "captured", item: { id: "idea-1", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1" }, summary_status: "unavailable", summary: null };
       },
-      fileUrl: path => path,
+      readIdeaSource: async () => ({ id: "idea-1", source_link: details.source_link, cleaned_text: sourceText, summary: null }),
+      openAiProviderStatus: async () => ({ configured: false, model: null }),
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: "Add Idea Source" }).click();
+  const capture = page.getByRole("region", { name: "Add Idea Source" });
+  await capture.getByLabel("Source Link").fill("https://x.com/example/status/1");
+  await capture.getByLabel(/Saving Reason/).fill("Remember the composition notes");
+  await capture.getByRole("button", { name: "Save Idea Source" }).click();
+
+  await expect(capture.getByText(/could not be read automatically/)).toBeVisible();
+  await expect(capture.getByLabel("Source Link")).toHaveValue("https://x.com/example/status/1");
+  await expect(page.getByText("No Idea Sources yet")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.locator(".workspace").evaluate((element) => { element.scrollTop = 0; });
+  await testInfo.attach("idea-source-manual-fallback", {
+    body: await page.screenshot({ path: "../../.scratch/complete-idea-archive/evidence/idea-source-capture.png" }),
+    contentType: "image/png",
+  });
+  await capture.getByLabel(/Source Text/).fill("The post argues that references are most useful when the reason for saving them stays attached.");
+  await capture.getByRole("button", { name: "Save Source Text" }).click();
+
+  const item = page.getByRole("complementary", { name: "Idea Source details" });
+  await expect(item.getByText(/references are most useful/)).toBeVisible();
+  await expect(item.getByText("Automatic summarization is unavailable until a provider is configured.")).toBeVisible();
+  await expect(item.getByText("Source saved; summary unavailable. Check settings or retry.")).toBeVisible();
+});
+
+test("shows an automatically generated summary when a provider is configured", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    let captured = false;
+    const details = { id: "idea-1", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1", title: "Useful post", creator: "Unknown Creator", year: "Unknown Year", primary_file: "", review_status: "reviewed", review_reasons: [], tags: [], collections: [], item_links: [], saving_reason: null, source_link: "https://example.com/post", summary: "A useful concise summary.", source_copy: "source-copies/cleaned-text.md", record_revision: "r1", folder_rename_proposal: null };
+    const snapshot = () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [], idea_sources: captured ? [{ id: details.id, title: details.title, source_link: details.source_link, source_copy: details.source_copy, review_status: details.review_status, saving_reason: null }] : [], review_queue: [], search_results: [], selected_item: captured ? details : null, vault_problems: [], trashed_items: [] });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null, createVault: async (root: string) => ({ root }), openVault: async (root: string) => ({ status: "opened", vault: { root } }), confirmVaultRepair: async (root: string) => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => snapshot(),
+      captureIdeaSource: async (request) => { captured = request.copiedText === "A complete local source."; return { status: "captured", item: { id: "idea-1", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-1" }, summary_status: "generated", summary: details.summary }; },
+      readIdeaSource: async () => ({ id: "idea-1", source_link: details.source_link, cleaned_text: "A complete local source.", summary: details.summary }),
+      openAiProviderStatus: async () => ({ configured: true, model: "summary-model" }),
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: "Add Idea Source" }).click();
+  const capture = page.getByRole("region", { name: "Add Idea Source" });
+  await capture.getByLabel("Source Link").fill("https://example.com/post");
+  await capture.getByLabel(/Source Text/).fill("A complete local source.");
+  await capture.getByRole("button", { name: "Save Idea Source" }).click();
+
+  const item = page.getByRole("complementary", { name: "Idea Source details" });
+  await expect(item.getByText("A complete local source.")).toBeVisible();
+  await expect(item.getByRole("region", { name: "Summary" }).getByText("A useful concise summary.", { exact: true })).toBeVisible();
+  await expect(item.getByText("Summary created and saved with the source.")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.locator(".workspace").evaluate((element) => { element.scrollTop = 0; });
+  await testInfo.attach("idea-source-reader", {
+    body: await page.screenshot({ path: "../../.scratch/complete-idea-archive/evidence/idea-source-reader.png" }),
+    contentType: "image/png",
+  });
+});
+
+test("configures summarization outside the Vault without exposing the saved key", async ({ page }) => {
+  await page.addInitScript(() => {
+    let configured = false;
+    let savedModel = "";
+    (window as any).__providerConfiguration = () => ({ configured, savedModel });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null, createVault: async (root: string) => ({ root }), openVault: async (root: string) => ({ status: "opened", vault: { root } }), confirmVaultRepair: async (root: string) => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [], idea_sources: [], review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: [] }),
+      captureIdeaSource: async () => { throw new Error("not called"); },
+      configureOpenAiProvider: async ({ apiKey, model }) => { configured = apiKey === "secret-test-key"; savedModel = model; },
+      openAiProviderStatus: async () => ({ configured, model: configured ? savedModel : null }),
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByText("Set up summaries").click();
+  await page.getByLabel("OpenAI API Key").fill("secret-test-key");
+  await page.getByLabel("Model").fill("gpt-4.1-mini");
+  await page.getByRole("button", { name: "Save Summary Settings" }).click();
+
+  await expect(page.getByText("Summaries: gpt-4.1-mini")).toBeVisible();
+  await expect(page.getByText("secret-test-key")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__providerConfiguration())).toEqual({ configured: true, savedModel: "gpt-4.1-mini" });
+});
+
+test("never saves an empty fallback from the Paintings link capture", async ({ page }) => {
+  await page.addInitScript(() => {
+    let fallbackSaves = 0;
+    (window as any).__fallbackSaves = () => fallbackSaves;
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null, createVault: async root => ({ root }), openVault: async root => ({ status: "opened", vault: { root } }), confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [], idea_sources: [], review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: [] }),
+      captureSourceLink: async request => ({ status: "needs_manual_fallback", source_link: request.sourceLink, title: "Blocked page", saving_reason: request.savingReason, reason: "The page could not be extracted." }),
+      captureManualFallback: async request => { fallbackSaves += 1; return { id: "idea-1", home_subvault: "Idea Sources", item_folder: `/vault/${request.title}` }; },
     };
   });
 
   await page.goto("/");
   await page.getByRole("button", { name: "Capture Link" }).click();
   const capture = page.getByRole("region", { name: "Capture Link" });
-  await capture.getByLabel("Source Link").fill("https://x.com/example/status/1");
-  await capture.getByLabel(/Saving Reason/).fill("Remember the composition notes");
-  await capture.getByRole("button", { name: "Try Capture" }).click();
+  await capture.getByLabel("Source Link").fill("https://example.com/blocked");
+  await capture.getByRole("button", { name: "Capture", exact: true }).click();
 
-  await expect(page.getByText("X.com requires pasted content")).toBeVisible();
-  await expect(capture.getByLabel("Source Link")).toHaveValue("https://x.com/example/status/1");
-  await capture.getByLabel("Title").fill("Saved post");
-  await capture.getByLabel("Copied Text").evaluate((textarea) => {
-    const transfer = new DataTransfer();
-    transfer.items.add(new File([new Uint8Array([1, 2, 3])], "pasted.png", { type: "image/png" }));
-    textarea.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: transfer }));
-  });
-  await expect(capture.getByText("pasted.png ready to preserve")).toBeVisible();
-  await expect(capture.getByLabel("Title")).toHaveValue("Saved post");
-  await capture.getByLabel("Copied Text").fill("The post text, without surrounding replies.");
+  await expect(capture.getByText("The page could not be extracted.")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__fallbackSaves())).toBe(0);
   await capture.getByRole("button", { name: "Save Manual Fallback" }).click();
-
-  await expect(page.getByRole("heading", { name: "Idea Sources" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Saved post" })).toBeVisible();
-  await expect(page.getByText("https://x.com/example/status/1")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as any).__manualImageBytes())).toEqual([1, 2, 3]);
+  await expect(page.getByRole("alert")).toContainText("Paste source text or an image");
+  await expect.poll(() => page.evaluate(() => (window as any).__fallbackSaves())).toBe(0);
 });
 
 test("captures a supported Wikimedia source without opening Manual Fallback", async ({ page }) => {
@@ -96,7 +181,7 @@ test("captures a supported Wikimedia source without opening Manual Fallback", as
   const capture = page.getByRole("region", { name: "Capture Link" });
   await capture.getByLabel("Source Link").fill("https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg");
   await capture.getByLabel(/Saving Reason/).fill("Print reference");
-  await capture.getByRole("button", { name: "Try Capture" }).click();
+  await capture.getByRole("button", { name: "Capture", exact: true }).click();
 
   await expect(capture).toHaveCount(0);
   await expect(page.getByRole("button", { name: /The Great Wave/ })).toBeVisible();

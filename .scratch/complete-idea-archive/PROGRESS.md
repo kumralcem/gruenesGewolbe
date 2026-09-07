@@ -1,6 +1,6 @@
 # Implementation checkpoint
 
-Updated: 2026-09-07. User explicitly authorizes implementation, lower-cost subagents, code review, commits, and push to the existing remote. Keep important notes here rather than temporary directories.
+Updated: 2026-09-08. User explicitly authorizes implementation, lower-cost subagents, code review, commits, and push to the existing remote. Keep important notes here rather than temporary directories.
 
 ## Repository and ownership
 
@@ -36,3 +36,9 @@ Updated: 2026-09-07. User explicitly authorizes implementation, lower-cost subag
 3. Independent lower-cost standards/correctness and spec reviews; fix findings and rerun affected checks.
 4. Record verified behavior separately from native/live-provider limitations. Update README and issue evidence honestly.
 5. Commit and push reviewed work to existing branch. Do not claim the full product works solely because mocks pass.
+
+## Final implementation checkpoint
+
+The feature implementation and independent review fixes are complete for this slice. Final validation: 163 Rust tests, 36 browser tests, frontend typecheck/build, diff check, and visual inspection passed. See VALIDATION.md and durable logs for exact scope. Initial safety/map commit `fd5b602` was already pushed; the feature commit follows this checkpoint.
+
+Next work is native acceptance and measured image responsiveness, including the remaining thumbnail mutex contention. No paid provider request or native-window smoke has been claimed. DNS resolution pinning and exact live billing remain documented limitations. Important artifacts are all inside this repo.

@@ -10,6 +10,9 @@ import type {
   FolderPurpose,
   ImportProgress,
   ImportRunSummary,
+  IdeaSourceCaptureResult,
+  IdeaSourceContent,
+  IdeaSummaryResult,
   ItemDetails,
   ItemRecordEdit,
   ItemRecordSaveResult,
@@ -18,6 +21,7 @@ import type {
   SelectedFileImportSummary,
   ThumbnailPreparation,
   WorkbenchSnapshot,
+  OpenAiProviderStatus,
 } from "./contracts";
 
 export function createTauriAdapter(): DesktopAdapter {
@@ -125,6 +129,20 @@ export function createTauriAdapter(): DesktopAdapter {
     moveItemToTrash: (id) => invoke<SavedItem>("move_item_to_trash", { id }),
     restoreTrashedItem: (id) => invoke<SavedItem>("restore_trashed_item", { id }),
     permanentlyDeleteTrashedItem: (id, confirmedId) => invoke("permanently_delete_trashed_item", { id, confirmedId }),
+    getItemDetails: (id) => invoke<ItemDetails>("get_item_details", { id }),
+    captureIdeaSource: (request) => invoke<IdeaSourceCaptureResult>("capture_idea_source", {
+      sourceLink: request.sourceLink,
+      title: request.title,
+      savingReason: request.savingReason,
+      copiedText: request.copiedText,
+    }),
+    readIdeaSource: (id) => invoke<IdeaSourceContent>("read_idea_source", { id }),
+    summarizeIdeaSource: (id, budgetMode) => invoke<IdeaSummaryResult>("summarize_idea_source", { id, budgetMode }),
+    configureOpenAiProvider: (configuration) => invoke<void>("configure_openai_provider", {
+      apiKey: configuration.apiKey,
+      model: configuration.model,
+    }),
+    openAiProviderStatus: () => invoke<OpenAiProviderStatus>("openai_provider_status"),
     captureSourceLink: (request) => invoke("capture_source_link", {
       sourceLink: request.sourceLink,
       title: request.title,

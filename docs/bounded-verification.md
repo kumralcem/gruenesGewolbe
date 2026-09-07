@@ -6,7 +6,7 @@ The user has experienced whole-machine freezes during tests. The cause is unconf
 bash scripts/check-bounded.sh cargo test -p gruenes-gewolbe-core --test capture -- --test-threads=1
 ```
 
-From `apps/desktop`, `pnpm test -- tests/browser/url-capture.spec.ts` uses the same wrapper. Playwright defaults to one worker; do not override it upward on this machine. `pnpm typecheck` and `pnpm exec playwright test --list` do not launch browsers.
+From `apps/desktop`, `pnpm test tests/browser/url-capture.spec.ts` uses the same wrapper. Pass the file directly, without an extra `--`: the nested pnpm command can otherwise lose the intended file filter. Playwright defaults to one worker; do not override it upward on this machine. `pnpm typecheck` and `pnpm exec playwright test --list` do not launch browsers.
 
 The wrapper enforces 2 GiB RAM, no swap, one CPU worth of execution, 256 tasks, and a 15-minute deadline. One session-wide lock prevents overlapping wrapped jobs. Rust compilation and tests default to one job/thread. A failing, timed-out, or memory-killed check is a failed check, not proof of a product regression or permission to rerun it uncapped. Systemd reports the job's peak memory and outcome.
 
