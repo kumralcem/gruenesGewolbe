@@ -64,6 +64,10 @@ _Avoid_: URL, page, link
 A saved item whose durable value is primarily a visual artwork or image. Artwork saved items prioritize the best available image file and descriptive metadata such as artist, title, year, style, subjects, and emotional qualities.
 _Avoid_: Painting, photo, image
 
+**Idea Source**:
+A saved item whose durable value is the content or argument of a post, blog article, or web page. It keeps locally readable source material and a separate summary; a source link alone does not preserve the idea.
+_Avoid_: Bookmark, URL, image capture
+
 **Best Available File**:
 The highest-quality local file the app can reasonably obtain for a saved item. For visual saved items this may be the largest image from the source link at first, with broader web search treated as an optional enrichment step.
 _Avoid_: Original, asset, download
@@ -109,7 +113,7 @@ Readable source text with page chrome, navigation, scripts, ads, and unrelated c
 _Avoid_: Raw HTML, screenshot, page dump
 
 **Summary**:
-A compact explanation of why a saved item matters and what future use it is likely to have. Summaries are the primary surface for rediscovery and later action.
+A compact explanation of a saved item's meaning, why it matters, and its likely future use. For an Idea Source, it explains the source's central point without replacing the preserved source text; summaries are the primary surface for rediscovery and later action.
 _Avoid_: Abstract, excerpt, description
 
 **Review Status**:

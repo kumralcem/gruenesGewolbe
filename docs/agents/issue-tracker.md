@@ -17,3 +17,13 @@ Create a new file under `.scratch/<feature-slug>/` (creating the directory if ne
 ## When a skill says "fetch the relevant ticket"
 
 Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+
+## Wayfinding operations
+
+- Map: `.scratch/<effort>/map.md`, labelled `wayfinder:map`.
+- Child decision tickets: `.scratch/<effort>/issues/NN-<slug>.md`; `Parent:` links to the map and `Type:` records `task`, `research`, `prototype`, or `grilling`.
+- Keep `Status:` for this repository's canonical triage strings. Use a separate `State: open`, `claimed`, or `resolved` for Wayfinder lifecycle; `Assignee:` records the claim owner.
+- `Blocked by:` lists relative ticket paths, or `none`. A ticket is unblocked when all listed tickets have `State: resolved`.
+- The frontier is open, unassigned, unblocked children, ordered by filename. The map does not duplicate this list.
+- Claim by setting `State: claimed` and `Assignee:` before working. Resolve by appending a resolution under `## Comments`, setting `State: resolved`, and adding a named link with a brief gist to the map's Decisions so far.
+- Create tickets before adding dependency links. Refer to maps and tickets by linked title in human-facing text.

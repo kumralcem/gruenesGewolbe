@@ -8,7 +8,7 @@
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "playwright test",
+    "test": "bash ../../scripts/check-bounded.sh pnpm exec playwright test",
     "tauri": "tauri"
   },
   "dependencies": {
