@@ -637,3 +637,68 @@ fn temp_path(name: &str) -> PathBuf {
 
     std::env::temp_dir().join(format!("gruenes-gewolbe-{name}-{unique}"))
 }
+
+#[test]
+fn paintings_capture_never_routes_text_to_idea_sources() {
+    let root = temp_path("explicit-paintings-destination");
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let result = state.capture_artwork_source_link(
+        CaptureSourceLinkCommand {
+            source_link: "https://example.com/painting".into(),
+            title: "Painting page".into(), saving_reason: None,
+        },
+        &FakeExtractor(SourceExtraction::ExtractedText {
+            title: Some("A painting".into()), cleaned_text: "Museum description".into(),
+        }), Some(&root),
+    ).unwrap();
+    let value = serde_json::to_value(result).unwrap();
+    assert_eq!(value["status"], "needs_manual_fallback");
+    let command = |copied_text, copied_image| ManualFallbackCaptureCommand {
+        source_link: "https://example.com/painting".into(), title: "Painting".into(),
+        saving_reason: None, copied_text, copied_image,
+    };
+    assert!(state.capture_artwork_fallback(command(Some("Only text".into()), None)).is_err());
+    let saved = state.capture_artwork_fallback(command(None, Some(CopiedImageCommand {
+        file_name: "painting.png".into(), bytes: vec![1, 2, 3],
+    }))).unwrap();
+    assert_eq!(saved.home_subvault, "Paintings");
+    assert_eq!(fs::read(PathBuf::from(saved.item_folder).join("files/painting.png")).unwrap(), [1, 2, 3]);
+    let ideas = root.join("subvaults/Idea Sources/items");
+    assert!(!ideas.exists() || fs::read_dir(ideas).unwrap().next().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn artwork_enrichment_guards_edits_and_preserves_user_title() {
+    let root = temp_path("artwork-enrichment-record-guard");
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let saved = state.capture_artwork_fallback(ManualFallbackCaptureCommand {
+        source_link: "https://example.com/artwork".into(), title: "My own title".into(),
+        saving_reason: Some("A personal reference".into()), copied_text: None,
+        copied_image: Some(CopiedImageCommand { file_name: "painting.png".into(), bytes: vec![1, 2, 3] }),
+    }).unwrap();
+    let before = state.get_item_details(saved.id.clone()).unwrap();
+    let record = PathBuf::from(&saved.item_folder).join("record.md");
+    let edited = format!("{}\nUser note added during research.\n", fs::read_to_string(&record).unwrap());
+    fs::write(&record, &edited).unwrap();
+    let response = || AiProviderResponse {
+        summary: None, tags: vec!["blue palette".into()],
+        suggestions: vec![AiMetadataSuggestion {
+            field: "title".into(), suggested_value: "Provider title".into(), confidence: 0.99,
+            provenance: "Museum: https://example.com/artwork".into(),
+        }], better_file_candidates: vec![], estimated_cost_cents: 0,
+    };
+    assert!(state.apply_artwork_enrichment_response(saved.id.clone(), before.record_revision,
+        gruenes_gewolbe_core::AiBudgetMode::Standard, response()).is_err());
+    assert_eq!(fs::read_to_string(&record).unwrap(), edited);
+    let current = state.get_item_details(saved.id.clone()).unwrap();
+    let enriched = state.apply_artwork_enrichment_response(saved.id, current.record_revision,
+        gruenes_gewolbe_core::AiBudgetMode::Standard, response()).unwrap();
+    assert_eq!(enriched.title, "My own title");
+    assert!(enriched.tags.contains(&"blue palette".to_string()));
+    assert_eq!(fs::read(PathBuf::from(&saved.item_folder).join("files/painting.png")).unwrap(), [1, 2, 3]);
+    assert!(fs::read_to_string(record).unwrap().contains("User note added during research."));
+    fs::remove_dir_all(root).unwrap();
+}

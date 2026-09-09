@@ -119,7 +119,7 @@ button:focus-visible {
 .vault-rail {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   padding: 20px 16px 16px;
   background: #eef1ef;
   border-right: 1px solid #d6dcd8;
@@ -211,6 +211,26 @@ button:focus-visible {
   color: #6e7974;
   font-size: 11px;
 }
+
+.settings-navigation-item {
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  margin: 12px 0;
+  padding: 10px;
+  color: #42504a;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-navigation-item:hover,
+.settings-navigation-item.is-current { color: #114c39; background: #dceae4; border-color: #b8d3c7; }
+.settings-navigation-item > span { display: grid; gap: 3px; }
+.settings-navigation-item strong { font-size: 13px; }
+.settings-navigation-item small { color: #6e7974; font-size: 11px; }
 
 .empty-list {
   margin: 14px 6px;
@@ -610,6 +630,18 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
 }
 
+.settings-workspace { width: min(100%, 760px); align-self: start; }
+.settings-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #e2e7e4; }
+.settings-heading p { color: #65706b; line-height: 1.5; }
+.settings-card { display: grid; gap: 12px; margin-top: 20px; padding: 18px; background: #f3f6f4; border: 1px solid #c7d0cc; border-radius: 8px; }
+.settings-card h3, .settings-card p { margin: 0; }
+.settings-card label { display: grid; gap: 5px; color: #59645f; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.settings-card input, .settings-card select { min-height: 36px; padding: 7px 9px; background: #fff; border: 1px solid #c5cec9; border-radius: 4px; font: inherit; font-size: 13px; text-transform: none; }
+.enrichment-progress { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding: 12px 14px; color: #31413a; background: #eef6f2; border: 1px solid #c7ddd3; border-radius: 6px; }
+.enrichment-progress > div { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.enrichment-progress span, .enrichment-progress p { color: #65706b; font-size: 12px; }
+.enrichment-progress p { margin: 0; }
+
 .artwork-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -686,7 +718,10 @@ button:disabled {
 }
 
 .artwork-details {
-  position: relative;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
   min-width: 0;
   align-self: start;
   padding: 18px;
@@ -1063,6 +1098,9 @@ button:disabled {
   border-radius: 7px;
   box-shadow: 0 10px 28px rgb(25 46 37 / 16%);
 }
+
+.settings-workspace .summary-provider { margin-top: 20px; }
+.settings-workspace .summary-provider > form { position: static; width: auto; margin-top: 12px; box-shadow: none; }
 
 .summary-provider p {
   margin: 0;
@@ -1541,6 +1579,7 @@ button:disabled {
   }
 
   .vault-list {
+    grid-column: 1 / -1;
     display: flex;
     gap: 6px;
     overflow-x: auto;
@@ -1575,7 +1614,11 @@ button:disabled {
     margin: 10px 4px;
   }
 
+  .settings-navigation-item { margin: 0; width: auto; justify-self: start; }
+
   .rail-actions {
+    display: flex;
+    gap: 8px;
     align-self: center;
     padding: 0;
     border: 0;

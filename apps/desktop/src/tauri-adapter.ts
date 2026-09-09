@@ -22,6 +22,7 @@ import type {
   ThumbnailPreparation,
   WorkbenchSnapshot,
   OpenAiProviderStatus,
+  ArtworkEnrichmentProgress,
 } from "./contracts";
 
 export function createTauriAdapter(): DesktopAdapter {
@@ -156,6 +157,33 @@ export function createTauriAdapter(): DesktopAdapter {
       copiedImageFileName: request.copiedImage?.fileName ?? null,
       copiedImageBytes: request.copiedImage?.bytes ?? null,
     }),
+    captureArtworkFallback: (request) => invoke("capture_artwork_fallback", {
+      sourceLink: request.sourceLink,
+      title: request.title,
+      savingReason: request.savingReason,
+      copiedText: request.copiedText,
+      copiedImageFileName: request.copiedImage?.fileName ?? null,
+      copiedImageBytes: request.copiedImage?.bytes ?? null,
+    }),
+    startArtworkEnrichment: async (options, onProgress) => {
+      const unlisten = await listen<ArtworkEnrichmentProgress>("artwork-enrichment-progress", event => { void onProgress(event.payload); });
+      try { return await invoke<ArtworkEnrichmentProgress>("start_artwork_enrichment", {
+        options: {
+          budgetMode: options.budgetMode, maxItems: options.maxItems,
+          maxRequests: options.maxRequests ?? options.maxItems,
+          maxDurationSeconds: options.maxDurationSeconds ?? 600,
+          rerunCompleted: options.rerunCompleted ?? false,
+        },
+      }); }
+      finally { unlisten(); }
+    },
+    cancelArtworkEnrichment: (runId) => invoke<void>("cancel_artwork_enrichment", { runId: runId === "pending" ? null : runId ?? null }),
+    resumeArtworkEnrichment: async (runId, onProgress) => {
+      const unlisten = await listen<ArtworkEnrichmentProgress>("artwork-enrichment-progress", event => { void onProgress(event.payload); });
+      try { return await invoke<ArtworkEnrichmentProgress>("resume_artwork_enrichment", { runId }); }
+      finally { unlisten(); }
+    },
+    artworkEnrichmentStatus: () => invoke<ArtworkEnrichmentProgress | null>("artwork_enrichment_status"),
     fileUrl: (path) => convertFileSrc(path, "vault-media"),
   };
 }

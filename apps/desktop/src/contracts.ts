@@ -65,6 +65,28 @@ export type IdeaSummaryResult =
 export interface OpenAiProviderStatus { configured: boolean; model: string | null; }
 export interface OpenAiProviderConfiguration { apiKey: string; model: string; }
 
+export interface ArtworkEnrichmentOptions {
+  budgetMode: AiBudgetMode;
+  maxItems: number;
+  maxRequests?: number;
+  maxDurationSeconds?: number;
+  rerunCompleted?: boolean;
+}
+
+export interface ArtworkEnrichmentProgress {
+  runId: string;
+  processed: number;
+  total: number;
+  enriched: number;
+  failed: number;
+  skipped: number;
+  requestCount?: number;
+  remaining?: number;
+  failures?: Array<{ itemId: string; title: string; reason: string }>;
+  status: "running" | "paused" | "cancelled" | "completed";
+  currentItemTitle: string | null;
+}
+
 export interface ManualFallbackCaptureRequest extends SourceLinkCaptureRequest {
   copiedText: string | null;
   copiedImage: { fileName: string; bytes: number[] } | null;
@@ -300,6 +322,17 @@ export interface DesktopAdapter {
   openAiProviderStatus?(): Promise<OpenAiProviderStatus>;
   captureSourceLink?(request: SourceLinkCaptureRequest): Promise<SourceLinkCaptureResult>;
   captureManualFallback?(request: ManualFallbackCaptureRequest): Promise<SavedItem>;
+  captureArtworkFallback?(request: ManualFallbackCaptureRequest): Promise<SavedItem>;
+  startArtworkEnrichment?(
+    options: ArtworkEnrichmentOptions,
+    onProgress: (progress: ArtworkEnrichmentProgress) => void | Promise<void>,
+  ): Promise<ArtworkEnrichmentProgress>;
+  cancelArtworkEnrichment?(runId?: string): Promise<void>;
+  resumeArtworkEnrichment?(
+    runId: string,
+    onProgress: (progress: ArtworkEnrichmentProgress) => void | Promise<void>,
+  ): Promise<ArtworkEnrichmentProgress>;
+  artworkEnrichmentStatus?(): Promise<ArtworkEnrichmentProgress | null>;
   fileUrl?(path: string): string;
 }
 

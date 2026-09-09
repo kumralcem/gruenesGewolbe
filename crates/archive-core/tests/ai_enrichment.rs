@@ -398,6 +398,58 @@ fn artwork_enrichment_accepts_high_confidence_unknown_metadata_and_stages_confli
 }
 
 #[test]
+fn precomputed_artwork_enrichment_is_rejected_after_item_record_changes() {
+    let root = temp_path("ai-stale-artwork-vault");
+    let source_dir = temp_path("ai-stale-artwork-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let source_file = source_dir.join("stale.jpg");
+    fs::write(&source_file, b"painting image bytes").expect("write source painting");
+    let vault = Vault::create(&root).expect("create vault");
+    let saved = vault
+        .add_artwork_item(AddArtworkItem {
+            source_file,
+            home_subvault: "Paintings".to_string(),
+            creator: Some("Unknown Creator".to_string()),
+            year: Some("Unknown Year".to_string()),
+            title: "Stale Study".to_string(),
+            saving_reason: None,
+        })
+        .expect("save artwork");
+    let revision = vault
+        .item_details(saved.id())
+        .expect("read details")
+        .record_revision()
+        .to_string();
+    let record_path = saved.item_folder().join("record.md");
+    let mut externally_edited = fs::read_to_string(&record_path).expect("read record");
+    externally_edited.push_str("\nUser note written while research was running.\n");
+    fs::write(&record_path, externally_edited).expect("edit record externally");
+
+    let error = vault
+        .apply_artwork_enrichment_response(
+            saved.id(),
+            &revision,
+            AiBudgetMode::Standard,
+            AiProviderResponse {
+                summary: None,
+                tags: vec!["night scene".to_string()],
+                suggestions: Vec::new(),
+                better_file_candidates: Vec::new(),
+                estimated_cost_cents: 0,
+            },
+            false,
+        )
+        .expect_err("reject stale enrichment");
+    assert!(error.to_string().contains("item record changed"));
+    let record = fs::read_to_string(record_path).expect("read unchanged external edit");
+    assert!(record.contains("User note written while research was running."));
+    assert!(!record.contains("night scene"));
+
+    fs::remove_dir_all(root).expect("clean temp vault");
+    fs::remove_dir_all(source_dir).expect("clean source directory");
+}
+
+#[test]
 fn artwork_enrichment_records_better_file_candidates_without_replacing_the_primary_file() {
     let root = temp_path("ai-better-file-vault");
     let source_dir = temp_path("ai-better-file-source");

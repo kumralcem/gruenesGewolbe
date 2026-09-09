@@ -15,9 +15,10 @@ fn non_empty(value: Option<String>) -> Option<String> {
 
 #[cfg(feature = "tauri-runtime")]
 pub mod source_extractor;
+pub mod artwork_enrichment;
 
 use gruenes_gewolbe_core::{
-    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, ArtworkGridItem,
+    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, AiProviderResponse, ArtworkGridItem,
     ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
     CollectionDefinition, CopiedImage, DuplicateCandidateAction, DuplicateCandidateResolution,
     DuplicateCandidateResolutionOutcome, ExactDuplicatePolicy, ExtractedTextCapture,
@@ -385,6 +386,15 @@ impl DesktopShell {
             .map_err(DesktopShellError::Vault)
     }
 
+    pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<(), DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .prepare_thumbnail_preview(id)
+            .map(|_| ())
+            .map_err(DesktopShellError::Vault)
+    }
+
     pub fn activity_log_path(&self) -> Result<PathBuf, DesktopShellError> {
         let vault = self
             .active_vault
@@ -498,6 +508,14 @@ impl DesktopShell {
         vault
             .manual_fallback_capture(capture)
             .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn capture_artwork_fallback(
+        &self,
+        capture: ManualFallbackCapture,
+    ) -> Result<SavedItem, DesktopShellError> {
+        self.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?
+            .capture_artwork_fallback(capture).map_err(DesktopShellError::Vault)
     }
 
     pub fn capture_extracted_text(
@@ -627,6 +645,29 @@ impl DesktopShell {
         vault
             .suggest_artwork_metadata_with_ai(id, budget_mode, provider)
             .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn apply_artwork_enrichment_response(
+        &self,
+        id: &str,
+        expected_revision: &str,
+        budget_mode: AiBudgetMode,
+        response: AiProviderResponse,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .apply_artwork_enrichment_response(
+                id,
+                expected_revision,
+                budget_mode,
+                response,
+                false,
+            )
+            .map_err(DesktopShellError::Vault)?;
+        vault.item_details(id).map_err(DesktopShellError::Vault)
     }
 
     pub fn configure_openai_provider(
@@ -942,6 +983,44 @@ impl TauriCommandState {
             .map(SourceCaptureResultView::from)
     }
 
+    pub fn capture_artwork_source_link(
+        &self,
+        command: CaptureSourceLinkCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        struct ArtworkOnly<'a>(&'a dyn SourceExtractor);
+        impl SourceExtractor for ArtworkOnly<'_> {
+            fn extract(&self, request: SourceExtractionRequest) -> SourceExtraction {
+                match self.0.extract(request) {
+                    SourceExtraction::ExtractedText { .. } => SourceExtraction::NeedsManualFallback {
+                        reason: "This page exposed text but no painting image. Choose or paste its image to save in Paintings, or capture the page from Idea Sources.".to_string(),
+                    },
+                    result => result,
+                }
+            }
+        }
+        self.capture_source_link(command, &ArtworkOnly(extractor), expected_active_root)
+    }
+
+    pub fn capture_artwork_fallback(
+        &self,
+        command: ManualFallbackCaptureCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .capture_artwork_fallback(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: command.copied_image.map(|image| CopiedImage {
+                    file_name: image.file_name,
+                    bytes: image.bytes,
+                }),
+            })
+            .map(SavedItemView::from)
+    }
+
     pub fn capture_manual_fallback(
         &self,
         command: ManualFallbackCaptureCommand,
@@ -987,6 +1066,10 @@ impl TauriCommandState {
             .map(ThumbnailPreparationView::from)
     }
 
+    pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<(), DesktopShellError> {
+        self.shell.prepare_thumbnail_preview(id)
+    }
+
     pub fn activity_log_path(&self) -> Result<String, DesktopShellError> {
         self.shell
             .activity_log_path()
@@ -1029,6 +1112,23 @@ impl TauriCommandState {
 
     pub fn shell_openai_provider_config(&self) -> Result<OpenAiProviderConfig, DesktopShellError> {
         self.shell.openai_provider_config()
+    }
+
+    pub fn apply_artwork_enrichment_response(
+        &self,
+        id: String,
+        expected_revision: String,
+        budget_mode: AiBudgetMode,
+        response: AiProviderResponse,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .apply_artwork_enrichment_response(
+                &id,
+                &expected_revision,
+                budget_mode,
+                response,
+            )
+            .map(|details| ItemDetailsView::from(&details))
     }
 
     pub fn summarize_idea_source(

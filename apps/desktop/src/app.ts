@@ -23,11 +23,12 @@ import type {
   ItemDetails,
   ItemRecordEdit,
   OpenAiProviderStatus,
+  ArtworkEnrichmentProgress,
   WorkbenchSnapshot,
 } from "./contracts";
 
 interface AppState extends DesktopStartup {
-  active_view: "paintings" | "idea-sources";
+  active_view: "paintings" | "idea-sources" | "settings";
   busy: boolean;
   error: string | null;
   artwork_sort: ArtworkSort;
@@ -52,9 +53,10 @@ interface AppState extends DesktopStartup {
   idea_source_reading: IdeaSourceContent | null;
   summary_provider: OpenAiProviderStatus | null;
   summary_notice: string | null;
+  enrichment_progress: ArtworkEnrichmentProgress | null;
 }
 
-type StateUpdate = (state: AppState) => Promise<void>;
+type StateUpdate = (state: AppState | ((current: AppState) => AppState)) => Promise<void>;
 interface ArtworkSelection {
   select(itemId: string): Promise<void>;
   cancel(): void;
@@ -91,6 +93,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
     idea_source_reading: null,
     summary_provider: null,
     summary_notice: null,
+    enrichment_progress: null,
   };
 
   let thumbnailPreparationRunning = false;
@@ -99,10 +102,11 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
 
   const update: StateUpdate = async (nextState) => {
     selectionRequest += 1;
-    state = nextState;
+    state = typeof nextState === "function" ? nextState(state) : nextState;
     render();
   };
-  const updateSelection: StateUpdate = async (nextState) => {
+  const updateSelection: StateUpdate = async (incomingState) => {
+    const nextState = typeof incomingState === "function" ? incomingState(state) : incomingState;
     state = {
       ...state,
       workbench_snapshot: nextState.workbench_snapshot,
@@ -114,6 +118,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       selected_artwork_error: nextState.selected_artwork_error,
       idea_source_reading: nextState.idea_source_reading,
       summary_notice: nextState.summary_notice,
+      enrichment_progress: nextState.enrichment_progress,
     };
     patchArtworkSelection(root, adapter, state, update, updateSelection, artworkSelection, requestEpoch);
   };
@@ -271,6 +276,7 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       idea_source_reading: null,
       summary_provider: null,
       summary_notice: null,
+      enrichment_progress: null,
       ...clearedCapture(),
     };
     if (state.active_vault && adapter.workbenchSnapshot) {
@@ -279,8 +285,11 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
         workbench_snapshot: await adapter.workbenchSnapshot("newest", null, null),
       };
     }
-    if (state.active_vault && adapter.openAiProviderStatus) {
+    if (adapter.openAiProviderStatus) {
       state = { ...state, summary_provider: await adapter.openAiProviderStatus() };
+    }
+    if (state.active_vault && adapter.artworkEnrichmentStatus) {
+      state = { ...state, enrichment_progress: await adapter.artworkEnrichmentStatus() };
     }
   } catch (error) {
     state = { ...state, busy: false, error: errorMessage(error) };
@@ -343,6 +352,23 @@ function bindActions(
         summary_notice: null,
         ...clearedCapture(),
       });
+    });
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-settings-view]")?.addEventListener("click", async () => {
+    requestEpoch.value += 1;
+    artworkSelection.cancel();
+    await update({
+      ...state,
+      active_view: "settings",
+      workbench_snapshot: state.workbench_snapshot
+        ? { ...state.workbench_snapshot, selected_item: null }
+        : null,
+      pending_selected_artwork_id: null,
+      selected_artwork_error: null,
+      idea_source_reading: null,
+      summary_notice: null,
+      ...clearedCapture(),
     });
   });
 
@@ -490,17 +516,20 @@ function bindActions(
   });
   root.querySelector<HTMLFormElement>("[data-manual-fallback-capture]")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!adapter.captureManualFallback || !state.capture_fallback) return;
+    const fallbackCapture = state.active_view === "paintings"
+      ? adapter.captureArtworkFallback
+      : adapter.captureManualFallback;
+    if (!fallbackCapture || !state.capture_fallback) return;
     const title = inputValue(root, '[name="capture_title"]') ?? "Untitled Capture";
     const savingReason = inputValue(root, '[name="capture_saving_reason"]');
-    const copiedText = root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value ?? "";
-    if (!copiedText.trim() && !state.capture_pasted_image) {
+    const copiedText = state.active_view === "paintings" ? "" : (root.querySelector<HTMLTextAreaElement>('[name="copied_text"]')?.value ?? "");
+    if ((!copiedText.trim() && !state.capture_pasted_image) || (state.active_view === "paintings" && !state.capture_pasted_image)) {
       await update({
         ...state,
         capture_title: title,
         capture_saving_reason: savingReason ?? "",
         capture_copied_text: copiedText,
-        error: "Paste source text or an image before saving this fallback.",
+        error: state.active_view === "paintings" ? "Paste an image before saving this artwork fallback." : "Paste source text or an image before saving this fallback.",
       });
       return;
     }
@@ -519,7 +548,7 @@ function bindActions(
           saving_reason: savingReason,
         },
       });
-      await adapter.captureManualFallback({
+      await fallbackCapture({
         sourceLink: state.capture_fallback.source_link,
         title,
         savingReason,
@@ -792,6 +821,13 @@ function bindActions(
     }
   });
 
+  root.querySelector<HTMLButtonElement>("[data-close-settings]")?.addEventListener("click", async () => {
+    await update({ ...state, active_view: "paintings" });
+  });
+  root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-enrichment-budget], [data-enrichment-max-items], [data-enrichment-max-requests], [data-enrichment-max-duration]").forEach((control) => {
+    control.addEventListener("change", () => window.localStorage.setItem(`gg-enrichment-${control.dataset.enrichmentBudget !== undefined ? "budget" : control.dataset.enrichmentMaxItems !== undefined ? "max-items" : control.dataset.enrichmentMaxRequests !== undefined ? "max-requests" : "max-duration"}`, control.value));
+  });
+
   root.querySelector<HTMLButtonElement>("[data-close-item-details]")?.addEventListener("click", async () => {
     if (!state.workbench_snapshot) return;
     const selected = state.workbench_snapshot.selected_item;
@@ -897,6 +933,28 @@ function bindActions(
   });
 
   root.querySelector<HTMLButtonElement>("[data-refresh-records]")?.addEventListener("click", async () => {
+    if (adapter.startArtworkEnrichment) {
+      const total = state.workbench_snapshot?.artwork_items.length ?? 0;
+      const maxItems = Math.max(1, Number(enrichmentSetting("max-items", "25")) || 25);
+      const maxRequests = Math.max(1, Number(enrichmentSetting("max-requests", String(maxItems))) || maxItems);
+      const maxDurationSeconds = Math.max(10, Number(enrichmentSetting("max-duration", "900")) || 900);
+      const budgetMode = enrichmentSetting("budget", "standard") as "off" | "cheap" | "standard" | "deep";
+      await update({ ...state, busy: true, error: null, enrichment_progress: {
+        runId: "pending", processed: 0, total: Math.min(total, maxItems), enriched: 0, failed: 0, skipped: 0,
+        status: "running", currentItemTitle: null,
+      }});
+      try {
+        const progress = await adapter.startArtworkEnrichment({ budgetMode, maxItems, maxRequests, maxDurationSeconds, rerunCompleted: false }, async (next) => {
+          await update(current => ({ ...current, busy: true, error: null, enrichment_progress: next }));
+        });
+        const snapshot = adapter.workbenchSnapshot
+          ? await adapter.workbenchSnapshot(state.artwork_sort, state.workbench_snapshot?.selected_item?.id ?? null, state.search_query)
+          : state.workbench_snapshot;
+        await update(current => ({ ...current, busy: false, workbench_snapshot: snapshot, enrichment_progress: progress, error: null }));
+      } catch (error) { const savedProgress = await adapter.artworkEnrichmentStatus?.().catch(() => null);
+        await update(current => ({ ...current, busy: false, enrichment_progress: savedProgress ?? (current.enrichment_progress?.runId !== "pending" && current.enrichment_progress ? { ...current.enrichment_progress, status: "paused" } : null), error: errorMessage(error) })); }
+      return;
+    }
     await refreshWorkbench(
       adapter,
       { ...state, pending_item_edit: null, item_record_conflict: null },
@@ -905,6 +963,26 @@ function bindActions(
       state.workbench_snapshot?.selected_item?.id ?? null,
       true,
     );
+  });
+
+  root.querySelector<HTMLButtonElement>("[data-cancel-enrichment]")?.addEventListener("click", async () => {
+    try { await adapter.cancelArtworkEnrichment?.(state.enrichment_progress?.runId); }
+    catch (error) { await update(current => ({ ...current, error: errorMessage(error) })); }
+  });
+  root.querySelector<HTMLButtonElement>("[data-resume-enrichment]")?.addEventListener("click", async () => {
+    const runId = state.enrichment_progress?.runId;
+    if (!runId || !adapter.resumeArtworkEnrichment) return;
+    await update({ ...state, busy: true, error: null });
+    try {
+      const progress = await adapter.resumeArtworkEnrichment(runId, async (next) => {
+        await update(current => ({ ...current, busy: true, error: null, enrichment_progress: next }));
+      });
+        const snapshot = adapter.workbenchSnapshot
+          ? await adapter.workbenchSnapshot(state.artwork_sort, state.workbench_snapshot?.selected_item?.id ?? null, state.search_query)
+          : state.workbench_snapshot;
+        await update(current => ({ ...current, busy: false, enrichment_progress: progress, workbench_snapshot: snapshot }));
+    } catch (error) { const savedProgress = await adapter.artworkEnrichmentStatus?.().catch(() => null);
+        await update(current => ({ ...current, busy: false, enrichment_progress: savedProgress ?? (current.enrichment_progress?.runId !== "pending" && current.enrichment_progress ? { ...current.enrichment_progress, status: "paused" } : null), error: errorMessage(error) })); }
   });
 
   root.querySelector<HTMLButtonElement>("[data-open-activity-log]")?.addEventListener("click", async () => {
@@ -1122,6 +1200,7 @@ async function activateOpenedVault(
   let nextState: AppState = {
     ...state,
     ...clearedCapture(),
+    active_view: "paintings",
     active_vault: activeVault,
     known_vaults: knownVaults,
     repair_proposal: null,
@@ -1130,6 +1209,7 @@ async function activateOpenedVault(
     error: null,
     idea_source_reading: null,
     summary_notice: null,
+    enrichment_progress: null,
   };
   if (adapter.workbenchSnapshot) {
     nextState = {
@@ -1146,6 +1226,9 @@ async function activateOpenedVault(
       ...nextState,
       summary_provider: await adapter.openAiProviderStatus(),
     };
+  }
+  if (adapter.artworkEnrichmentStatus) {
+    nextState.enrichment_progress = await adapter.artworkEnrichmentStatus();
   }
   await update(nextState);
 }
@@ -1203,6 +1286,9 @@ function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
             ${knownVaultTemplate(state)}
             ${state.active_vault && state.workbench_snapshot ? archiveNavigationTemplate(state) : ""}
           </nav>
+      <button type="button" class="settings-navigation-item ${state.active_view === "settings" ? "is-current" : ""}" data-settings-view ${state.busy ? "disabled" : ""} aria-current="${state.active_view === "settings" ? "page" : "false"}">
+            <span><strong>Settings</strong><small>Provider & limits</small></span>
+          </button>
           <div class="rail-actions">
             <button class="secondary-button" type="button" data-vault-action="open" ${state.busy ? "disabled" : ""}>
               <i data-lucide="folder-open"></i>Open Vault
@@ -1216,9 +1302,11 @@ function pageTemplate(state: AppState, adapter: DesktopAdapter): string {
         <main class="workspace" aria-live="polite">
           ${messageTemplate(state)}
           ${
-            state.repair_proposal
-              ? repairVaultTemplate(state)
-              : state.active_vault && state.workbench_snapshot
+            state.active_view === "settings"
+                ? settingsTemplate(state, adapter)
+                : state.repair_proposal
+                  ? repairVaultTemplate(state)
+                  : state.active_vault && state.workbench_snapshot
                 ? state.active_view === "idea-sources"
                   ? ideaSourcesWorkbenchTemplate(state, adapter)
                   : artworkWorkbenchTemplate(state, adapter)
@@ -1300,6 +1388,9 @@ function artworkWorkbenchTemplate(state: AppState, adapter: DesktopAdapter): str
         </div>
       </header>
 
+      ${adapter.startArtworkEnrichment ? `<p class="form-hint">Refresh researches and tags all paintings in resumable batches, up to ${escapeHtml(enrichmentSetting("max-items", "25"))} paintings and ${escapeHtml(enrichmentSetting("max-requests", "25"))} requests per run. Uses your configured AI provider; monetary cost is unavailable. Change limits in Settings.</p>` : ""}
+      ${enrichmentTemplate(state, adapter)}
+
       ${captureLinkTemplate(state, adapter)}
       ${importRunTemplate(state, adapter)}
       <p class="thumbnail-status" role="status" aria-live="polite" data-thumbnail-status ${state.thumbnail_remaining && state.thumbnail_remaining > 0 ? "" : "hidden"}>${thumbnailStatusText(state.thumbnail_remaining)}</p>
@@ -1355,10 +1446,10 @@ function archiveNavigationTemplate(state: AppState): string {
   return `
     <section class="archive-navigation" aria-label="Saved Item areas">
       <p>Browse</p>
-      <button type="button" data-archive-view="paintings" class="archive-navigation-item ${state.active_view === "paintings" ? "is-current" : ""}" aria-current="${state.active_view === "paintings" ? "page" : "false"}">
+      <button type="button" data-archive-view="paintings" class="archive-navigation-item ${state.active_view === "paintings" ? "is-current" : ""}" ${state.busy ? "disabled" : ""} aria-current="${state.active_view === "paintings" ? "page" : "false"}">
         <i data-lucide="images"></i><span><strong>Paintings</strong><small>${snapshot.artwork_items.length}</small></span>
       </button>
-      <button type="button" data-archive-view="idea-sources" class="archive-navigation-item ${state.active_view === "idea-sources" ? "is-current" : ""}" aria-current="${state.active_view === "idea-sources" ? "page" : "false"}">
+      <button type="button" data-archive-view="idea-sources" class="archive-navigation-item ${state.active_view === "idea-sources" ? "is-current" : ""}" ${state.busy ? "disabled" : ""} aria-current="${state.active_view === "idea-sources" ? "page" : "false"}">
         <i data-lucide="book-open"></i><span><strong>Idea Sources</strong><small>${snapshot.idea_sources.length}</small></span>
       </button>
     </section>`;
@@ -1380,7 +1471,6 @@ function ideaSourcesWorkbenchTemplate(state: AppState, adapter: DesktopAdapter):
           <p class="section-intro">Keep the source material and its summary in your Vault, so the idea survives after the tab or page is gone.</p>
         </div>
         <div class="idea-source-actions">
-          ${summaryProviderTemplate(state, adapter)}
           <button class="primary-button" type="button" data-open-link-capture ${state.busy || !adapter.captureIdeaSource ? "disabled" : ""}>Add Idea Source</button>
         </div>
       </header>
@@ -1405,6 +1495,27 @@ function ideaSourcesWorkbenchTemplate(state: AppState, adapter: DesktopAdapter):
     </section>`;
 }
 
+function settingsTemplate(state: AppState, adapter: DesktopAdapter): string {
+  const setting = enrichmentSetting;
+  return `<section class="settings-workspace" aria-label="Settings">
+    <header class="settings-heading"><div><p class="eyebrow">App preferences</p><h2>Settings</h2><p>Provider credentials and bounded enrichment limits apply across the app, even when no Vault is open.</p></div><button class="secondary-button" type="button" data-close-settings>Back to archive</button></header>
+    ${summaryProviderTemplate(state, adapter)}
+    <section class="settings-card" aria-labelledby="enrichment-settings-title"><h3 id="enrichment-settings-title">Artwork enrichment limits</h3><p>Runs send artwork previews and metadata to your configured provider for tagging and web research. Item, request, and time limits bound each run. Monetary cost is unavailable for the configured model; these are not dollar limits.</p><label>AI budget mode<select data-enrichment-budget><option value="cheap" ${setting("budget", "standard") === "cheap" ? "selected" : ""}>Cheap</option><option value="standard" ${setting("budget", "standard") === "standard" ? "selected" : ""}>Standard</option><option value="deep" ${setting("budget", "standard") === "deep" ? "selected" : ""}>Deep</option></select></label><label>Maximum paintings per run<input type="number" min="1" max="250" value="${escapeHtml(setting("max-items", "25"))}" data-enrichment-max-items></label><label>Maximum requests per run<input type="number" min="1" max="250" value="${escapeHtml(setting("max-requests", "25"))}" data-enrichment-max-requests></label><label>Maximum duration (seconds)<input type="number" min="10" max="3600" value="${escapeHtml(setting("max-duration", "900"))}" data-enrichment-max-duration></label></section>
+  </section>`;
+}
+
+function enrichmentSetting(key: string, fallback: string): string {
+  try { return window.localStorage.getItem(`gg-enrichment-${key}`) ?? fallback; }
+  catch { return fallback; }
+}
+
+function enrichmentTemplate(state: AppState, adapter: DesktopAdapter): string {
+  const progress = state.enrichment_progress;
+  if (!progress) return "";
+  const percent = progress.total ? Math.round((progress.processed / progress.total) * 100) : 0;
+  return `<section class="enrichment-progress" aria-label="Artwork enrichment progress" role="status"><div><strong>Artwork enrichment ${progress.status}</strong><span>${progress.processed} of ${progress.total} · ${percent}% · ${progress.enriched} enriched · ${progress.failed} failed</span></div>${progress.currentItemTitle ? `<p>Current: ${escapeHtml(progress.currentItemTitle)}</p>` : ""}${progress.failures?.length ? `<details><summary>See ${progress.failed} failures</summary><ul>${progress.failures.slice(0, 20).map(failure => `<li>${escapeHtml(failure.title)}: ${escapeHtml(failure.reason)}</li>`).join("")}</ul><p>Refresh Item Records retries unsuccessful paintings.</p></details>` : ""}${progress.status === "running" ? `<button class="secondary-button" type="button" data-cancel-enrichment ${adapter.cancelArtworkEnrichment ? "" : "disabled"}>Cancel</button>` : progress.status === "cancelled" || progress.status === "paused" ? `<button class="secondary-button" type="button" data-resume-enrichment ${adapter.resumeArtworkEnrichment ? "" : "disabled"}>Resume</button>` : ""}</section>`;
+}
+
 function summaryProviderTemplate(state: AppState, adapter: DesktopAdapter): string {
   if (!adapter.configureOpenAiProvider) return "";
   const provider = state.summary_provider;
@@ -1412,7 +1523,7 @@ function summaryProviderTemplate(state: AppState, adapter: DesktopAdapter): stri
     <details class="summary-provider">
       <summary>${provider?.configured ? `Summaries: ${escapeHtml(provider.model ?? "configured")}` : "Set up summaries"}</summary>
       <form data-summary-provider-form>
-        <p>The API key is stored for this app on this computer, outside the Vault. When you create a summary, the saved source text is sent to OpenAI.</p>
+        <p>The API key is stored for this app on this computer, outside the Vault. When you create a summary, the saved source text is sent to OpenAI. Refresh Item Records sends artwork previews and metadata for tagging and research.</p>
         <label>OpenAI API Key<input name="openai_api_key" type="password" autocomplete="off" required></label>
         <label>Model<input name="openai_model" value="${escapeHtml(provider?.model ?? "gpt-4.1-mini")}" required></label>
         <button class="secondary-button" type="submit" ${state.busy ? "disabled" : ""}>Save Summary Settings</button>
@@ -1453,9 +1564,9 @@ function captureLinkTemplate(state: AppState, adapter: DesktopAdapter, ideaCaptu
           <label>Source Link<input name="source_link" type="url" value="${escapeHtml(fallback.source_link)}" readonly></label>
           <label>Title <span>(optional)</span><input name="capture_title" value="${escapeHtml(fallback.title)}"></label>
           <label>Saving Reason<input name="capture_saving_reason" value="${escapeHtml(fallback.saving_reason ?? "")}"></label>
-          <label class="capture-span">Copied Text<textarea name="copied_text" rows="5" placeholder="Paste the post or page text without surrounding discussion">${escapeHtml(state.capture_copied_text)}</textarea></label>
-          <p class="form-hint">Paste an image into the Copied Text field to preserve its bytes too. <span data-pasted-image-status>${state.capture_pasted_image ? `${escapeHtml(state.capture_pasted_image.fileName)} ready to preserve` : ""}</span></p>
-          <button class="primary-button" type="submit" ${state.busy || !adapter.captureManualFallback ? "disabled" : ""}>Save Manual Fallback</button>
+          ${ideaCapture ? '<label class="capture-span">Copied Text<textarea name="copied_text" rows="5" placeholder="Paste the post or page text without surrounding discussion">' + escapeHtml(state.capture_copied_text) + '</textarea></label>' : '<label class="capture-span">Artwork Image<textarea name="copied_text" rows="3" placeholder="Paste an image here" aria-label="Paste Artwork Image"></textarea></label><p class="form-hint capture-span">Text is not accepted for Paintings.</p>'}
+          <p class="form-hint">${ideaCapture ? "Paste an image into the Copied Text field to preserve its bytes too." : "The pasted image will be saved as the artwork’s preserved file."} <span data-pasted-image-status>${state.capture_pasted_image ? `${escapeHtml(state.capture_pasted_image.fileName)} ready to preserve` : ""}</span></p>
+          <button class="primary-button" type="submit" ${state.busy || !(ideaCapture ? adapter.captureManualFallback : adapter.captureArtworkFallback) ? "disabled" : ""}>${ideaCapture ? "Save Manual Fallback" : "Save Artwork"}</button>
         </form>
       ` : `
         <form class="capture-form" data-source-link-capture>

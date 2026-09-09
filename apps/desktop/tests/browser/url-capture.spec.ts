@@ -109,7 +109,7 @@ test("configures summarization outside the Vault without exposing the saved key"
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Set up summaries").click();
   await page.getByLabel("OpenAI API Key").fill("secret-test-key");
   await page.getByLabel("Model").fill("gpt-4.1-mini");
@@ -129,7 +129,7 @@ test("never saves an empty fallback from the Paintings link capture", async ({ p
       selectFolder: async () => null, createVault: async root => ({ root }), openVault: async root => ({ status: "opened", vault: { root } }), confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
       workbenchSnapshot: async () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [], idea_sources: [], review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: [] }),
       captureSourceLink: async request => ({ status: "needs_manual_fallback", source_link: request.sourceLink, title: "Blocked page", saving_reason: request.savingReason, reason: "The page could not be extracted." }),
-      captureManualFallback: async request => { fallbackSaves += 1; return { id: "idea-1", home_subvault: "Idea Sources", item_folder: `/vault/${request.title}` }; },
+      captureArtworkFallback: async request => { fallbackSaves += 1; return { id: "painting-1", home_subvault: "Paintings", item_folder: `/vault/${request.title}` }; },
     };
   });
 
@@ -141,8 +141,8 @@ test("never saves an empty fallback from the Paintings link capture", async ({ p
 
   await expect(capture.getByText("The page could not be extracted.")).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__fallbackSaves())).toBe(0);
-  await capture.getByRole("button", { name: "Save Manual Fallback" }).click();
-  await expect(page.getByRole("alert")).toContainText("Paste source text or an image");
+  await capture.getByRole("button", { name: "Save Artwork" }).click();
+  await expect(page.getByRole("alert")).toContainText("Paste an image");
   await expect.poll(() => page.evaluate(() => (window as any).__fallbackSaves())).toBe(0);
 });
 

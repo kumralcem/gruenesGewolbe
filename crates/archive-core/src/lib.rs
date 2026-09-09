@@ -657,6 +657,24 @@ impl Vault {
         })
     }
 
+    /// Capture an image explicitly into Paintings, without inferring a destination.
+    pub fn capture_artwork_fallback(
+        &self,
+        capture: ManualFallbackCapture,
+    ) -> Result<SavedItem, VaultError> {
+        if capture.copied_text.as_ref().is_some_and(|text| !text.trim().is_empty()) {
+            return Err(VaultError::InvalidItemRecordEdit(vec![
+                "Use Idea Sources to preserve pasted text; Paintings requires an image".to_string(),
+            ]));
+        }
+        let image = capture.copied_image.filter(|image| !image.bytes.is_empty())
+            .ok_or_else(|| VaultError::InvalidItemRecordEdit(vec![
+                "Choose or paste an image to save in Paintings".to_string(),
+            ]))?;
+        self.capture_extracted_image(capture.source_link, capture.title,
+            capture.saving_reason, image.file_name, image.bytes, "manual-fallback")
+    }
+
     pub fn capture_extracted_text(
         &self,
         capture: ExtractedTextCapture,
@@ -701,6 +719,7 @@ impl Vault {
                     capture.saving_reason,
                     file_name,
                     bytes,
+                    "extracted-image",
                 )
                 .map(SourceCaptureResult::Captured),
             SourceExtraction::NeedsManualFallback { reason } => Ok(
@@ -721,6 +740,7 @@ impl Vault {
         saving_reason: Option<String>,
         file_name: String,
         bytes: Vec<u8>,
+        capture_method: &str,
     ) -> Result<SavedItem, VaultError> {
         let staging_root = self.root.join(HIDDEN_STATE_DIR).join("capture-staging");
         let staging = staging_root.join(uuid::Uuid::new_v4().to_string());
@@ -742,7 +762,7 @@ impl Vault {
                     &[],
                     Vec::new(),
                     Some(&source_link),
-                    Some("extracted-image"),
+                    Some(capture_method),
                 )
                 .map(|outcome| outcome.saved_item)
             });
@@ -750,7 +770,7 @@ impl Vault {
         let _ = fs::remove_dir(&staging_root);
         if let Ok(saved) = &result {
             self.append_activity_log(&format!(
-                "capture\t{}\tPaintings\textracted-image",
+                "capture\t{}\tPaintings\t{capture_method}",
                 saved.id()
             ))?;
         }
@@ -1020,6 +1040,22 @@ impl Vault {
         Ok(ThumbnailPreparation {
             generated,
             remaining,
+        })
+    }
+
+    pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<ThumbnailPreparation, VaultError> {
+        let saved_item = self.open_saved_item(id)?;
+        if self.thumbnail_is_final(&saved_item) {
+            return Ok(ThumbnailPreparation {
+                generated: 0,
+                remaining: 0,
+            });
+        }
+        let details = self.item_details(id)?;
+        self.generate_thumbnail_for(&saved_item, details.primary_file())?;
+        Ok(ThumbnailPreparation {
+            generated: 1,
+            remaining: 0,
         })
     }
 
@@ -1523,6 +1559,7 @@ impl Vault {
 
         self.apply_ai_enrichment_response(
             id,
+            None,
             budget_mode,
             response,
             provider.cost_estimate_is_known(),
@@ -1559,9 +1596,27 @@ impl Vault {
 
         self.apply_ai_enrichment_response(
             id,
+            None,
             budget_mode,
             response,
             provider.cost_estimate_is_known(),
+        )
+    }
+
+    pub fn apply_artwork_enrichment_response(
+        &self,
+        id: &str,
+        expected_revision: &str,
+        budget_mode: AiBudgetMode,
+        response: AiProviderResponse,
+        cost_estimate_is_known: bool,
+    ) -> Result<AiEnrichmentResult, VaultError> {
+        self.apply_ai_enrichment_response(
+            id,
+            Some(expected_revision),
+            budget_mode,
+            response,
+            cost_estimate_is_known,
         )
     }
 
@@ -2269,6 +2324,7 @@ impl Vault {
     fn apply_ai_enrichment_response(
         &self,
         id: &str,
+        expected_revision: Option<&str>,
         budget_mode: AiBudgetMode,
         response: AiProviderResponse,
         cost_estimate_is_known: bool,
@@ -2291,6 +2347,17 @@ impl Vault {
             let text = fs::read_to_string(&record.record_path)?;
             if frontmatter_value(&text, "id").as_deref() != Some(id) {
                 continue;
+            }
+
+            if let Some(expected_revision) = expected_revision {
+                let actual_revision = item_record_revision(&text);
+                if actual_revision != expected_revision {
+                    return Err(VaultError::ItemRecordConflict {
+                        path: record.record_path,
+                        expected_revision: expected_revision.to_string(),
+                        actual_revision,
+                    });
+                }
             }
 
             let mut updated = text;

@@ -3,11 +3,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gruenes_gewolbe_core::{
-    AiProvider, AiProviderRequest, AiProviderResponse, SourceExtraction, SourceExtractionRequest,
-    SourceExtractor,
+    AiProvider, AiProviderRequest, AiProviderResponse, ArtworkSort, SourceExtraction,
+    SourceExtractionRequest, SourceExtractor, Vault,
 };
 
 use gruenes_gewolbe_desktop::{
+    artwork_enrichment::{
+        fingerprint, latest_progress_if_exists, read_bounded_thumbnail, save_checkpoint,
+        ArtworkCandidateSnapshot, ArtworkEnrichmentCheckpoint, ArtworkEnrichmentOptions,
+        ArtworkEnrichmentProgress, ArtworkEnrichmentStatus, ArtworkResponsesProvider,
+    },
     source_extractor, ActiveVaultView, AddArtworkFilesCommand, CaptureIdeaCommand,
     CaptureSourceLinkCommand, ConfirmItemFolderRenameCommand, CopiedImageCommand,
     DesktopStartupView, DuplicateCandidateResolutionView, IdeaSourceContentView,
@@ -22,6 +27,32 @@ use tauri::{Emitter, Manager, State};
 
 type CommandState = Arc<Mutex<TauriCommandState>>;
 type ImportCancellation = Arc<AtomicBool>;
+
+#[derive(Default)]
+struct ArtworkCancellationFlag {
+    active: AtomicBool,
+    cancelled: AtomicBool,
+}
+type ArtworkEnrichmentCancellation = Arc<ArtworkCancellationFlag>;
+
+struct ArtworkRunGuard(ArtworkEnrichmentCancellation);
+
+impl Drop for ArtworkRunGuard {
+    fn drop(&mut self) {
+        self.0.active.store(false, Ordering::Release);
+    }
+}
+
+fn acquire_artwork_run(
+    cancellation: &ArtworkEnrichmentCancellation,
+) -> Result<ArtworkRunGuard, String> {
+    cancellation
+        .active
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| "an artwork enrichment run is already active".to_string())?;
+    cancellation.cancelled.store(false, Ordering::Release);
+    Ok(ArtworkRunGuard(Arc::clone(cancellation)))
+}
 
 struct CompletedExtraction(SourceExtraction);
 
@@ -172,6 +203,302 @@ where
         (Ok(_), Ok(_)) => SummarizeIdeaSourceView::Failed { reason: Some("Active Vault or Item Record changed while its summary was being generated; retry to summarize the current source".to_string()) },
         (Err(error), _) | (_, Err(error)) => SummarizeIdeaSourceView::Failed { reason: Some(error.to_string()) },
     }
+}
+
+fn new_artwork_enrichment_checkpoint(
+    state: &CommandState,
+    options: &ArtworkEnrichmentOptions,
+    cancellation: &ArtworkEnrichmentCancellation,
+) -> Result<(ArtworkEnrichmentCheckpoint, OpenAiProviderConfig), String> {
+    options.validate()?;
+    let (vault_root, config) = {
+        let guard = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?;
+        let vault_root = guard
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let config = guard
+            .shell_openai_provider_config()
+            .map_err(|error| error.to_string())?;
+        (vault_root, config)
+    };
+
+    let vault = Vault::open(&vault_root).map_err(|error| error.to_string())?;
+    let artwork_items = vault
+        .browse_artwork_items_sorted("Paintings", ArtworkSort::Oldest)
+        .map_err(|error| error.to_string())?;
+    let mut candidates = Vec::with_capacity(artwork_items.len());
+    for item in artwork_items {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            return Err("artwork enrichment was cancelled while planning".to_string());
+        }
+        let details = vault
+            .item_details(item.saved_item().id())
+            .map_err(|error| error.to_string())?;
+        candidates.push(
+            ArtworkCandidateSnapshot::planned(
+                item.saved_item().id().to_string(),
+                item.title().to_string(),
+                item.creator().to_string(),
+                item.year().to_string(),
+                details.source_link().map(str::to_string),
+                details.record_revision().to_string(),
+            )
+        );
+    }
+    let checkpoint = ArtworkEnrichmentCheckpoint::start(&vault_root, options, candidates)?;
+    save_checkpoint(&checkpoint)?;
+    Ok((checkpoint, config))
+}
+
+fn current_artwork_snapshot(
+    state: &CommandState,
+    expected_root: &Path,
+    id: &str,
+) -> Result<(gruenes_gewolbe_desktop::ArtworkGridItemView, ItemDetailsView), String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?;
+    if guard.active_vault_root().as_deref() != Some(expected_root) {
+        return Err("Active Vault changed during artwork enrichment".to_string());
+    }
+    let snapshot = guard
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "oldest".to_string(),
+            search_query: None,
+            selected_item_id: None,
+        })
+        .map_err(|error| error.to_string())?;
+    let item = snapshot
+        .artwork_items
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| format!("artwork item is no longer in Paintings: {id}"))?;
+    let details = guard
+        .get_item_details(id.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok((item, details))
+}
+
+fn emit_artwork_progress(app: &tauri::AppHandle, progress: &ArtworkEnrichmentProgress) {
+    let _ = app.emit("artwork-enrichment-progress", progress);
+}
+
+fn run_artwork_enrichment(
+    state: &CommandState,
+    cancellation: &ArtworkEnrichmentCancellation,
+    app: &tauri::AppHandle,
+    mut checkpoint: ArtworkEnrichmentCheckpoint,
+    config: OpenAiProviderConfig,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let budget_mode = ArtworkEnrichmentOptions {
+        budget_mode: checkpoint.budget_mode.clone(),
+        max_items: checkpoint.max_items,
+        max_requests: checkpoint.max_requests,
+        max_duration_seconds: checkpoint.max_duration_seconds,
+        rerun_completed: false,
+    }
+    .validate()?;
+    let provider = ArtworkResponsesProvider::new(config.api_key, config.model)?;
+    let started = std::time::Instant::now();
+    let duration_limit = std::time::Duration::from_secs(checkpoint.max_duration_seconds);
+    let mut handled_this_invocation = 0usize;
+    let mut requests_this_invocation = 0usize;
+    checkpoint.status = ArtworkEnrichmentStatus::Running;
+    save_checkpoint(&checkpoint)?;
+    emit_artwork_progress(app, &checkpoint.progress(None));
+
+    while let Some(index) = checkpoint.next_pending_index() {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            checkpoint.cancel();
+            break;
+        }
+        if handled_this_invocation >= checkpoint.max_items
+            || requests_this_invocation >= checkpoint.max_requests
+            || started.elapsed() >= duration_limit
+        {
+            checkpoint.finish_or_pause();
+            break;
+        }
+        handled_this_invocation += 1;
+        let mut item = checkpoint.item(index).clone();
+        emit_artwork_progress(app, &checkpoint.progress(Some(item.title.clone())));
+
+        let thumbnail_preparation = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())
+            .and_then(|guard| {
+                if guard.active_vault_root().as_deref() != Some(checkpoint.vault_root.as_path()) {
+                    return Err("Active Vault changed during artwork enrichment".to_string());
+                }
+                guard
+                    .prepare_thumbnail_preview(&item.id)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = thumbnail_preparation {
+            checkpoint.mark_failed(
+                index,
+                format!("Thumbnail Preview could not be prepared: {error}"),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+
+        let before = current_artwork_snapshot(state, &checkpoint.vault_root, &item.id);
+        let (current_item, current_details) = match before {
+            Ok(value) => value,
+            Err(reason) => {
+                checkpoint.mark_failed(index, reason);
+                save_checkpoint(&checkpoint)?;
+                continue;
+            }
+        };
+        if current_details.record_revision != item.record_revision {
+            checkpoint.mark_failed(
+                index,
+                "Item Record changed after this enrichment run was planned; result was not requested"
+                    .to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+        if current_item.thumbnail_is_placeholder {
+            checkpoint.mark_failed(
+                index,
+                "A real Thumbnail Preview is unavailable; no image was sent to OpenAI".to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+        let current_thumbnail_path = PathBuf::from(&current_item.thumbnail_file);
+        let thumbnail_bytes = match read_bounded_thumbnail(&current_thumbnail_path) {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                checkpoint.mark_failed(index, reason);
+                save_checkpoint(&checkpoint)?;
+                continue;
+            }
+        };
+        let current_fingerprint = fingerprint(&thumbnail_bytes);
+        if checkpoint.should_skip_unchanged(index, &current_fingerprint) {
+            handled_this_invocation = handled_this_invocation.saturating_sub(1);
+            checkpoint.mark_skipped(index);
+            save_checkpoint(&checkpoint)?;
+            emit_artwork_progress(app, &checkpoint.progress(None));
+            continue;
+        }
+        if item.thumbnail_fingerprint.is_empty() || item.skip_if_unchanged {
+            checkpoint.set_thumbnail_snapshot(
+                index,
+                current_thumbnail_path.clone(),
+                current_fingerprint.clone(),
+            );
+            save_checkpoint(&checkpoint)?;
+            item = checkpoint.item(index).clone();
+        } else if current_fingerprint != item.thumbnail_fingerprint {
+            checkpoint.mark_failed(
+                index,
+                "Thumbnail Preview changed after this enrichment run was planned; no image was sent"
+                    .to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+
+        let remaining_time = duration_limit.saturating_sub(started.elapsed());
+        if remaining_time.is_zero() {
+            checkpoint.finish_or_pause();
+            break;
+        }
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            checkpoint.cancel();
+            break;
+        }
+        requests_this_invocation += 1;
+        checkpoint.increment_requests();
+        save_checkpoint(&checkpoint)?;
+        let response = provider.enrich_thumbnail(&item, &thumbnail_bytes, budget_mode, remaining_time);
+        let response = match response {
+            Ok(response) => response,
+            Err(reason) => {
+                let provider_rejected = reason.starts_with("OpenAI provider rejected the request");
+                checkpoint.mark_failed(index, reason);
+                checkpoint.status = if provider_rejected {
+                    ArtworkEnrichmentStatus::Paused
+                } else {
+                    ArtworkEnrichmentStatus::Running
+                };
+                save_checkpoint(&checkpoint)?;
+                if provider_rejected {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let apply_result = (|| -> Result<ItemDetailsView, String> {
+            let guard = state
+                .lock()
+                .map_err(|_| "desktop state is unavailable".to_string())?;
+            if guard.active_vault_root().as_deref() != Some(checkpoint.vault_root.as_path()) {
+                return Err("Active Vault changed while OpenAI was researching the artwork".to_string());
+            } else {
+                let details = guard
+                    .get_item_details(item.id.clone())
+                    .map_err(|error| error.to_string())?;
+                if details.record_revision != item.record_revision {
+                    return Err("Item Record changed while OpenAI was researching it; result was discarded"
+                        .to_string());
+                } else {
+                    let snapshot = guard
+                        .workbench_snapshot(WorkbenchSnapshotCommand {
+                            home_subvault: "Paintings".to_string(),
+                            artwork_sort: "oldest".to_string(),
+                            search_query: None,
+                            selected_item_id: None,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    let current = snapshot
+                        .artwork_items
+                        .into_iter()
+                        .find(|candidate| candidate.id == item.id)
+                        .ok_or_else(|| "Artwork is no longer in Paintings".to_string())?;
+                    let current_bytes = read_bounded_thumbnail(Path::new(&current.thumbnail_file))?;
+                    if current.thumbnail_is_placeholder
+                        || fingerprint(&current_bytes) != item.thumbnail_fingerprint
+                    {
+                        return Err("Thumbnail Preview changed while OpenAI was researching it; result was discarded"
+                            .to_string());
+                    } else {
+                        return guard
+                            .apply_artwork_enrichment_response(
+                                item.id.clone(),
+                                item.record_revision.clone(),
+                                budget_mode,
+                                response,
+                            )
+                            .map_err(|error| error.to_string());
+                    }
+                }
+            }
+        })();
+        match apply_result {
+            Ok(details) => checkpoint.mark_enriched(index, details.record_revision),
+            Err(reason) => checkpoint.mark_failed(index, reason),
+        }
+        save_checkpoint(&checkpoint)?;
+        emit_artwork_progress(app, &checkpoint.progress(None));
+    }
+
+    if checkpoint.status == ArtworkEnrichmentStatus::Running {
+        checkpoint.finish_or_pause();
+    }
+    save_checkpoint(&checkpoint)?;
+    let progress = checkpoint.progress(None);
+    emit_artwork_progress(app, &progress);
+    Ok(progress)
 }
 
 fn decode_media_path(encoded_path: &str) -> Result<PathBuf, String> {
@@ -366,7 +693,7 @@ async fn capture_source_link(
             .lock()
             .map_err(|_| "desktop state is unavailable".to_string())?;
         guard
-            .capture_source_link(
+            .capture_artwork_source_link(
                 CaptureSourceLinkCommand {
                     source_link,
                     title,
@@ -461,6 +788,102 @@ async fn summarize_idea_source(
 }
 
 #[tauri::command]
+async fn start_artwork_enrichment(
+    options: ArtworkEnrichmentOptions,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+    app: tauri::AppHandle,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let state = Arc::clone(state.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    let run_guard = acquire_artwork_run(&cancellation)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _run_guard = run_guard;
+        let (checkpoint, config) =
+            new_artwork_enrichment_checkpoint(&state, &options, &cancellation)?;
+        run_artwork_enrichment(&state, &cancellation, &app, checkpoint, config)
+    })
+    .await
+    .map_err(|error| format!("artwork enrichment task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn resume_artwork_enrichment(
+    run_id: String,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+    app: tauri::AppHandle,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let state = Arc::clone(state.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    let run_guard = acquire_artwork_run(&cancellation)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _run_guard = run_guard;
+        let (vault_root, config) = {
+            let guard = state
+                .lock()
+                .map_err(|_| "desktop state is unavailable".to_string())?;
+            (
+                guard
+                    .active_vault_root()
+                    .ok_or_else(|| "no Active Vault is open".to_string())?,
+                guard
+                    .shell_openai_provider_config()
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let checkpoint = ArtworkEnrichmentCheckpoint::resume(&vault_root, &run_id)?;
+        save_checkpoint(&checkpoint)?;
+        run_artwork_enrichment(&state, &cancellation, &app, checkpoint, config)
+    })
+    .await
+    .map_err(|error| format!("artwork enrichment task failed: {error}"))?
+}
+
+#[tauri::command]
+fn cancel_artwork_enrichment(
+    run_id: Option<String>,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+) -> Result<(), String> {
+    if let Some(run_id) = run_id {
+        let vault_root = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let latest = latest_progress_if_exists(&vault_root)?
+            .ok_or_else(|| "no artwork enrichment checkpoint exists".to_string())?;
+        if latest.run_id != run_id {
+            return Err(format!("artwork enrichment run is not active: {run_id}"));
+        }
+    }
+    cancellation.cancelled.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[tauri::command]
+fn artwork_enrichment_status(
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+) -> Result<Option<ArtworkEnrichmentProgress>, String> {
+    let vault_root = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .ok_or_else(|| "no Active Vault is open".to_string())?;
+    let mut progress = latest_progress_if_exists(&vault_root)?;
+    if !cancellation.active.load(Ordering::Acquire) {
+        if let Some(progress) = progress.as_mut() {
+            if progress.status == ArtworkEnrichmentStatus::Running {
+                progress.status = ArtworkEnrichmentStatus::Paused;
+            }
+        }
+    }
+    Ok(progress)
+}
+
+#[tauri::command]
 fn configure_openai_provider(
     api_key: String,
     model: String,
@@ -503,6 +926,35 @@ fn capture_manual_fallback(
         .lock()
         .map_err(|_| "desktop state is unavailable".to_string())?
         .capture_manual_fallback(ManualFallbackCaptureCommand {
+            source_link,
+            title,
+            saving_reason,
+            copied_text,
+            copied_image,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn capture_artwork_fallback(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    copied_image_file_name: Option<String>,
+    copied_image_bytes: Option<Vec<u8>>,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    let copied_image = match (copied_image_file_name, copied_image_bytes) {
+        (Some(file_name), Some(bytes)) if !bytes.is_empty() => {
+            Some(CopiedImageCommand { file_name, bytes })
+        }
+        _ => None,
+    };
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .capture_artwork_fallback(ManualFallbackCaptureCommand {
             source_link,
             title,
             saving_reason,
@@ -727,6 +1179,7 @@ fn main() {
                 app_state_dir,
             ))));
             app.manage(Arc::new(AtomicBool::new(false)));
+            app.manage(Arc::new(ArtworkCancellationFlag::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -741,9 +1194,14 @@ fn main() {
             capture_source_link,
             capture_idea_source,
             capture_manual_fallback,
+            capture_artwork_fallback,
             get_item_details,
             read_idea_source,
             summarize_idea_source,
+            start_artwork_enrichment,
+            resume_artwork_enrichment,
+            cancel_artwork_enrichment,
+            artwork_enrichment_status,
             configure_openai_provider,
             openai_provider_status,
             workbench_snapshot,

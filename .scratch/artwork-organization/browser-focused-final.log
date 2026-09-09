@@ -1,0 +1,28 @@
+
+> gruenes-gewolbe-desktop-ui@0.1.0 test /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> bash ../../scripts/check-bounded.sh pnpm exec playwright test tests/browser/artwork-organization.spec.ts tests/browser/url-capture.spec.ts tests/browser/workbench-layout.spec.ts --update-snapshots
+
+Running as unit: run-p65523-i91357.service
+
+Running 11 tests using 1 worker
+
+  ✓   1 tests/browser/artwork-organization.spec.ts:20:1 › opens Settings without a Vault and persists bounded enrichment controls (1.2s)
+  ✓   2 tests/browser/artwork-organization.spec.ts:41:1 › keeps artwork details sticky and refreshes locally on focus (1.6s)
+  ✓   3 tests/browser/artwork-organization.spec.ts:69:1 › Paintings fallback preserves a pasted image through the artwork destination (1.3s)
+  ✓   4 tests/browser/artwork-organization.spec.ts:95:1 › starts bounded enrichment and sends cancellation separately from focus refresh (741ms)
+  ✓   5 tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied (1.3s)
+  ✓   6 tests/browser/url-capture.spec.ts:61:1 › shows an automatically generated summary when a provider is configured (1.2s)
+  ✓   7 tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key (801ms)
+  ✓   8 tests/browser/url-capture.spec.ts:123:1 › never saves an empty fallback from the Paintings link capture (807ms)
+  ✓   9 tests/browser/url-capture.spec.ts:149:1 › captures a supported Wikimedia source without opening Manual Fallback (800ms)
+/home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/workbench-layout.spec.ts-snapshots/workbench-desktop-linux.png is re-generated, writing actual.
+  ✓  10 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the desktop viewport (1.8s)
+/home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/workbench-layout.spec.ts-snapshots/workbench-constrained-linux.png is re-generated, writing actual.
+  ✓  11 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the constrained viewport (1.2s)
+
+  11 passed (15.7s)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 16.557s
+             CPU time consumed: 16.101s
+                   Memory peak: 698.7M (swap: 0B)
