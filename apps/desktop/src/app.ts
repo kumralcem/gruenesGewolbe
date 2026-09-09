@@ -188,11 +188,14 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
       !adapter.workbenchSnapshot
     ) return;
     thumbnailPreparationRunning = true;
+    const preparationRoot = state.active_vault.root;
     void (async () => {
       let generatedSinceSnapshot = 0;
       try {
-        while (state.active_vault) {
+        while (state.active_vault?.root === preparationRoot) {
+          if (state.pending_selected_artwork_id !== null) break;
           const prepared = await adapter.prepareThumbnailPreviews!(1);
+          if (state.active_vault?.root !== preparationRoot) break;
           state = { ...state, thumbnail_remaining: prepared.remaining, error: null };
           generatedSinceSnapshot += prepared.generated;
           const refreshWorkbench =
@@ -247,10 +250,15 @@ export async function mountApp(root: HTMLElement, adapter: DesktopAdapter): Prom
           await new Promise((resolve) => window.setTimeout(resolve, 50));
         }
       } catch (error) {
-        state = { ...state, error: errorMessage(error) };
-        render();
+        if (state.active_vault?.root === preparationRoot) {
+          state = { ...state, error: errorMessage(error) };
+          render();
+        }
       } finally {
         thumbnailPreparationRunning = false;
+        if (state.active_vault && state.active_vault.root !== preparationRoot) {
+          scheduleThumbnailPreparation();
+        }
       }
     })();
   };
@@ -479,7 +487,8 @@ function bindActions(
         capture_copied_text: copiedText ?? "",
         summary_notice: null,
       });
-      const result = await adapter.captureIdeaSource({ sourceLink, title, savingReason, copiedText });
+      const budgetMode = enrichmentSetting("summary-budget", "standard") as "off" | "cheap" | "standard" | "deep";
+      const result = await adapter.captureIdeaSource({ sourceLink, title, savingReason, copiedText, budgetMode });
       if (request !== requestEpoch.value) return;
       if (result.status === "needs_manual_fallback") {
         await update({
@@ -779,7 +788,8 @@ function bindActions(
     const request = ++requestEpoch.value;
     try {
       await update({ ...state, busy: true, error: null, summary_notice: "Creating summary…" });
-      const result = await adapter.summarizeIdeaSource(selected.id, "standard");
+      const budgetMode = enrichmentSetting("summary-budget", "standard") as "off" | "cheap" | "standard" | "deep";
+      const result = await adapter.summarizeIdeaSource(selected.id, budgetMode);
       const snapshot = adapter.workbenchSnapshot
         ? await adapter.workbenchSnapshot(state.artwork_sort, selected.id, state.search_query)
         : state.workbench_snapshot;
@@ -824,8 +834,8 @@ function bindActions(
   root.querySelector<HTMLButtonElement>("[data-close-settings]")?.addEventListener("click", async () => {
     await update({ ...state, active_view: "paintings" });
   });
-  root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-enrichment-budget], [data-enrichment-max-items], [data-enrichment-max-requests], [data-enrichment-max-duration]").forEach((control) => {
-    control.addEventListener("change", () => window.localStorage.setItem(`gg-enrichment-${control.dataset.enrichmentBudget !== undefined ? "budget" : control.dataset.enrichmentMaxItems !== undefined ? "max-items" : control.dataset.enrichmentMaxRequests !== undefined ? "max-requests" : "max-duration"}`, control.value));
+  root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-enrichment-budget], [data-summary-budget], [data-enrichment-max-items], [data-enrichment-max-requests], [data-enrichment-max-duration]").forEach((control) => {
+    control.addEventListener("change", () => window.localStorage.setItem(`gg-enrichment-${control.dataset.summaryBudget !== undefined ? "summary-budget" : control.dataset.enrichmentBudget !== undefined ? "budget" : control.dataset.enrichmentMaxItems !== undefined ? "max-items" : control.dataset.enrichmentMaxRequests !== undefined ? "max-requests" : "max-duration"}`, control.value));
   });
 
   root.querySelector<HTMLButtonElement>("[data-close-item-details]")?.addEventListener("click", async () => {
@@ -1500,6 +1510,7 @@ function settingsTemplate(state: AppState, adapter: DesktopAdapter): string {
   return `<section class="settings-workspace" aria-label="Settings">
     <header class="settings-heading"><div><p class="eyebrow">App preferences</p><h2>Settings</h2><p>Provider credentials and bounded enrichment limits apply across the app, even when no Vault is open.</p></div><button class="secondary-button" type="button" data-close-settings>Back to archive</button></header>
     ${summaryProviderTemplate(state, adapter)}
+    <section class="settings-card" aria-labelledby="summary-budget-settings-title"><h3 id="summary-budget-settings-title">Idea Source summary budget</h3><p>Controls automatic summaries during capture and manual retry. Monetary cost is unavailable for the configured model.</p><label>Summary budget mode<select data-summary-budget><option value="off" ${setting("summary-budget", "standard") === "off" ? "selected" : ""}>Off</option><option value="cheap" ${setting("summary-budget", "standard") === "cheap" ? "selected" : ""}>Cheap</option><option value="standard" ${setting("summary-budget", "standard") === "standard" ? "selected" : ""}>Standard</option><option value="deep" ${setting("summary-budget", "standard") === "deep" ? "selected" : ""}>Deep</option></select></label></section>
     <section class="settings-card" aria-labelledby="enrichment-settings-title"><h3 id="enrichment-settings-title">Artwork enrichment limits</h3><p>Runs send artwork previews and metadata to your configured provider for tagging and web research. Item, request, and time limits bound each run. Monetary cost is unavailable for the configured model; these are not dollar limits.</p><label>AI budget mode<select data-enrichment-budget><option value="cheap" ${setting("budget", "standard") === "cheap" ? "selected" : ""}>Cheap</option><option value="standard" ${setting("budget", "standard") === "standard" ? "selected" : ""}>Standard</option><option value="deep" ${setting("budget", "standard") === "deep" ? "selected" : ""}>Deep</option></select></label><label>Maximum paintings per run<input type="number" min="1" max="250" value="${escapeHtml(setting("max-items", "25"))}" data-enrichment-max-items></label><label>Maximum requests per run<input type="number" min="1" max="250" value="${escapeHtml(setting("max-requests", "25"))}" data-enrichment-max-requests></label><label>Maximum duration (seconds)<input type="number" min="10" max="3600" value="${escapeHtml(setting("max-duration", "900"))}" data-enrichment-max-duration></label></section>
   </section>`;
 }
@@ -1572,7 +1583,7 @@ function captureLinkTemplate(state: AppState, adapter: DesktopAdapter, ideaCaptu
         <form class="capture-form" data-source-link-capture>
           <label>Source Link<input name="source_link" type="url" placeholder="https://…" value="${escapeHtml(state.capture_source_link)}" required></label>
           <label>Saving Reason <span>(optional)</span><input name="capture_saving_reason" value="${escapeHtml(state.capture_saving_reason)}"></label>
-          <p class="form-hint">Paste a public HTTPS link. Wikimedia and public X images keep the Best Available File; other sources save the Source Link as an Idea Source.</p>
+          <p class="form-hint">Paste a public HTTPS image link. Wikimedia and public X images are saved in Paintings when available; other pages may need a pasted image. To preserve page text, choose Idea Sources.</p>
           <button class="primary-button" type="submit" ${state.busy ? "disabled" : ""}>Capture</button>
         </form>
       `}

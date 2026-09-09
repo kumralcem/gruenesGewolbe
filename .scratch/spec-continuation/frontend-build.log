@@ -1,0 +1,20 @@
+Running as unit: run-p109964-i119765.service
+
+> gruenes-gewolbe-desktop-ui@0.1.0 build /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> tsc --noEmit && vite build
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 1797 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  0.45 kB │ gzip:  0.29 kB
+dist/assets/index-CkVwPQg9.css  22.64 kB │ gzip:  5.07 kB
+dist/assets/index-DV9Dox26.js   75.53 kB │ gzip: 18.54 kB
+
+✓ built in 527ms
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1.486s
+             CPU time consumed: 1.474s
+                   Memory peak: 291.2M (swap: 0B)

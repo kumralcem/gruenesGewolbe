@@ -1,0 +1,468 @@
+Running as unit: run-p103983-i139489.service
+   Compiling gruenes-gewolbe-desktop v0.1.0 (/home/cem/Sync/Projects/gruenesGewolbe/apps/desktop)
+   Compiling gruenes-gewolbe-cli v0.1.0 (/home/cem/Sync/Projects/gruenesGewolbe/crates/archive-cli)
+   Compiling gruenes-gewolbe-core v0.1.0 (/home/cem/Sync/Projects/gruenesGewolbe/crates/archive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 30s
+     Running unittests src/main.rs (target/debug/deps/ggvault-5d670347475a1243)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/add_files.rs (target/debug/deps/add_files-33c69d35a7c8540b)
+
+running 1 test
+test cli_adds_selected_artwork_files_and_returns_structured_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/capture.rs (target/debug/deps/capture-ce5b81d3b4cb8ffd)
+
+running 1 test
+test cli_captures_manual_fallback_text_into_a_specified_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/duplicate_candidates.rs (target/debug/deps/duplicate_candidates-094de68ba14756d4)
+
+running 1 test
+test cli_resolves_a_duplicate_candidate_with_an_explicit_item_reason_and_decision ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/import_paintings.rs (target/debug/deps/import_paintings-60b7c9a53dd3c1df)
+
+running 1 test
+test cli_imports_a_paintings_folder_into_a_specified_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/inspect_item.rs (target/debug/deps/inspect_item-73af0eccba298efe)
+
+running 2 tests
+test cli_inspects_an_item_record_as_structured_lines ... ok
+test cli_logs_structured_errors_for_failed_item_inspection ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/problems.rs (target/debug/deps/problems-6745e063c4551e30)
+
+running 1 test
+test cli_lists_vault_problems_as_structured_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/search.rs (target/debug/deps/search-41965b2279ca85d6)
+
+running 1 test
+test cli_rebuilds_the_metadata_index_and_searches_a_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/validate.rs (target/debug/deps/validate-183041ecdbe253d7)
+
+running 2 tests
+test cli_reports_clear_errors_for_invalid_vault_folders ... ok
+test cli_validates_whether_a_folder_is_a_usable_vault ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/vault_trash.rs (target/debug/deps/vault_trash-084d75190319b02d)
+
+running 2 tests
+test cli_moves_and_restores_an_explicit_item ... ok
+test cli_permanent_delete_requires_confirmation_and_reports_impact ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/gruenes_gewolbe_core-9d56a484b01ec99a)
+
+running 2 tests
+test thumbnail_dimension_tests::reads_vp8_dimensions_from_the_small_header_only ... ok
+test thumbnail_dimension_tests::rejects_reported_8000_square_source_before_full_decode ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/activity_log.rs (target/debug/deps/activity_log-c36bf29650761fa7)
+
+running 1 test
+test capture_import_and_index_rebuild_append_noncanonical_activity_log_events ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ai_enrichment.rs (target/debug/deps/ai_enrichment-23ad8d7aa43a1e17)
+
+running 8 tests
+test artwork_enrichment_accepts_high_confidence_unknown_metadata_and_stages_conflicts ... ok
+test artwork_enrichment_records_better_file_candidates_without_replacing_the_primary_file ... ok
+test artwork_metadata_suggestions_send_only_primary_image_bytes_and_stage_metadata ... ok
+test idea_enrichment_budget_off_skips_provider_and_leaves_item_unchanged ... ok
+test idea_enrichment_normalizes_ai_tags_through_the_vault_tag_registry ... ok
+test idea_enrichment_uses_cleaned_text_budget_mode_and_persists_summary_tags_and_suggestions ... ok
+test precomputed_artwork_enrichment_is_rejected_after_item_record_changes ... ok
+test provider_with_unknown_cost_does_not_record_a_zero_cost_entry ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/artwork_items.rs (target/debug/deps/artwork_items-1491ade47ce77d13)
+
+running 4 tests
+test artwork_item_record_has_parseable_structured_frontmatter ... ok
+test saved_artwork_item_can_be_reopened_from_disk_by_stable_id ... ok
+test user_can_add_a_local_image_as_an_artwork_saved_item ... ok
+test user_can_add_several_selected_image_files_with_filename_metadata ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/capture.rs (target/debug/deps/capture-5203630aeb8ec0a3)
+
+running 10 tests
+test idea_source_reader_rejects_symlinks_outside_the_item_folder ... ok
+test idea_source_reader_rejects_traversal_and_empty_source_copies ... ok
+test oversized_pasted_text_is_rejected_before_an_item_folder_is_created ... ok
+test preserved_idea_source_can_be_read_after_reopening_offline ... ok
+test url_capture_persists_extracted_cleaned_text_when_extraction_succeeds ... ok
+test url_capture_preserves_extracted_visual_bytes_with_source_provenance ... ok
+test url_capture_returns_a_manual_fallback_prompt_when_extraction_is_blocked ... ok
+test user_can_capture_a_source_link_with_extracted_cleaned_text ... ok
+test user_can_capture_a_source_link_with_manual_fallback_image_bytes ... ok
+test user_can_capture_a_source_link_with_manual_fallback_text ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/duplicate_candidates.rs (target/debug/deps/duplicate_candidates-4cb7743caa2f79b7)
+
+running 8 tests
+test artwork_save_warns_about_descriptive_metadata_duplicate_candidates_without_blocking_save ... ok
+test duplicate_candidate_can_be_recorded_as_not_a_duplicate_or_keep_both ... ok
+test duplicate_candidate_can_move_only_the_current_item_to_vault_trash ... ok
+test manual_capture_warns_about_exact_source_link_duplicate_candidates_without_blocking_save ... ok
+test paintings_import_skips_byte_identical_files_instead_of_creating_review_work ... ok
+test repeated_paintings_import_does_not_create_exact_duplicate_review_work ... ok
+test resolving_a_duplicate_candidate_keeps_needs_review_while_another_reason_remains ... ok
+test successful_url_capture_warns_about_exact_source_link_duplicate_candidates_without_blocking_save ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/import_runs.rs (target/debug/deps/import_runs-be840e0ec20c699f)
+
+running 13 tests
+test a_file_failure_is_audited_without_rolling_back_other_imports ... ok
+test ambiguous_overlap_is_imported_with_a_duplicate_candidate_review_reason ... ok
+test an_unreadable_nested_folder_is_reported_without_blocking_accessible_images ... ok
+test cancellation_between_files_keeps_completed_items_and_marks_the_run_partial ... ok
+test exact_duplicate_check_uses_the_durable_preserved_file_not_the_current_primary_file ... ok
+test exact_file_duplicates_are_skipped_before_creating_an_item_folder ... ok
+test import_run_recursively_preserves_supported_images_and_returns_a_summary ... ok
+test import_run_refreshes_metadata_search_once_after_processing_all_files ... ok
+test import_run_reports_file_progress_in_discovery_order ... ok
+test import_run_reports_unsupported_files_and_symbolic_links_as_skipped ... ok
+test matching_fingerprint_text_requires_equal_bytes_and_malformed_records_are_localized ... ok
+test secondary_state_failure_does_not_hide_successful_canonical_imports ... ok
+test user_can_explicitly_import_an_exact_file_duplicate_anyway ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/item_record_editing.rs (target/debug/deps/item_record_editing-da3f6e910be4f440)
+
+running 5 tests
+test atomic_save_never_exposes_a_partial_item_record ... ok
+test complete_edit_is_validated_before_the_record_changes ... ok
+test confirmed_folder_rename_preserves_id_and_uses_a_small_collision_suffix ... ok
+test external_change_requires_reload_or_deliberate_overwrite ... ok
+test structured_edit_saves_all_owned_fields_and_preserves_unknown_content ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/malformed_records.rs (target/debug/deps/malformed_records-80aed89ed394027f)
+
+running 1 test
+test malformed_item_records_are_localized_across_browsing_and_metadata_rebuilds ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/metadata_search.rs (target/debug/deps/metadata_search-86dca06e9490e26e)
+
+running 5 tests
+test metadata_search_finds_source_links_and_ai_summaries ... ok
+test metadata_search_rebuilds_automatically_when_the_derived_index_is_missing ... ok
+test metadata_search_rebuilds_collection_references_from_collection_files ... ok
+test metadata_search_rebuilds_from_visible_item_records_after_derived_state_is_deleted ... ok
+test metadata_search_refreshes_after_new_artwork_is_saved ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/organization.rs (target/debug/deps/organization-9bb13a8e67de4c88)
+
+running 4 tests
+test item_details_reads_collection_membership_from_collection_files ... ok
+test user_can_add_item_links_without_moving_the_home_subvault ... ok
+test user_can_add_tags_normalized_through_the_vault_tag_registry ... ok
+test user_can_create_a_collection_and_add_items_without_moving_item_folders ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/paintings_import.rs (target/debug/deps/paintings_import-d9ac10172ffad9fc)
+
+running 1 test
+test user_can_import_a_paintings_folder_copying_supported_images_by_default ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/personal_scale.rs (target/debug/deps/personal_scale-a6616746311d4d76)
+
+running 1 test
+test generated_personal_scale_vault_opens_browses_searches_and_rebuilds ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.41s
+
+     Running tests/review_reasons.rs (target/debug/deps/review_reasons-b45c11a6c0450f17)
+
+running 4 tests
+test a_non_field_review_reason_can_be_corrected_with_a_resolution_note ... ok
+test conflicting_import_metadata_is_an_independent_review_reason ... ok
+test metadata_suggestions_are_accepted_edited_or_dismissed_offline_with_provenance ... ok
+test review_status_is_derived_from_individually_resolved_reasons ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/selected_file_duplicates.rs (target/debug/deps/selected_file_duplicates-3a919eba57b31c28)
+
+running 3 tests
+test selected_file_exact_duplicates_are_skipped_and_can_be_imported_deliberately ... ok
+test selected_file_filename_only_overlap_remains_a_duplicate_candidate ... ok
+test unsupported_selected_file_does_not_block_supported_selected_file ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/vault_lifecycle.rs (target/debug/deps/vault_lifecycle-c51abca5ff0a90d4)
+
+running 9 tests
+test confirming_repair_creates_only_missing_structure_and_opens_the_vault ... ok
+test opening_a_recognizable_incomplete_vault_proposes_missing_structure_without_changing_it ... ok
+test opening_rejects_invalid_configuration_without_proposing_or_creating_structure ... ok
+test opening_rejects_malformed_toml_even_when_it_contains_the_supported_version ... ok
+test opening_rejects_structural_conflicts_instead_of_proposing_repair ... ok
+test user_can_create_a_vault_as_ordinary_files_and_reopen_it ... ok
+test user_can_open_a_copied_vault_without_hidden_app_state ... ok
+test validation_reports_clear_errors_for_invalid_vault_folders ... ok
+test vault_creation_refuses_an_unrelated_non_empty_folder ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/vault_trash.rs (target/debug/deps/vault_trash-2d6674822780c711)
+
+running 3 tests
+test malformed_possible_referrer_blocks_cleanup_and_preserves_trashed_item ... ok
+test move_and_restore_preserve_content_references_and_avoid_collisions ... ok
+test permanent_delete_requires_exact_identity_and_cleans_known_references ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/workbench.rs (target/debug/deps/workbench-f486cc44a34bf970)
+
+running 11 tests
+test animated_gif_thumbnail_preview_uses_the_first_frame ... ok
+test artwork_gallery_defaults_to_newest_and_supports_metadata_sorting ... ok
+test direct_item_record_edits_are_reflected_but_status_remains_derived ... ok
+test editing_item_record_fields_cannot_clear_review_reasons ... ok
+test gallery_browsing_is_immediate_and_thumbnail_previews_are_prepared_explicitly ... ok
+test malformed_large_header_is_localized_during_background_preview_work ... ok
+test metadata_cleanup_suggests_a_folder_rename_without_moving_the_item_folder ... ok
+test undecodable_artwork_is_preserved_with_a_placeholder_and_review_reason ... ok
+test user_can_browse_a_cross_subvault_review_queue_for_uncertain_items ... ok
+test user_can_browse_artwork_items_and_open_item_details_from_records ... ok
+test user_can_browse_idea_sources_as_a_text_list_and_open_source_link_details ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.21s
+
+     Running unittests src/lib.rs (target/debug/deps/gruenes_gewolbe_desktop-8975436d51c0b283)
+
+running 22 tests
+test artwork_enrichment::tests::base64_encoder_handles_padding ... ok
+test artwork_enrichment::tests::checkpoint_round_trip_resumes_pending_items ... ok
+test artwork_enrichment::tests::factual_suggestions_require_urls_from_actual_web_search_sources ... ok
+test artwork_enrichment::tests::item_limit_does_not_drop_later_paintings_from_the_checkpoint ... ok
+test artwork_enrichment::tests::options_enforce_item_request_and_duration_bounds ... ok
+test artwork_enrichment::tests::unchanged_completed_items_are_skipped_but_changed_records_are_eligible ... ok
+test source_extractor::tests::extracts_article_text_with_entities_without_page_chrome ... ok
+test source_extractor::tests::falls_back_to_open_graph_image_when_full_media_is_absent ... ok
+test source_extractor::tests::generic_idea_urls_reject_local_and_private_literal_hosts ... ok
+test source_extractor::tests::generic_pages_request_manual_fallback_without_network_extraction ... ok
+test source_extractor::tests::non_https_and_credentialed_links_request_manual_fallback ... ok
+test source_extractor::tests::prefers_the_original_upload_over_a_thumbnail_in_full_media ... ok
+test source_extractor::tests::preserves_a_valid_short_post ... ok
+test source_extractor::tests::reads_public_x_post_media_and_title_without_logged_in_scraping ... ok
+test source_extractor::tests::reads_wikimedia_title_and_original_media_from_page_markup ... ok
+test source_extractor::tests::selects_the_largest_wikimedia_preview_when_the_original_exceeds_the_byte_budget ... ok
+test source_extractor::tests::strips_preview_prefixes_from_preserved_file_names ... ok
+test source_extractor::tests::synthesizes_an_in_budget_commons_preview_url_from_the_original_upload ... ok
+test source_extractor::tests::unwraps_commons_thumbnail_urls_to_the_original_file ... ok
+test source_extractor::tests::wikimedia_redirects_stay_on_supported_hosts_and_stop_after_four_hops ... ok
+test source_extractor::tests::wikipedia_article_hosts_are_outside_the_wikimedia_media_boundary ... ok
+test source_extractor::tests::x_idea_extraction_requires_public_post_text_metadata ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (target/debug/deps/gruenes_gewolbe-19f81e2ae648f9c0)
+
+running 9 tests
+test tests::invalid_budget_is_rejected_before_provider_access ... ok
+test tests::media_protocol_reads_only_the_current_active_vault_thumbnails ... ok
+test tests::off_budget_skips_before_provider_access_and_preserves_source ... ok
+test tests::provider_failure_keeps_the_preserved_source_without_a_summary ... ok
+test tests::selection_stale_thumbnail_failure_does_not_change_the_previous_vault_record ... ok
+test tests::selection_stays_available_while_real_thumbnail_previews_are_prepared ... ok
+test tests::summary_is_not_applied_after_switching_to_an_identical_copied_vault ... ok
+test tests::summary_is_not_applied_when_item_record_changes_during_provider_call ... ok
+test tests::summary_is_not_applied_when_preserved_source_changes_during_provider_call ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.51s
+
+     Running tests/active_vault.rs (target/debug/deps/active_vault-eff3a642ba2d7f63)
+
+running 7 tests
+test desktop_shell_confirms_repair_and_opens_the_repaired_vault ... ok
+test desktop_shell_makes_the_active_vault_explicit_after_create_and_open ... ok
+test desktop_shell_proposes_and_cancels_repair_without_activating_or_changing_the_vault ... ok
+test desktop_shell_remembers_multiple_vault_roots_and_switches_the_active_vault ... ok
+test desktop_shell_reopens_the_last_valid_active_vault ... ok
+test desktop_shell_reports_an_unavailable_last_active_vault_without_switching ... ok
+test desktop_startup_exposes_repair_for_a_remembered_incomplete_vault ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/ai_enrichment.rs (target/debug/deps/ai_enrichment-b2600284bcc27108)
+
+running 4 tests
+test desktop_shell_applies_high_confidence_unknown_artwork_metadata ... ok
+test desktop_shell_enriches_captured_ideas_through_active_vault ... ok
+test desktop_shell_suggests_artwork_metadata_through_active_vault ... ok
+test desktop_shell_surfaces_better_file_candidates_without_replacing_the_primary_file ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/ai_provider_config.rs (target/debug/deps/ai_provider_config-446dab1590fd096e)
+
+running 1 test
+test desktop_shell_stores_openai_provider_config_in_user_app_state_not_the_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/artwork_items.rs (target/debug/deps/artwork_items-05b5c3fb693b4681)
+
+running 1 test
+test desktop_shell_adds_a_local_image_to_the_active_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/capture.rs (target/debug/deps/capture-275059ee9c26db9e)
+
+running 3 tests
+test desktop_shell_captures_manual_fallback_text_into_the_active_vault ... ok
+test desktop_shell_persists_successful_url_extraction_into_the_active_vault ... ok
+test desktop_shell_returns_a_manual_fallback_prompt_when_url_extraction_is_blocked ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/duplicate_candidates.rs (target/debug/deps/duplicate_candidates-956211b36a6938f3)
+
+running 1 test
+test desktop_shell_does_not_create_review_work_for_repeated_exact_imports ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/error_activity.rs (target/debug/deps/error_activity-67b89443e5e40781)
+
+running 1 test
+test desktop_shell_logs_item_detail_errors_with_enough_context_for_the_app ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/import_paintings.rs (target/debug/deps/import_paintings-aa1acfc547ce578f)
+
+running 1 test
+test desktop_shell_imports_a_paintings_folder_into_the_active_vault ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/item_record_editing.rs (target/debug/deps/item_record_editing-0773ce56c9c611c4)
+
+running 1 test
+test tauri_commands_save_conflict_reload_overwrite_and_confirm_rename ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/malformed_records.rs (target/debug/deps/malformed_records-952c500b414fbbe4)
+
+running 1 test
+test desktop_snapshot_localizes_malformed_records_and_refreshes_after_external_correction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/organization.rs (target/debug/deps/organization-28c0b16d3d93c57e)
+
+running 1 test
+test desktop_shell_supports_tags_collections_and_item_links ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/search.rs (target/debug/deps/search-f6f13d33cfd173bc)
+
+running 1 test
+test desktop_shell_searches_the_active_vault_and_opens_a_matching_saved_item ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/tauri_commands.rs (target/debug/deps/tauri_commands-601d57504ec8b247)
+
+running 14 tests
+test artwork_enrichment_guards_edits_and_preserves_user_title ... ok
+test paintings_capture_never_routes_text_to_idea_sources ... ok
+test tauri_command_captures_extracted_wikimedia_bytes_into_the_active_vault ... ok
+test tauri_command_exposes_the_duplicate_candidate_decisions ... ok
+test tauri_command_permanently_deletes_only_with_exact_identity ... ok
+test tauri_command_rejects_capture_when_the_active_vault_changed ... ok
+test tauri_command_saves_manual_fallback_into_idea_sources ... ok
+test tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot ... ok
+test tauri_commands_build_a_frontend_ready_workbench_snapshot ... ok
+test tauri_commands_capture_read_and_summarize_an_idea_source ... ok
+test tauri_commands_return_restart_safe_desktop_startup_state ... ok
+test tauri_commands_serialize_cancel_and_confirm_a_vault_repair ... ok
+test tauri_import_command_reports_progress_and_a_cancelled_summary ... ok
+test tauri_open_command_rejects_a_non_repairable_structural_conflict ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/tauri_scaffold.rs (target/debug/deps/tauri_scaffold-f378e6633f22cf05)
+
+running 1 test
+test tauri_scaffold_points_at_the_vite_ui_and_linux_runtime ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/workbench.rs (target/debug/deps/workbench-112e97046c1302dd)
+
+running 2 tests
+test desktop_shell_builds_a_first_screen_workbench_snapshot ... ok
+test desktop_shell_supports_workbench_browse_inspect_edit_and_review ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+   Doc-tests gruenes_gewolbe_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests gruenes_gewolbe_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 2min 5.008s
+             CPU time consumed: 1min 59.590s
+                   Memory peak: 2G (swap: 0B)

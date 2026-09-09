@@ -21,3 +21,7 @@ Root plus lower-cost Sol/Luna agents reviewed the implementation. The identified
 - Image selection avoids a full workbench rebuild and pauses newly scheduled preview work while selecting. Native latency remains unmeasured. An already-running thumbnail decode still holds shared state, so the reported lag and historical freeze are not declared fixed.
 - URL extraction is best-effort; blocked, dynamic, ambiguous, or oversized pages need pasted text. Public-host checks reject literal private/loopback addresses, including IPv6, but do not pin DNS resolution against private targets.
 - Resource-limited tests passed without exhausting the desktop's swap. This establishes a bounded test procedure, not the historical freeze's root cause.
+
+## Subsequent command responsiveness fix
+
+The former thumbnail command-state lock limitation is superseded by `.scratch/spec-continuation/selection-measurement.md`: both gallery and enrichment decode outside that lock through a sequential gate. Native GUI timing and the historical freeze cause remain unverified.

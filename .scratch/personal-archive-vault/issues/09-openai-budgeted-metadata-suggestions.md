@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: ready-for-human
 
 # OpenAI Budgeted Metadata Suggestions
 
@@ -14,8 +14,8 @@ AI output should produce summaries, tags, and metadata suggestions. High-confide
 
 ## Acceptance criteria
 
-- [ ] A user can configure OpenAI from the native app without writing API keys or provider settings into the Vault.
-- [ ] A user can choose an AI Budget Mode in the native app before AI-assisted capture or Enrichment.
+- [x] A user can configure OpenAI from the native app without writing API keys or provider settings into the Vault.
+- [x] A user can choose an AI Budget Mode in the native app before AI-assisted capture or Enrichment.
 - [x] Idea summarization sends cleaned text rather than raw HTML or unrelated vault records.
 - [x] Image metadata suggestions send only the relevant image or preview needed for the selected action.
 - [x] AI-generated summaries and tags are added when confidence and budget allow.
@@ -34,3 +34,7 @@ Implemented with TDD. Evidence: `crates/archive-core/tests/ai_enrichment.rs`, `a
 - 2026-08-20 dogfood correction: current evidence covers provider interfaces, user-state serialization, fake-provider behavior, and enrichment rules only. No live OpenAI provider, key-entry UI, Budget Mode control, or workbench Enrichment action is wired into the Tauri application. Those user-facing criteria remain agent-ready.
 
 - 2026-09-08 implementation: native provider configuration/status and Responses summarization are wired through Idea Sources, with source-first persistence, retry, owner-only config permissions, and stale Vault/record/source guards. Capture uses the standard budget; a full native budget-mode control and exact live billing remain deferred. No paid request was made. See `.scratch/complete-idea-archive/VALIDATION.md` for automated evidence and native acceptance limits.
+
+- Continuation from `4cc7703`: provider configuration is now in Settings, and artwork enrichment has bounded user-selected modes. Completing the remaining automatic Idea Source/retry budget control under `.scratch/spec-continuation/`; live configured-model success remains a manual acceptance gate, not a prerequisite for deterministic implementation tests.
+
+- Current continuation: Settings now persist separate Idea Source Off/Cheap/Standard/Deep modes for capture and retry. Off preserves the source and skips before provider configuration access. Automated acceptance is recorded in `.scratch/spec-continuation/VALIDATION.md`; native GUI and the user-configured live model remain unverified.

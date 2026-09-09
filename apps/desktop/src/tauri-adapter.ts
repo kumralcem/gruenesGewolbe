@@ -136,6 +136,7 @@ export function createTauriAdapter(): DesktopAdapter {
       title: request.title,
       savingReason: request.savingReason,
       copiedText: request.copiedText,
+      budgetMode: request.budgetMode,
     }),
     readIdeaSource: (id) => invoke<IdeaSourceContent>("read_idea_source", { id }),
     summarizeIdeaSource: (id, budgetMode) => invoke<IdeaSummaryResult>("summarize_idea_source", { id, budgetMode }),

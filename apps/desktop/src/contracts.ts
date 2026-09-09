@@ -39,6 +39,7 @@ export interface SourceLinkCaptureRequest {
 
 export interface IdeaSourceCaptureRequest extends SourceLinkCaptureRequest {
   copiedText: string | null;
+  budgetMode: AiBudgetMode;
 }
 
 export type IdeaSourceCaptureResult =

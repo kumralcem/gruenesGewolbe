@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: ready-for-human
 State: open
 Assignee: unassigned
 Labels: wayfinder:task
@@ -20,3 +20,7 @@ Using the bounded procedure, distinguish click feedback, native command time, re
 ## Resolution evidence
 
 Measurements with fixture size and cold/warm conditions, a reproducible narrow symptom where possible, and a proposed user-visible latency criterion. If representative native reproduction requires user participation, record the missing evidence and keep the ticket open rather than inventing a cause. The test freeze remains a separate symptom unless evidence connects them.
+
+## Implemented command-boundary fix
+
+The matched 64-image fixture reproduced a 24.988-second selection mutex wait. With isolated, sequential thumbnail preparation, selection returned in 148.7 ms while preparation continued for 23.305 seconds. Gallery and artwork enrichment share the worker gate; canonical failure updates validate the Active Vault and Primary File. See `../../spec-continuation/selection-measurement.md`. Native-window click, media loading, decode, and paint still require human acceptance; this issue remains open.

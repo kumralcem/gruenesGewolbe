@@ -1,0 +1,21 @@
+
+> gruenes-gewolbe-desktop-ui@0.1.0 test /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> bash ../../scripts/check-bounded.sh pnpm exec playwright test tests/browser/url-capture.spec.ts
+
+Running as unit: run-p98460-i114844.service
+
+Running 6 tests using 1 worker
+
+  ✓  1 tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied (1.6s)
+  ✓  2 tests/browser/url-capture.spec.ts:61:1 › shows an automatically generated summary when a provider is configured (1.0s)
+  ✓  3 tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key (923ms)
+  ✓  4 tests/browser/url-capture.spec.ts:123:1 › persists Idea Source budget, skips capture at Off, and uses the selected mode on retry (1.8s)
+  ✓  5 tests/browser/url-capture.spec.ts:170:1 › never saves an empty fallback from the Paintings link capture (864ms)
+  ✓  6 tests/browser/url-capture.spec.ts:196:1 › captures a supported Wikimedia source without opening Manual Fallback (903ms)
+
+  6 passed (10.2s)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11.101s
+             CPU time consumed: 10.632s
+                   Memory peak: 1009.6M (swap: 0B)

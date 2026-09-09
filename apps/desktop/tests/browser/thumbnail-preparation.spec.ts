@@ -131,3 +131,43 @@ test("does not rebuild the full workbench after every background Thumbnail Previ
   expect(snapshotCalls).toBeLessThanOrEqual(4);
   expect(preparationLimits).toEqual(Array(12).fill(1));
 });
+
+for (const oldBatchOutcome of ["resolved", "rejected"] as const) {
+  test(`ignores a ${oldBatchOutcome} old-Vault preview batch and prepares the new Vault`, async ({ page }) => {
+    await page.addInitScript(({ oldBatchOutcome }) => {
+      let activeRoot = "/vaults/First";
+      const calls: string[] = [];
+      let finishOldBatch: (() => void) | undefined;
+      Object.assign(window, {
+        __previewCalls: calls,
+        __finishOldPreviewBatch: () => finishOldBatch?.(),
+      });
+      window.__GG_TEST_ADAPTER__ = {
+        startup: async () => ({ active_vault: { root: activeRoot }, known_vaults: [{ root: "/vaults/First" }, { root: "/vaults/Second" }], repair_proposal: null, notice: null }),
+        selectFolder: async () => null, createVault: async root => ({ root }),
+        openVault: async root => { activeRoot = root; return { status: "opened", vault: { root } }; },
+        confirmVaultRepair: async root => ({ root }), cancelVaultRepair: async () => {},
+        workbenchSnapshot: async () => ({ active_vault: { root: activeRoot }, subvaults: ["Paintings"], collections: [], artwork_items: [], idea_sources: [], review_queue: [], search_results: [], selected_item: null, vault_problems: [], trashed_items: [] }),
+        prepareThumbnailPreviews: async () => {
+          calls.push(activeRoot);
+          if (activeRoot === "/vaults/First") {
+            return await new Promise((resolve, reject) => {
+              finishOldBatch = () => oldBatchOutcome === "rejected"
+                ? reject(new Error("Old Vault thumbnail failure"))
+                : resolve({ generated: 1, remaining: 99 });
+            });
+          }
+          return { generated: 0, remaining: 0 };
+        },
+      };
+    }, { oldBatchOutcome });
+    await page.goto("/");
+    await expect.poll(() => page.evaluate(() => (window as any).__previewCalls)).toEqual(["/vaults/First"]);
+    await page.locator('[data-known-vault="/vaults/Second"]').click();
+    await expect(page.getByTestId("active-vault")).toHaveText("/vaults/Second");
+    await page.evaluate(() => (window as any).__finishOldPreviewBatch());
+    await expect.poll(() => page.evaluate(() => (window as any).__previewCalls)).toEqual(["/vaults/First", "/vaults/Second"]);
+    await expect(page.getByText("Old Vault thumbnail failure")).toHaveCount(0);
+    await expect(page.locator("[data-thumbnail-status]")).toBeHidden();
+  });
+}

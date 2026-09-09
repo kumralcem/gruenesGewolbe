@@ -120,6 +120,53 @@ test("configures summarization outside the Vault without exposing the saved key"
   await expect.poll(() => page.evaluate(() => (window as any).__providerConfiguration())).toEqual({ configured: true, savedModel: "gpt-4.1-mini" });
 });
 
+test("persists Idea Source budget, skips summaries at Off, and uses the selected mode on retry", async ({ page }) => {
+  const sourceText = "The preserved source remains readable when summaries are disabled.";
+  await page.addInitScript((sourceText) => {
+    let capturedMode = "";
+    let retriedMode = "";
+    let hasCapture = false;
+    const details = { id: "idea-budget", home_subvault: "Idea Sources", item_folder: "/vault/ideas/idea-budget", title: "Budgeted source", creator: "Unknown Creator", year: "Unknown Year", primary_file: "", review_status: "reviewed", review_reasons: [], tags: [], collections: [], item_links: [], saving_reason: null, source_link: "https://example.com/budget", summary: null, source_copy: "source-copies/cleaned-text.md", record_revision: "r1", folder_rename_proposal: null };
+    (window as any).__budgetModes = () => ({ capturedMode, retriedMode });
+    const snapshot = () => ({ active_vault: { root: "/vault" }, subvaults: ["Paintings", "Idea Sources"], collections: [], artwork_items: [], idea_sources: hasCapture ? [{ id: details.id, title: details.title, source_link: details.source_link, source_copy: details.source_copy, review_status: details.review_status, saving_reason: null }] : [], review_queue: [], search_results: [], selected_item: hasCapture ? details : null, vault_problems: [], trashed_items: [] });
+    window.__GG_TEST_ADAPTER__ = {
+      startup: async () => ({ active_vault: { root: "/vault" }, known_vaults: [], repair_proposal: null, notice: null }),
+      selectFolder: async () => null, createVault: async (root: string) => ({ root }), openVault: async (root: string) => ({ status: "opened", vault: { root } }), confirmVaultRepair: async (root: string) => ({ root }), cancelVaultRepair: async () => {},
+      workbenchSnapshot: async () => snapshot(),
+      captureIdeaSource: async (request) => { capturedMode = request.budgetMode; hasCapture = true; return { status: "captured", item: { id: details.id, home_subvault: "Idea Sources", item_folder: details.item_folder }, summary_status: request.budgetMode === "off" ? "skipped" : "generated", summary: null }; },
+      readIdeaSource: async () => ({ id: details.id, source_link: details.source_link, cleaned_text: sourceText, summary: null }),
+      summarizeIdeaSource: async (_id, mode) => { retriedMode = mode; return { status: "generated", summary: "Retried summary." }; },
+      openAiProviderStatus: async () => ({ configured: true, model: "test-model" }),
+    };
+  }, sourceText);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Summary budget mode").selectOption("off");
+  await page.reload();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByLabel("Summary budget mode")).toHaveValue("off");
+  await page.getByRole("button", { name: "Back to archive" }).click();
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: "Add Idea Source" }).click();
+  const capture = page.getByRole("region", { name: "Add Idea Source" });
+  await capture.getByLabel("Source Link").fill("https://example.com/budget");
+  await capture.getByLabel(/Source Text/).fill(sourceText);
+  await capture.getByRole("button", { name: "Save Idea Source" }).click();
+  const item = page.getByRole("complementary", { name: "Idea Source details" });
+  await expect(item.getByText(sourceText)).toBeVisible();
+  await expect(item.getByText("Source saved without an automatic summary.")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__budgetModes())).toEqual({ capturedMode: "off", retriedMode: "" });
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Summary budget mode").selectOption("deep");
+  await page.getByRole("button", { name: "Back to archive" }).click();
+  await page.getByRole("button", { name: /Idea Sources/ }).click();
+  await page.getByRole("button", { name: /Budgeted source/ }).click();
+  await item.getByRole("button", { name: "Create Summary" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__budgetModes().retriedMode)).toBe("deep");
+});
+
 test("never saves an empty fallback from the Paintings link capture", async ({ page }) => {
   await page.addInitScript(() => {
     let fallbackSaves = 0;

@@ -1013,6 +1013,24 @@ impl Vault {
         home_subvault: &str,
         limit: usize,
     ) -> Result<ThumbnailPreparation, VaultError> {
+        self.prepare_thumbnail_previews_with_failure_handler(
+            home_subvault,
+            limit,
+            |id, primary_file, reason| {
+                self.record_thumbnail_preview_failure(id, primary_file, reason)
+            },
+        )
+    }
+
+    pub fn prepare_thumbnail_previews_with_failure_handler<F>(
+        &self,
+        home_subvault: &str,
+        limit: usize,
+        mut record_failure: F,
+    ) -> Result<ThumbnailPreparation, VaultError>
+    where
+        F: FnMut(&str, &Path, &str) -> Result<(), VaultError>,
+    {
         let mut generated = 0;
         let mut remaining = 0;
         for record in self.item_record_scan()?.valid_records {
@@ -1034,7 +1052,7 @@ impl Vault {
                 &record.text,
                 "primary_file",
             )?);
-            self.generate_thumbnail_for(&saved_item, &primary_file)?;
+            self.generate_thumbnail_for(&saved_item, &primary_file, &mut record_failure)?;
             generated += 1;
         }
         Ok(ThumbnailPreparation {
@@ -1044,6 +1062,19 @@ impl Vault {
     }
 
     pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<ThumbnailPreparation, VaultError> {
+        self.prepare_thumbnail_preview_with_failure_handler(id, |id, primary_file, reason| {
+            self.record_thumbnail_preview_failure(id, primary_file, reason)
+        })
+    }
+
+    pub fn prepare_thumbnail_preview_with_failure_handler<F>(
+        &self,
+        id: &str,
+        mut record_failure: F,
+    ) -> Result<ThumbnailPreparation, VaultError>
+    where
+        F: FnMut(&str, &Path, &str) -> Result<(), VaultError>,
+    {
         let saved_item = self.open_saved_item(id)?;
         if self.thumbnail_is_final(&saved_item) {
             return Ok(ThumbnailPreparation {
@@ -1052,7 +1083,11 @@ impl Vault {
             });
         }
         let details = self.item_details(id)?;
-        self.generate_thumbnail_for(&saved_item, details.primary_file())?;
+        self.generate_thumbnail_for(
+            &saved_item,
+            details.primary_file(),
+            &mut record_failure,
+        )?;
         Ok(ThumbnailPreparation {
             generated: 1,
             remaining: 0,
@@ -2219,11 +2254,15 @@ impl Vault {
                 .is_file()
     }
 
-    fn generate_thumbnail_for(
+    fn generate_thumbnail_for<F>(
         &self,
         saved_item: &SavedItem,
         primary_file: &Path,
-    ) -> Result<ThumbnailPreview, VaultError> {
+        record_failure: &mut F,
+    ) -> Result<ThumbnailPreview, VaultError>
+    where
+        F: FnMut(&str, &Path, &str) -> Result<(), VaultError>,
+    {
         let thumbnails_dir = self.root.join(HIDDEN_STATE_DIR).join(THUMBNAILS_DIR);
         fs::create_dir_all(&thumbnails_dir)?;
         let thumbnail_file = thumbnails_dir.join(format!("{}.png", saved_item.id()));
@@ -2259,8 +2298,8 @@ impl Vault {
                 })
             }
             Err(reason) => {
+                record_failure(saved_item.id(), primary_file, &reason)?;
                 write_thumbnail_placeholder(&placeholder_file)?;
-                self.record_thumbnail_preview_failure(saved_item, primary_file, &reason)?;
                 Ok(ThumbnailPreview {
                     path: placeholder_file,
                     is_placeholder: true,
@@ -2269,12 +2308,13 @@ impl Vault {
         }
     }
 
-    fn record_thumbnail_preview_failure(
+    pub fn record_thumbnail_preview_failure(
         &self,
-        saved_item: &SavedItem,
+        id: &str,
         primary_file: &Path,
         reason: &str,
     ) -> Result<(), VaultError> {
+        let saved_item = self.open_saved_item(id)?;
         let record_path = saved_item.item_folder.join("record.md");
         let record = fs::read_to_string(&record_path)?;
         let review_reason = ReviewReason {
