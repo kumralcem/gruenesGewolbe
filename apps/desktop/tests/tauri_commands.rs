@@ -1,0 +1,704 @@
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use gruenes_gewolbe_core::{
+    AiMetadataSuggestion, AiProvider, AiProviderRequest, AiProviderResponse, SourceExtraction,
+    SourceExtractionRequest, SourceExtractor,
+};
+use gruenes_gewolbe_desktop::{
+    AddArtworkFilesCommand, CaptureIdeaCommand, CaptureSourceLinkCommand, CopiedImageCommand,
+    ImportPaintingsCommand, ManualFallbackCaptureCommand, OpenVaultView,
+    ResolveDuplicateCandidateCommand, RunPaintingsImportCommand, TauriCommandState,
+    WorkbenchSnapshotCommand,
+};
+
+#[test]
+fn tauri_commands_build_a_frontend_ready_workbench_snapshot() {
+    let root = temp_path("tauri-command-vault");
+    let source_dir = temp_path("tauri-command-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    fs::write(
+        source_dir.join("Jane Painter - 1884 - Nocturne Study.jpg"),
+        b"known painting bytes",
+    )
+    .expect("write source painting");
+
+    let mut state = TauriCommandState::default();
+    let active = state
+        .create_vault(root.display().to_string())
+        .expect("create vault through command");
+    assert_eq!(active.root, root.display().to_string());
+
+    let imported = state
+        .import_paintings(ImportPaintingsCommand {
+            source_folder: source_dir.display().to_string(),
+        })
+        .expect("import paintings through command");
+    assert_eq!(imported.len(), 1);
+
+    state
+        .capture_idea(CaptureIdeaCommand {
+            source_link: "https://example.com/nocturne-note".to_string(),
+            title: "Nocturne note".to_string(),
+            saving_reason: Some("Useful framing for night palettes".to_string()),
+            copied_text: Some("Main idea text from the page.".to_string()),
+        })
+        .expect("capture idea through command");
+
+    let snapshot = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "newest".to_string(),
+            search_query: Some("nocturne".to_string()),
+            selected_item_id: Some(imported[0].id.clone()),
+        })
+        .expect("build snapshot through command");
+
+    assert_eq!(snapshot.active_vault.root, root.display().to_string());
+    assert!(snapshot
+        .subvaults
+        .iter()
+        .any(|subvault| subvault == "Paintings"));
+    assert_eq!(snapshot.artwork_items[0].title, "Nocturne Study");
+    assert_eq!(snapshot.idea_sources[0].title, "Nocturne note");
+    assert!(snapshot
+        .search_results
+        .iter()
+        .any(|result| result.id == imported[0].id));
+    assert_eq!(
+        snapshot.selected_item.expect("selected item").title,
+        "Nocturne Study"
+    );
+
+    fs::remove_dir_all(&root).expect("clean temp vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn tauri_command_captures_extracted_wikimedia_bytes_into_the_active_vault() {
+    let root = temp_path("tauri-url-image-vault");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedImage {
+        title: Some("The Great Wave".into()),
+        file_name: "wave.jpg".into(),
+        bytes: b"preserved Wikimedia bytes".to_vec(),
+    });
+
+    let result = state
+        .capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+                title: String::new(),
+                saving_reason: Some("Print reference".into()),
+            },
+            &extractor,
+            Some(root.as_path()),
+        )
+        .expect("capture source through command");
+    let value = serde_json::to_value(result).expect("serialize result");
+    assert_eq!(value["status"], "captured");
+    assert_eq!(value["item"]["home_subvault"], "Paintings");
+    let folder = PathBuf::from(value["item"]["item_folder"].as_str().expect("item folder"));
+    assert_eq!(
+        fs::read(folder.join("files/wave.jpg")).expect("read preserved file"),
+        b"preserved Wikimedia bytes"
+    );
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+#[test]
+fn tauri_command_rejects_capture_when_the_active_vault_changed() {
+    let first = temp_path("tauri-url-vault-switch-a");
+    let second = temp_path("tauri-url-vault-switch-b");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(first.display().to_string())
+        .expect("create first Vault");
+    let first_root = state.active_vault_root().expect("first Active Vault");
+    state
+        .create_vault(second.display().to_string())
+        .expect("create second Vault");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedImage {
+        title: Some("The Great Wave".into()),
+        file_name: "wave.jpg".into(),
+        bytes: b"should not be preserved".to_vec(),
+    });
+
+    let error = state
+        .capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: "https://commons.wikimedia.org/wiki/File:The_Great_Wave.jpg".into(),
+                title: String::new(),
+                saving_reason: None,
+            },
+            &extractor,
+            Some(first_root.as_path()),
+        )
+        .expect_err("reject capture after Active Vault switch");
+    assert!(error
+        .to_string()
+        .contains("Active Vault changed while the Source Link was being captured"));
+    assert!(!first
+        .join("subvaults")
+        .join("Paintings")
+        .join("items")
+        .exists());
+    assert!(!second
+        .join("subvaults")
+        .join("Paintings")
+        .join("items")
+        .exists());
+
+    fs::remove_dir_all(first).expect("clean first Vault");
+    fs::remove_dir_all(second).expect("clean second Vault");
+}
+
+#[test]
+fn tauri_command_saves_manual_fallback_into_idea_sources() {
+    let root = temp_path("tauri-manual-fallback-vault");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
+
+    let captured = state
+        .capture_manual_fallback(ManualFallbackCaptureCommand {
+            source_link: "https://x.com/example/status/1".into(),
+            title: "Saved post".into(),
+            saving_reason: Some("Remember the composition notes".into()),
+            copied_text: Some("The post text, without surrounding replies.".into()),
+            copied_image: Some(CopiedImageCommand {
+                file_name: "pasted.png".into(),
+                bytes: vec![1, 2, 3],
+            }),
+        })
+        .expect("save Manual Fallback");
+    assert_eq!(captured.home_subvault, "Idea Sources");
+    let folder = PathBuf::from(&captured.item_folder);
+    assert_eq!(
+        fs::read(folder.join("files/pasted.png")).expect("read copied image"),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("source-copies/cleaned-text.md")).expect("read copied text"),
+        "The post text, without surrounding replies.\n"
+    );
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+#[test]
+fn tauri_commands_capture_read_and_summarize_an_idea_source() {
+    let root = temp_path("tauri-complete-idea-vault");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create Vault");
+    let active_root = state.active_vault_root().expect("active root");
+    let extractor = FakeExtractor(SourceExtraction::ExtractedText {
+        title: Some("Extracted title".into()),
+        cleaned_text: "The complete argument remains locally readable after capture.".into(),
+    });
+
+    let result = state
+        .capture_idea_source(
+            CaptureIdeaCommand {
+                source_link: "https://example.com/argument".into(),
+                title: String::new(),
+                saving_reason: Some("Use in the archive essay".into()),
+                copied_text: None,
+            },
+            &extractor,
+            Some(active_root.as_path()),
+        )
+        .expect("capture Idea Source");
+    let value = serde_json::to_value(result).expect("serialize capture");
+    assert_eq!(value["status"], "captured");
+    assert_eq!(value["item"]["home_subvault"], "Idea Sources");
+    let id = value["item"]["id"].as_str().expect("item id").to_string();
+
+    let source = state
+        .read_idea_source(id.clone())
+        .expect("read source offline");
+    assert_eq!(
+        source.cleaned_text,
+        "The complete argument remains locally readable after capture."
+    );
+    assert_eq!(
+        state.get_item_details(id.clone()).unwrap().title,
+        "Extracted title"
+    );
+
+    let summary = state
+        .summarize_idea_source(id.clone(), "standard", &SummaryProvider)
+        .expect("summarize source");
+    assert_eq!(
+        serde_json::to_value(summary).unwrap(),
+        serde_json::json!({"status": "generated", "summary": "A durable summary."})
+    );
+    assert_eq!(
+        state.read_idea_source(id).unwrap().summary.as_deref(),
+        Some("A durable summary.")
+    );
+
+    fs::remove_dir_all(root).expect("clean Vault");
+}
+
+struct SummaryProvider;
+
+impl AiProvider for SummaryProvider {
+    fn enrich(&self, request: AiProviderRequest) -> AiProviderResponse {
+        assert_eq!(
+            request.cleaned_text.as_deref(),
+            Some("The complete argument remains locally readable after capture.")
+        );
+        AiProviderResponse {
+            summary: Some("A durable summary.".into()),
+            tags: Vec::new(),
+            suggestions: Vec::<AiMetadataSuggestion>::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 2,
+        }
+    }
+}
+
+struct FakeExtractor(SourceExtraction);
+
+impl SourceExtractor for FakeExtractor {
+    fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn tauri_command_exposes_the_duplicate_candidate_decisions() {
+    let root = temp_path("tauri-duplicate-vault");
+    let source = temp_path("tauri-duplicate-source");
+    fs::create_dir_all(source.join("one")).unwrap();
+    fs::create_dir_all(source.join("two")).unwrap();
+    fs::write(source.join("one/Study.jpg"), b"one").unwrap();
+    fs::write(source.join("two/Study.jpg"), b"two").unwrap();
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let imported = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![
+                source.join("one/Study.jpg").display().to_string(),
+                source.join("two/Study.jpg").display().to_string(),
+            ],
+            creator: Some("Jane Painter".into()),
+            year: Some("1884".into()),
+            saving_reason: None,
+            import_exact_duplicates: false,
+        })
+        .unwrap();
+    let selected = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".into(),
+            artwork_sort: "newest".into(),
+            search_query: None,
+            selected_item_id: Some(imported.imported_items[1].id.clone()),
+        })
+        .unwrap()
+        .selected_item
+        .unwrap();
+    let reason = selected
+        .review_reasons
+        .iter()
+        .find(|reason| reason.kind == "duplicate-candidate")
+        .unwrap();
+    let result = state
+        .resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
+            item_id: selected.id.clone(),
+            reason_id: reason.id.clone(),
+            expected_revision: selected.record_revision,
+            action: "not-a-duplicate".into(),
+        })
+        .unwrap();
+    assert_eq!(serde_json::to_value(result).unwrap()["status"], "active");
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(source).unwrap();
+}
+
+#[test]
+fn tauri_import_command_reports_progress_and_a_cancelled_summary() {
+    let root = temp_path("tauri-import-run-vault");
+    let source = temp_path("tauri-import-run-source");
+    let nested = source.join("nested");
+    fs::create_dir_all(&nested).expect("create nested source");
+    for path in [source.join("one.png"), nested.join("two.png")] {
+        fs::write(path, b"image fixture").expect("write image");
+    }
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+    let mut updates = Vec::new();
+
+    let summary = state
+        .run_paintings_import(
+            RunPaintingsImportCommand {
+                source_folder: source.display().to_string(),
+                creator: Some("Batch Artist".to_string()),
+                year: Some("2024".to_string()),
+                saving_reason: Some("Folder study".to_string()),
+                import_exact_duplicates: false,
+            },
+            |progress| {
+                updates.push(progress.clone());
+                progress.processed == 1
+            },
+        )
+        .expect("run import command");
+
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0].total, 2);
+    assert_eq!(summary.imported_count, 1);
+    assert_eq!(summary.cancelled_count, 1);
+    assert!(summary.cancelled);
+    let details = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "newest".to_string(),
+            search_query: None,
+            selected_item_id: Some(summary.imported_items[0].id.clone()),
+        })
+        .expect("load imported details")
+        .selected_item
+        .expect("selected imported item");
+    assert_eq!(details.creator, "Batch Artist");
+    assert_eq!(details.saving_reason, Some("Folder study".to_string()));
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source).expect("clean source");
+}
+
+#[test]
+fn tauri_commands_add_selected_files_and_return_a_sorted_gallery_snapshot() {
+    let root = temp_path("tauri-add-artwork-vault");
+    let source_dir = temp_path("tauri-add-artwork-source");
+    fs::create_dir_all(&source_dir).expect("create source directory");
+    let zed = source_dir.join("Zed - 2001 - Amber.jpg");
+    let amy = source_dir.join("Amy - 1999 - Zebra.png");
+    fs::write(&zed, b"damaged jpeg fixture").expect("write first source");
+    fs::write(&amy, b"damaged png fixture").expect("write second source");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+
+    let added = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: false,
+        })
+        .expect("add selected artwork files");
+    assert_eq!(added.imported_count, 2);
+
+    let snapshot = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "title".to_string(),
+            search_query: None,
+            selected_item_id: Some(added.imported_items[1].id.clone()),
+        })
+        .expect("load sorted gallery");
+
+    assert_eq!(
+        snapshot
+            .artwork_items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Amber", "Zebra"]
+    );
+    assert!(snapshot.artwork_items[0].thumbnail_is_placeholder);
+    assert!(snapshot
+        .artwork_items
+        .iter()
+        .all(|item| item.creator == "Batch Artist"));
+    assert_eq!(
+        snapshot
+            .selected_item
+            .expect("selected details")
+            .saving_reason,
+        Some("Palette references".to_string())
+    );
+
+    let skipped = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: false,
+        })
+        .expect("skip selected exact duplicates");
+    assert_eq!(skipped.imported_count, 0);
+    assert_eq!(skipped.exact_duplicate_count, 2);
+
+    let overridden = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![zed.display().to_string(), amy.display().to_string()],
+            creator: Some("Batch Artist".to_string()),
+            year: None,
+            saving_reason: Some("Palette references".to_string()),
+            import_exact_duplicates: true,
+        })
+        .expect("override selected exact duplicates");
+    assert_eq!(overridden.imported_count, 2);
+    assert_eq!(overridden.duplicate_candidate_count, 0);
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&source_dir).expect("clean source directory");
+}
+
+#[test]
+fn tauri_commands_return_restart_safe_desktop_startup_state() {
+    let root = temp_path("tauri-startup-vault");
+    let app_state = temp_path("tauri-startup-app-state");
+    let open_app_state = temp_path("tauri-open-app-state");
+
+    let mut state = TauriCommandState::with_app_state_dir(&app_state);
+    let initial = state.startup().expect("initial startup state");
+    assert!(initial.active_vault.is_none());
+    assert!(initial.known_vaults.is_empty());
+    assert!(initial.notice.is_none());
+
+    state
+        .create_vault(root.display().to_string())
+        .expect("create through command state");
+    drop(state);
+
+    let restored = TauriCommandState::with_app_state_dir(&app_state)
+        .startup()
+        .expect("restored startup state");
+    assert_eq!(
+        restored.active_vault.as_ref().expect("active vault").root,
+        root.display().to_string()
+    );
+    assert_eq!(restored.known_vaults[0].root, root.display().to_string());
+    assert!(restored.notice.is_none());
+    assert_eq!(
+        serde_json::to_value(&restored).expect("serialize startup state"),
+        serde_json::json!({
+            "active_vault": { "root": root.display().to_string() },
+            "known_vaults": [{ "root": root.display().to_string() }],
+            "repair_proposal": null,
+            "notice": null
+        })
+    );
+
+    let mut opening_state = TauriCommandState::with_app_state_dir(&open_app_state);
+    let opened = opening_state
+        .open_vault(root.display().to_string())
+        .expect("open existing vault through command state");
+    assert_eq!(
+        opened,
+        OpenVaultView::Opened {
+            vault: gruenes_gewolbe_desktop::ActiveVaultView {
+                root: root.display().to_string()
+            }
+        }
+    );
+
+    fs::remove_dir_all(&root).expect("clean vault");
+    fs::remove_dir_all(&app_state).expect("clean app state");
+    fs::remove_dir_all(&open_app_state).expect("clean open app state");
+}
+
+#[test]
+fn tauri_commands_serialize_cancel_and_confirm_a_vault_repair() {
+    let root = temp_path("tauri-repair-vault");
+    fs::create_dir_all(root.join("subvaults")).expect("create existing structure");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write vault config");
+    let mut state = TauriCommandState::default();
+
+    let proposed = state
+        .open_vault(root.display().to_string())
+        .expect("propose repair through command state");
+    assert_eq!(
+        serde_json::to_value(&proposed).expect("serialize repair proposal"),
+        serde_json::json!({
+            "status": "repair_required",
+            "proposal": {
+                "root": root.display().to_string(),
+                "directories": [root.join("collections").display().to_string()]
+            }
+        })
+    );
+
+    state
+        .cancel_vault_repair(root.display().to_string())
+        .expect("cancel repair through command state");
+    assert!(!root.join("collections").exists());
+
+    state
+        .open_vault(root.display().to_string())
+        .expect("propose repair again");
+    let repaired = state
+        .confirm_vault_repair(root.display().to_string())
+        .expect("confirm repair through command state");
+    assert_eq!(repaired.root, root.display().to_string());
+    assert!(root.join("collections").is_dir());
+
+    fs::remove_dir_all(&root).expect("clean repaired vault");
+}
+
+#[test]
+fn tauri_open_command_rejects_a_non_repairable_structural_conflict() {
+    let root = temp_path("tauri-unsafe-repair");
+    fs::create_dir_all(&root).expect("create vault root");
+    fs::write(
+        root.join("vault.toml"),
+        "format_version = 2\nname = \"Archive\"\n",
+    )
+    .expect("write vault config");
+    fs::write(root.join("subvaults"), b"do not overwrite").expect("write conflicting file");
+    let mut state = TauriCommandState::default();
+
+    let error = state
+        .open_vault(root.display().to_string())
+        .expect_err("unsafe conflict should fail through command state");
+
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "required vault directory conflicts with an existing file: {}",
+            root.join("subvaults").display()
+        )
+    );
+    assert_eq!(
+        fs::read(root.join("subvaults")).expect("read conflicting file"),
+        b"do not overwrite"
+    );
+    assert!(!root.join("collections").exists());
+
+    fs::remove_dir_all(&root).expect("clean conflicting vault");
+}
+
+#[test]
+fn tauri_command_permanently_deletes_only_with_exact_identity() {
+    let root = temp_path("tauri-permanent-delete");
+    let source = root.with_extension("png");
+    fs::write(&source, b"image").expect("write source");
+    let mut state = TauriCommandState::default();
+    state
+        .create_vault(root.display().to_string())
+        .expect("create vault");
+    let imported = state
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files: vec![source.display().to_string()],
+            creator: None,
+            year: None,
+            saving_reason: None,
+            import_exact_duplicates: false,
+        })
+        .expect("add item");
+    let id = imported.imported_items[0].id.clone();
+    state.move_item_to_trash(id.clone()).expect("move to trash");
+    assert!(state
+        .permanently_delete_trashed_item(id.clone(), "wrong".into())
+        .is_err());
+    let outcome = state
+        .permanently_delete_trashed_item(id.clone(), id.clone())
+        .expect("delete through command");
+    assert_eq!(outcome.id, id);
+    let snapshot = state
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".into(),
+            artwork_sort: "newest".into(),
+            search_query: None,
+            selected_item_id: None,
+        })
+        .expect("snapshot");
+    assert!(snapshot.trashed_items.is_empty());
+    fs::remove_dir_all(root).expect("clean vault");
+    fs::remove_file(source).expect("clean source");
+}
+
+fn temp_path(name: &str) -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+
+    std::env::temp_dir().join(format!("gruenes-gewolbe-{name}-{unique}"))
+}
+
+#[test]
+fn paintings_capture_never_routes_text_to_idea_sources() {
+    let root = temp_path("explicit-paintings-destination");
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let result = state.capture_artwork_source_link(
+        CaptureSourceLinkCommand {
+            source_link: "https://example.com/painting".into(),
+            title: "Painting page".into(), saving_reason: None,
+        },
+        &FakeExtractor(SourceExtraction::ExtractedText {
+            title: Some("A painting".into()), cleaned_text: "Museum description".into(),
+        }), Some(&root),
+    ).unwrap();
+    let value = serde_json::to_value(result).unwrap();
+    assert_eq!(value["status"], "needs_manual_fallback");
+    let command = |copied_text, copied_image| ManualFallbackCaptureCommand {
+        source_link: "https://example.com/painting".into(), title: "Painting".into(),
+        saving_reason: None, copied_text, copied_image,
+    };
+    assert!(state.capture_artwork_fallback(command(Some("Only text".into()), None)).is_err());
+    let saved = state.capture_artwork_fallback(command(None, Some(CopiedImageCommand {
+        file_name: "painting.png".into(), bytes: vec![1, 2, 3],
+    }))).unwrap();
+    assert_eq!(saved.home_subvault, "Paintings");
+    assert_eq!(fs::read(PathBuf::from(saved.item_folder).join("files/painting.png")).unwrap(), [1, 2, 3]);
+    let ideas = root.join("subvaults/Idea Sources/items");
+    assert!(!ideas.exists() || fs::read_dir(ideas).unwrap().next().is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn artwork_enrichment_guards_edits_and_preserves_user_title() {
+    let root = temp_path("artwork-enrichment-record-guard");
+    let mut state = TauriCommandState::default();
+    state.create_vault(root.display().to_string()).unwrap();
+    let saved = state.capture_artwork_fallback(ManualFallbackCaptureCommand {
+        source_link: "https://example.com/artwork".into(), title: "My own title".into(),
+        saving_reason: Some("A personal reference".into()), copied_text: None,
+        copied_image: Some(CopiedImageCommand { file_name: "painting.png".into(), bytes: vec![1, 2, 3] }),
+    }).unwrap();
+    let before = state.get_item_details(saved.id.clone()).unwrap();
+    let record = PathBuf::from(&saved.item_folder).join("record.md");
+    let edited = format!("{}\nUser note added during research.\n", fs::read_to_string(&record).unwrap());
+    fs::write(&record, &edited).unwrap();
+    let response = || AiProviderResponse {
+        summary: None, tags: vec!["blue palette".into()],
+        suggestions: vec![AiMetadataSuggestion {
+            field: "title".into(), suggested_value: "Provider title".into(), confidence: 0.99,
+            provenance: "Museum: https://example.com/artwork".into(),
+        }], better_file_candidates: vec![], estimated_cost_cents: 0,
+    };
+    assert!(state.apply_artwork_enrichment_response(saved.id.clone(), before.record_revision,
+        gruenes_gewolbe_core::AiBudgetMode::Standard, response()).is_err());
+    assert_eq!(fs::read_to_string(&record).unwrap(), edited);
+    let current = state.get_item_details(saved.id.clone()).unwrap();
+    let enriched = state.apply_artwork_enrichment_response(saved.id, current.record_revision,
+        gruenes_gewolbe_core::AiBudgetMode::Standard, response()).unwrap();
+    assert_eq!(enriched.title, "My own title");
+    assert!(enriched.tags.contains(&"blue palette".to_string()));
+    assert_eq!(fs::read(PathBuf::from(&saved.item_folder).join("files/painting.png")).unwrap(), [1, 2, 3]);
+    assert!(fs::read_to_string(record).unwrap().contains("User note added during research."));
+    fs::remove_dir_all(root).unwrap();
+}

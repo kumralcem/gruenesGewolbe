@@ -1,0 +1,1797 @@
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use gruenes_gewolbe_core::{
+    AiProvider, AiProviderRequest, AiProviderResponse, ArtworkSort, SourceExtraction,
+    SourceExtractionRequest, SourceExtractor, Vault,
+};
+
+use gruenes_gewolbe_desktop::{
+    artwork_enrichment::{
+        fingerprint, latest_progress_if_exists, read_bounded_thumbnail, save_checkpoint,
+        ArtworkCandidateSnapshot, ArtworkEnrichmentCheckpoint, ArtworkEnrichmentOptions,
+        ArtworkEnrichmentProgress, ArtworkEnrichmentStatus, ArtworkResponsesProvider,
+    },
+    source_extractor, ActiveVaultView, AddArtworkFilesCommand, CaptureIdeaCommand,
+    CaptureSourceLinkCommand, ConfirmItemFolderRenameCommand, CopiedImageCommand,
+    DesktopStartupView, DuplicateCandidateResolutionView, IdeaSourceContentView,
+    ImportRunSummaryView, ItemDetailsView, ItemRecordSaveView, ManualFallbackCaptureCommand,
+    OpenAiProviderConfig, OpenAiProviderStatusView, OpenAiResponsesProvider, OpenVaultView,
+    PermanentDeletionView, ResolveDuplicateCandidateCommand, ResolveReviewReasonCommand,
+    RunPaintingsImportCommand, SaveItemRecordCommand, SavedItemView, SelectedFileImportSummaryView,
+    SourceCaptureResultView, SummarizeIdeaSourceView, TauriCommandState, ThumbnailPreparationView,
+    WorkbenchSnapshotCommand, WorkbenchSnapshotView,
+};
+use tauri::{Emitter, Manager, State};
+
+type CommandState = Arc<Mutex<TauriCommandState>>;
+type ImportCancellation = Arc<AtomicBool>;
+type ThumbnailPreparationGate = Arc<Mutex<()>>;
+
+#[derive(Default)]
+struct ArtworkCancellationFlag {
+    active: AtomicBool,
+    cancelled: AtomicBool,
+}
+type ArtworkEnrichmentCancellation = Arc<ArtworkCancellationFlag>;
+
+struct ArtworkRunGuard(ArtworkEnrichmentCancellation);
+
+impl Drop for ArtworkRunGuard {
+    fn drop(&mut self) {
+        self.0.active.store(false, Ordering::Release);
+    }
+}
+
+fn acquire_artwork_run(
+    cancellation: &ArtworkEnrichmentCancellation,
+) -> Result<ArtworkRunGuard, String> {
+    cancellation
+        .active
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| "an artwork enrichment run is already active".to_string())?;
+    cancellation.cancelled.store(false, Ordering::Release);
+    Ok(ArtworkRunGuard(Arc::clone(cancellation)))
+}
+
+fn prepare_thumbnail_previews_live_with<F>(
+    state: &CommandState,
+    gate: &ThumbnailPreparationGate,
+    limit: usize,
+    started: F,
+) -> Result<ThumbnailPreparationView, String>
+where
+    F: FnOnce(),
+{
+    let _preparation_guard = gate
+        .lock()
+        .map_err(|_| "thumbnail preparation is unavailable".to_string())?;
+    let active_root = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .ok_or_else(|| "no Active Vault is open".to_string())?;
+    started();
+
+    let vault = Vault::open(&active_root).map_err(|error| error.to_string())?;
+    let preparation = vault
+        .prepare_thumbnail_previews_with_failure_handler(
+            "Paintings",
+            limit,
+            |id, primary_file, reason| {
+                record_thumbnail_failure_if_current(
+                    state,
+                    &active_root,
+                    id,
+                    primary_file,
+                    reason,
+                )
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    if state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .as_deref()
+        != Some(active_root.as_path())
+    {
+        return Err("Active Vault changed while Thumbnail Previews were being prepared".to_string());
+    }
+    Ok(preparation.into())
+}
+
+fn record_thumbnail_failure_if_current(
+    state: &CommandState,
+    active_root: &Path,
+    id: &str,
+    primary_file: &Path,
+    reason: &str,
+) -> Result<(), gruenes_gewolbe_core::VaultError> {
+    let guard = state.lock().map_err(|_| {
+        gruenes_gewolbe_core::VaultError::PreviewGeneration(
+            "desktop state is unavailable".to_string(),
+        )
+    })?;
+    if guard.active_vault_root().as_deref() != Some(active_root) {
+        return Err(gruenes_gewolbe_core::VaultError::PreviewGeneration(
+            "Active Vault changed while Thumbnail Previews were being prepared".to_string(),
+        ));
+    }
+    let current_details = guard.get_item_details(id.to_string()).map_err(|error| {
+        gruenes_gewolbe_core::VaultError::PreviewGeneration(error.to_string())
+    })?;
+    if Path::new(&current_details.primary_file) != primary_file {
+        return Err(gruenes_gewolbe_core::VaultError::PreviewGeneration(
+            "Primary File changed while its Thumbnail Preview was being prepared".to_string(),
+        ));
+    }
+    Vault::open(active_root)?.record_thumbnail_preview_failure(id, primary_file, reason)
+}
+
+fn prepare_thumbnail_preview_live(
+    state: &CommandState,
+    gate: &ThumbnailPreparationGate,
+    expected_root: &Path,
+    id: &str,
+) -> Result<(), String> {
+    let _preparation_guard = gate
+        .lock()
+        .map_err(|_| "thumbnail preparation is unavailable".to_string())?;
+    if state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .as_deref()
+        != Some(expected_root)
+    {
+        return Err("Active Vault changed during artwork enrichment".to_string());
+    }
+    Vault::open(expected_root)
+        .map_err(|error| error.to_string())?
+        .prepare_thumbnail_preview_with_failure_handler(id, |id, primary_file, reason| {
+            record_thumbnail_failure_if_current(
+                state,
+                expected_root,
+                id,
+                primary_file,
+                reason,
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    if state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .as_deref()
+        != Some(expected_root)
+    {
+        return Err("Active Vault changed during artwork enrichment".to_string());
+    }
+    Ok(())
+}
+
+struct CompletedExtraction(SourceExtraction);
+
+impl SourceExtractor for CompletedExtraction {
+    fn extract(&self, _request: SourceExtractionRequest) -> SourceExtraction {
+        self.0.clone()
+    }
+}
+
+struct CompletedAiResponse(AiProviderResponse);
+
+impl AiProvider for CompletedAiResponse {
+    fn enrich(&self, _request: AiProviderRequest) -> AiProviderResponse {
+        self.0.clone()
+    }
+
+    fn cost_estimate_is_known(&self) -> bool {
+        false
+    }
+}
+
+fn summarize_live(
+    state: &CommandState,
+    id: String,
+    budget_mode: &str,
+    expected_active_root: Option<&Path>,
+) -> SummarizeIdeaSourceView {
+    summarize_live_with(
+        state,
+        id,
+        budget_mode,
+        expected_active_root,
+        |config, cleaned_text, budget| {
+            OpenAiResponsesProvider::new(config)?.summarize(cleaned_text, budget)
+        },
+    )
+}
+
+fn summarize_live_with<F>(
+    state: &CommandState,
+    id: String,
+    budget_mode: &str,
+    expected_active_root: Option<&Path>,
+    summarize: F,
+) -> SummarizeIdeaSourceView
+where
+    F: FnOnce(
+        OpenAiProviderConfig,
+        &str,
+        gruenes_gewolbe_core::AiBudgetMode,
+    ) -> Result<AiProviderResponse, String>,
+{
+    // Validate the requested mode before reading provider credentials or source
+    // content. In particular, Off is a local skip and must not touch provider state.
+    let budget = match budget_mode {
+        "cheap" => gruenes_gewolbe_core::AiBudgetMode::Cheap,
+        "standard" => gruenes_gewolbe_core::AiBudgetMode::Standard,
+        "deep" => gruenes_gewolbe_core::AiBudgetMode::Deep,
+        "off" => {
+            return SummarizeIdeaSourceView::Skipped {
+                reason: Some("AI budget is off".to_string()),
+            }
+        }
+        _ => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("unsupported AI budget mode".to_string()),
+            }
+        }
+    };
+    let (config, source_before, active_root, record_revision) = match state.lock() {
+        Ok(guard) => {
+            let active_root = match guard.active_vault_root() {
+                Some(root) => root,
+                None => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some("no Active Vault is open".to_string()),
+                    }
+                }
+            };
+            if expected_active_root.is_some_and(|expected| expected != active_root) {
+                return SummarizeIdeaSourceView::Failed {
+                    reason: Some(
+                        "Active Vault changed before summary generation started".to_string(),
+                    ),
+                };
+            }
+            let details = match guard.get_item_details(id.clone()) {
+                Ok(details) => details,
+                Err(error) => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some(error.to_string()),
+                    }
+                }
+            };
+            match (
+                guard.openai_provider_status(),
+                guard.read_idea_source(id.clone()),
+            ) {
+                (status, _) if !status.configured => {
+                    return SummarizeIdeaSourceView::Unavailable {
+                        reason: Some("Configure OpenAI to generate a summary".to_string()),
+                    }
+                }
+                (_, Ok(source)) => match guard.shell_openai_provider_config() {
+                    Ok(config) => (config, source, active_root, details.record_revision),
+                    Err(error) => {
+                        return SummarizeIdeaSourceView::Failed {
+                            reason: Some(error.to_string()),
+                        }
+                    }
+                },
+                (_, Err(error)) => {
+                    return SummarizeIdeaSourceView::Failed {
+                        reason: Some(error.to_string()),
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("desktop state is unavailable".to_string()),
+            }
+        }
+    };
+    let response = match summarize(config, &source_before.cleaned_text, budget) {
+        Ok(response) => response,
+        Err(reason) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some(reason),
+            }
+        }
+    };
+    let guard = match state.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return SummarizeIdeaSourceView::Failed {
+                reason: Some("desktop state is unavailable".to_string()),
+            }
+        }
+    };
+    let current_root = guard.active_vault_root();
+    let current_details = guard.get_item_details(id.clone());
+    match (guard.read_idea_source(id.clone()), current_details) {
+        (Ok(current), Ok(details))
+            if current_root.as_deref() == Some(active_root.as_path())
+                && details.record_revision == record_revision
+                && current.cleaned_text == source_before.cleaned_text => guard
+            .summarize_idea_source(id, budget_mode, &CompletedAiResponse(response))
+            .unwrap_or_else(|error| SummarizeIdeaSourceView::Failed { reason: Some(error.to_string()) }),
+        (Ok(_), Ok(_)) => SummarizeIdeaSourceView::Failed { reason: Some("Active Vault or Item Record changed while its summary was being generated; retry to summarize the current source".to_string()) },
+        (Err(error), _) | (_, Err(error)) => SummarizeIdeaSourceView::Failed { reason: Some(error.to_string()) },
+    }
+}
+
+fn new_artwork_enrichment_checkpoint(
+    state: &CommandState,
+    options: &ArtworkEnrichmentOptions,
+    cancellation: &ArtworkEnrichmentCancellation,
+) -> Result<(ArtworkEnrichmentCheckpoint, OpenAiProviderConfig), String> {
+    options.validate()?;
+    let (vault_root, config) = {
+        let guard = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?;
+        let vault_root = guard
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let config = guard
+            .shell_openai_provider_config()
+            .map_err(|error| error.to_string())?;
+        (vault_root, config)
+    };
+
+    let vault = Vault::open(&vault_root).map_err(|error| error.to_string())?;
+    let artwork_items = vault
+        .browse_artwork_items_sorted("Paintings", ArtworkSort::Oldest)
+        .map_err(|error| error.to_string())?;
+    let mut candidates = Vec::with_capacity(artwork_items.len());
+    for item in artwork_items {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            return Err("artwork enrichment was cancelled while planning".to_string());
+        }
+        let details = vault
+            .item_details(item.saved_item().id())
+            .map_err(|error| error.to_string())?;
+        candidates.push(
+            ArtworkCandidateSnapshot::planned(
+                item.saved_item().id().to_string(),
+                item.title().to_string(),
+                item.creator().to_string(),
+                item.year().to_string(),
+                details.source_link().map(str::to_string),
+                details.record_revision().to_string(),
+            )
+        );
+    }
+    let checkpoint = ArtworkEnrichmentCheckpoint::start(&vault_root, options, candidates)?;
+    save_checkpoint(&checkpoint)?;
+    Ok((checkpoint, config))
+}
+
+fn current_artwork_snapshot(
+    state: &CommandState,
+    expected_root: &Path,
+    id: &str,
+) -> Result<(gruenes_gewolbe_desktop::ArtworkGridItemView, ItemDetailsView), String> {
+    let guard = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?;
+    if guard.active_vault_root().as_deref() != Some(expected_root) {
+        return Err("Active Vault changed during artwork enrichment".to_string());
+    }
+    let snapshot = guard
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort: "oldest".to_string(),
+            search_query: None,
+            selected_item_id: None,
+        })
+        .map_err(|error| error.to_string())?;
+    let item = snapshot
+        .artwork_items
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| format!("artwork item is no longer in Paintings: {id}"))?;
+    let details = guard
+        .get_item_details(id.to_string())
+        .map_err(|error| error.to_string())?;
+    Ok((item, details))
+}
+
+fn emit_artwork_progress(app: &tauri::AppHandle, progress: &ArtworkEnrichmentProgress) {
+    let _ = app.emit("artwork-enrichment-progress", progress);
+}
+
+fn run_artwork_enrichment(
+    state: &CommandState,
+    thumbnail_gate: &ThumbnailPreparationGate,
+    cancellation: &ArtworkEnrichmentCancellation,
+    app: &tauri::AppHandle,
+    mut checkpoint: ArtworkEnrichmentCheckpoint,
+    config: OpenAiProviderConfig,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let budget_mode = ArtworkEnrichmentOptions {
+        budget_mode: checkpoint.budget_mode.clone(),
+        max_items: checkpoint.max_items,
+        max_requests: checkpoint.max_requests,
+        max_duration_seconds: checkpoint.max_duration_seconds,
+        rerun_completed: false,
+    }
+    .validate()?;
+    let provider = ArtworkResponsesProvider::new(config.api_key, config.model)?;
+    let started = std::time::Instant::now();
+    let duration_limit = std::time::Duration::from_secs(checkpoint.max_duration_seconds);
+    let mut handled_this_invocation = 0usize;
+    let mut requests_this_invocation = 0usize;
+    checkpoint.status = ArtworkEnrichmentStatus::Running;
+    save_checkpoint(&checkpoint)?;
+    emit_artwork_progress(app, &checkpoint.progress(None));
+
+    while let Some(index) = checkpoint.next_pending_index() {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            checkpoint.cancel();
+            break;
+        }
+        if handled_this_invocation >= checkpoint.max_items
+            || requests_this_invocation >= checkpoint.max_requests
+            || started.elapsed() >= duration_limit
+        {
+            checkpoint.finish_or_pause();
+            break;
+        }
+        handled_this_invocation += 1;
+        let mut item = checkpoint.item(index).clone();
+        emit_artwork_progress(app, &checkpoint.progress(Some(item.title.clone())));
+
+        let thumbnail_preparation = prepare_thumbnail_preview_live(
+            state,
+            thumbnail_gate,
+            &checkpoint.vault_root,
+            &item.id,
+        );
+        if let Err(error) = thumbnail_preparation {
+            checkpoint.mark_failed(
+                index,
+                format!("Thumbnail Preview could not be prepared: {error}"),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+
+        let before = current_artwork_snapshot(state, &checkpoint.vault_root, &item.id);
+        let (current_item, current_details) = match before {
+            Ok(value) => value,
+            Err(reason) => {
+                checkpoint.mark_failed(index, reason);
+                save_checkpoint(&checkpoint)?;
+                continue;
+            }
+        };
+        if current_details.record_revision != item.record_revision {
+            checkpoint.mark_failed(
+                index,
+                "Item Record changed after this enrichment run was planned; result was not requested"
+                    .to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+        if current_item.thumbnail_is_placeholder {
+            checkpoint.mark_failed(
+                index,
+                "A real Thumbnail Preview is unavailable; no image was sent to OpenAI".to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+        let current_thumbnail_path = PathBuf::from(&current_item.thumbnail_file);
+        let thumbnail_bytes = match read_bounded_thumbnail(&current_thumbnail_path) {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                checkpoint.mark_failed(index, reason);
+                save_checkpoint(&checkpoint)?;
+                continue;
+            }
+        };
+        let current_fingerprint = fingerprint(&thumbnail_bytes);
+        if checkpoint.should_skip_unchanged(index, &current_fingerprint) {
+            handled_this_invocation = handled_this_invocation.saturating_sub(1);
+            checkpoint.mark_skipped(index);
+            save_checkpoint(&checkpoint)?;
+            emit_artwork_progress(app, &checkpoint.progress(None));
+            continue;
+        }
+        if item.thumbnail_fingerprint.is_empty() || item.skip_if_unchanged {
+            checkpoint.set_thumbnail_snapshot(
+                index,
+                current_thumbnail_path.clone(),
+                current_fingerprint.clone(),
+            );
+            save_checkpoint(&checkpoint)?;
+            item = checkpoint.item(index).clone();
+        } else if current_fingerprint != item.thumbnail_fingerprint {
+            checkpoint.mark_failed(
+                index,
+                "Thumbnail Preview changed after this enrichment run was planned; no image was sent"
+                    .to_string(),
+            );
+            save_checkpoint(&checkpoint)?;
+            continue;
+        }
+
+        let remaining_time = duration_limit.saturating_sub(started.elapsed());
+        if remaining_time.is_zero() {
+            checkpoint.finish_or_pause();
+            break;
+        }
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            checkpoint.cancel();
+            break;
+        }
+        requests_this_invocation += 1;
+        checkpoint.increment_requests();
+        save_checkpoint(&checkpoint)?;
+        let response = provider.enrich_thumbnail(&item, &thumbnail_bytes, budget_mode, remaining_time);
+        let response = match response {
+            Ok(response) => response,
+            Err(reason) => {
+                let provider_rejected = reason.starts_with("OpenAI provider rejected the request");
+                checkpoint.mark_failed(index, reason);
+                checkpoint.status = if provider_rejected {
+                    ArtworkEnrichmentStatus::Paused
+                } else {
+                    ArtworkEnrichmentStatus::Running
+                };
+                save_checkpoint(&checkpoint)?;
+                if provider_rejected {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let apply_result = (|| -> Result<ItemDetailsView, String> {
+            let guard = state
+                .lock()
+                .map_err(|_| "desktop state is unavailable".to_string())?;
+            if guard.active_vault_root().as_deref() != Some(checkpoint.vault_root.as_path()) {
+                return Err("Active Vault changed while OpenAI was researching the artwork".to_string());
+            } else {
+                let details = guard
+                    .get_item_details(item.id.clone())
+                    .map_err(|error| error.to_string())?;
+                if details.record_revision != item.record_revision {
+                    return Err("Item Record changed while OpenAI was researching it; result was discarded"
+                        .to_string());
+                } else {
+                    let snapshot = guard
+                        .workbench_snapshot(WorkbenchSnapshotCommand {
+                            home_subvault: "Paintings".to_string(),
+                            artwork_sort: "oldest".to_string(),
+                            search_query: None,
+                            selected_item_id: None,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    let current = snapshot
+                        .artwork_items
+                        .into_iter()
+                        .find(|candidate| candidate.id == item.id)
+                        .ok_or_else(|| "Artwork is no longer in Paintings".to_string())?;
+                    let current_bytes = read_bounded_thumbnail(Path::new(&current.thumbnail_file))?;
+                    if current.thumbnail_is_placeholder
+                        || fingerprint(&current_bytes) != item.thumbnail_fingerprint
+                    {
+                        return Err("Thumbnail Preview changed while OpenAI was researching it; result was discarded"
+                            .to_string());
+                    } else {
+                        return guard
+                            .apply_artwork_enrichment_response(
+                                item.id.clone(),
+                                item.record_revision.clone(),
+                                budget_mode,
+                                response,
+                            )
+                            .map_err(|error| error.to_string());
+                    }
+                }
+            }
+        })();
+        match apply_result {
+            Ok(details) => checkpoint.mark_enriched(index, details.record_revision),
+            Err(reason) => checkpoint.mark_failed(index, reason),
+        }
+        save_checkpoint(&checkpoint)?;
+        emit_artwork_progress(app, &checkpoint.progress(None));
+    }
+
+    if checkpoint.status == ArtworkEnrichmentStatus::Running {
+        checkpoint.finish_or_pause();
+    }
+    save_checkpoint(&checkpoint)?;
+    let progress = checkpoint.progress(None);
+    emit_artwork_progress(app, &progress);
+    Ok(progress)
+}
+
+fn decode_media_path(encoded_path: &str) -> Result<PathBuf, String> {
+    let bytes = encoded_path
+        .strip_prefix('/')
+        .unwrap_or(encoded_path)
+        .as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let pair = bytes
+                .get(index + 1..index + 3)
+                .ok_or_else(|| "invalid media path encoding".to_string())?;
+            let pair =
+                std::str::from_utf8(pair).map_err(|_| "invalid media path encoding".to_string())?;
+            decoded.push(
+                u8::from_str_radix(pair, 16)
+                    .map_err(|_| "invalid media path encoding".to_string())?,
+            );
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .map(PathBuf::from)
+        .map_err(|_| "media path is not valid UTF-8".to_string())
+}
+
+fn read_active_vault_thumbnail(
+    state: &CommandState,
+    encoded_path: &str,
+) -> Result<Vec<u8>, String> {
+    let requested = decode_media_path(encoded_path)?;
+    let active_root = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .ok_or_else(|| "no Active Vault is open".to_string())?;
+    let thumbnails = active_root.join(".gruenesgewolbe").join("thumbnails");
+    let canonical_thumbnails = thumbnails
+        .canonicalize()
+        .map_err(|_| "Thumbnail Preview directory is unavailable".to_string())?;
+    let canonical_requested = requested
+        .canonicalize()
+        .map_err(|_| "Thumbnail Preview is unavailable".to_string())?;
+    if !canonical_requested.starts_with(&canonical_thumbnails)
+        || !Path::new(&canonical_requested).is_file()
+        || !canonical_requested
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
+        return Err("media path is outside the Active Vault Thumbnail Previews".to_string());
+    }
+    std::fs::read(canonical_requested).map_err(|_| "Thumbnail Preview is unavailable".to_string())
+}
+
+#[tauri::command]
+fn startup(state: State<'_, CommandState>) -> Result<DesktopStartupView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .startup()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_vault(root: String, state: State<'_, CommandState>) -> Result<ActiveVaultView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .create_vault(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_vault(root: String, state: State<'_, CommandState>) -> Result<OpenVaultView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .open_vault(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_vault_repair(
+    root: String,
+    state: State<'_, CommandState>,
+) -> Result<ActiveVaultView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .confirm_vault_repair(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cancel_vault_repair(root: String, state: State<'_, CommandState>) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .cancel_vault_repair(root)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_artwork_files(
+    source_files: Vec<String>,
+    creator: Option<String>,
+    year: Option<String>,
+    saving_reason: Option<String>,
+    import_exact_duplicates: bool,
+    state: State<'_, CommandState>,
+) -> Result<SelectedFileImportSummaryView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .add_artwork_files(AddArtworkFilesCommand {
+            source_files,
+            creator,
+            year,
+            saving_reason,
+            import_exact_duplicates,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn run_paintings_import(
+    source_folder: String,
+    creator: Option<String>,
+    year: Option<String>,
+    saving_reason: Option<String>,
+    import_exact_duplicates: bool,
+    app: tauri::AppHandle,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ImportCancellation>,
+) -> Result<ImportRunSummaryView, String> {
+    let state = Arc::clone(state.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    cancellation.store(false, Ordering::Release);
+    tauri::async_runtime::spawn_blocking(move || {
+        state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .run_paintings_import(
+                RunPaintingsImportCommand {
+                    source_folder,
+                    creator,
+                    year,
+                    saving_reason,
+                    import_exact_duplicates,
+                },
+                |progress| {
+                    let _ = app.emit("import-progress", progress);
+                    cancellation.load(Ordering::Acquire)
+                },
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("import task failed: {error}"))?
+}
+
+#[tauri::command]
+fn cancel_paintings_import(cancellation: State<'_, ImportCancellation>) {
+    cancellation.store(true, Ordering::Release);
+}
+
+#[tauri::command]
+async fn capture_source_link(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<SourceCaptureResultView, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let extractor = source_extractor::BoundedSourceExtractor::new()?;
+        let active_root = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let extraction = extractor.extract(SourceExtractionRequest {
+            source_link: source_link.clone(),
+        });
+        let guard = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?;
+        guard
+            .capture_artwork_source_link(
+                CaptureSourceLinkCommand {
+                    source_link,
+                    title,
+                    saving_reason,
+                },
+                &CompletedExtraction(extraction),
+                Some(active_root.as_path()),
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("capture task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn capture_idea_source(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    budget_mode: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    let budget_mode = budget_mode.unwrap_or_else(|| "standard".to_string());
+    if !matches!(budget_mode.as_str(), "off" | "cheap" | "standard" | "deep") {
+        return Err("unsupported AI budget mode".to_string());
+    }
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let extractor = source_extractor::BoundedSourceExtractor::new()?;
+        let active_root = state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root().ok_or_else(|| "no Active Vault is open".to_string())?;
+        let extraction = if copied_text.as_deref().is_some_and(|text| !text.trim().is_empty()) {
+            None
+        } else {
+            Some(extractor.extract_idea(SourceExtractionRequest { source_link: source_link.clone() }))
+        };
+        let result = state.lock().map_err(|_| "desktop state is unavailable".to_string())?
+            .capture_idea_source(
+                CaptureIdeaCommand { source_link, title, saving_reason, copied_text },
+                &CompletedExtraction(extraction.unwrap_or(SourceExtraction::NeedsManualFallback { reason: "pasted text".to_string() })),
+                Some(active_root.as_path()),
+            ).map_err(|error| error.to_string())?;
+        match result {
+            SourceCaptureResultView::Captured { item } => {
+                let summary = summarize_live(&state, item.id.clone(), &budget_mode, Some(active_root.as_path()));
+                Ok(serde_json::json!({
+                    "status": "captured",
+                    "item": item,
+                    "summary_status": match &summary {
+                        SummarizeIdeaSourceView::Generated { .. } => "generated",
+                        SummarizeIdeaSourceView::Skipped { .. } => "skipped",
+                        _ => "unavailable",
+                    },
+                    "summary": match summary { SummarizeIdeaSourceView::Generated { summary } => Some(summary), _ => None }
+                }))
+            }
+            fallback => serde_json::to_value(fallback).map_err(|error| error.to_string()),
+        }
+    }).await.map_err(|error| format!("Idea Source capture task failed: {error}"))?
+}
+
+#[tauri::command]
+fn get_item_details(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<gruenes_gewolbe_desktop::ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .get_item_details(id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_idea_source(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<IdeaSourceContentView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .read_idea_source(id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn summarize_idea_source(
+    id: String,
+    budget_mode: String,
+    state: State<'_, CommandState>,
+) -> Result<SummarizeIdeaSourceView, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || Ok(summarize_live(&state, id, &budget_mode, None)))
+        .await
+        .map_err(|error| format!("summary task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn start_artwork_enrichment(
+    options: ArtworkEnrichmentOptions,
+    state: State<'_, CommandState>,
+    thumbnail_gate: State<'_, ThumbnailPreparationGate>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+    app: tauri::AppHandle,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let state = Arc::clone(state.inner());
+    let thumbnail_gate = Arc::clone(thumbnail_gate.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    let run_guard = acquire_artwork_run(&cancellation)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _run_guard = run_guard;
+        let (checkpoint, config) =
+            new_artwork_enrichment_checkpoint(&state, &options, &cancellation)?;
+        run_artwork_enrichment(
+            &state,
+            &thumbnail_gate,
+            &cancellation,
+            &app,
+            checkpoint,
+            config,
+        )
+    })
+    .await
+    .map_err(|error| format!("artwork enrichment task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn resume_artwork_enrichment(
+    run_id: String,
+    state: State<'_, CommandState>,
+    thumbnail_gate: State<'_, ThumbnailPreparationGate>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+    app: tauri::AppHandle,
+) -> Result<ArtworkEnrichmentProgress, String> {
+    let state = Arc::clone(state.inner());
+    let thumbnail_gate = Arc::clone(thumbnail_gate.inner());
+    let cancellation = Arc::clone(cancellation.inner());
+    let run_guard = acquire_artwork_run(&cancellation)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _run_guard = run_guard;
+        let (vault_root, config) = {
+            let guard = state
+                .lock()
+                .map_err(|_| "desktop state is unavailable".to_string())?;
+            (
+                guard
+                    .active_vault_root()
+                    .ok_or_else(|| "no Active Vault is open".to_string())?,
+                guard
+                    .shell_openai_provider_config()
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let checkpoint = ArtworkEnrichmentCheckpoint::resume(&vault_root, &run_id)?;
+        save_checkpoint(&checkpoint)?;
+        run_artwork_enrichment(
+            &state,
+            &thumbnail_gate,
+            &cancellation,
+            &app,
+            checkpoint,
+            config,
+        )
+    })
+    .await
+    .map_err(|error| format!("artwork enrichment task failed: {error}"))?
+}
+
+#[tauri::command]
+fn cancel_artwork_enrichment(
+    run_id: Option<String>,
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+) -> Result<(), String> {
+    if let Some(run_id) = run_id {
+        let vault_root = state
+            .lock()
+            .map_err(|_| "desktop state is unavailable".to_string())?
+            .active_vault_root()
+            .ok_or_else(|| "no Active Vault is open".to_string())?;
+        let latest = latest_progress_if_exists(&vault_root)?
+            .ok_or_else(|| "no artwork enrichment checkpoint exists".to_string())?;
+        if latest.run_id != run_id {
+            return Err(format!("artwork enrichment run is not active: {run_id}"));
+        }
+    }
+    cancellation.cancelled.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[tauri::command]
+fn artwork_enrichment_status(
+    state: State<'_, CommandState>,
+    cancellation: State<'_, ArtworkEnrichmentCancellation>,
+) -> Result<Option<ArtworkEnrichmentProgress>, String> {
+    let vault_root = state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .active_vault_root()
+        .ok_or_else(|| "no Active Vault is open".to_string())?;
+    let mut progress = latest_progress_if_exists(&vault_root)?;
+    if !cancellation.active.load(Ordering::Acquire) {
+        if let Some(progress) = progress.as_mut() {
+            if progress.status == ArtworkEnrichmentStatus::Running {
+                progress.status = ArtworkEnrichmentStatus::Paused;
+            }
+        }
+    }
+    Ok(progress)
+}
+
+#[tauri::command]
+fn configure_openai_provider(
+    api_key: String,
+    model: String,
+    state: State<'_, CommandState>,
+) -> Result<(), String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .configure_openai_provider(OpenAiProviderConfig { api_key, model })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn openai_provider_status(
+    state: State<'_, CommandState>,
+) -> Result<OpenAiProviderStatusView, String> {
+    Ok(state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .openai_provider_status())
+}
+
+#[tauri::command]
+fn capture_manual_fallback(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    copied_image_file_name: Option<String>,
+    copied_image_bytes: Option<Vec<u8>>,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    let copied_image = match (copied_image_file_name, copied_image_bytes) {
+        (Some(file_name), Some(bytes)) if !bytes.is_empty() => {
+            Some(CopiedImageCommand { file_name, bytes })
+        }
+        _ => None,
+    };
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .capture_manual_fallback(ManualFallbackCaptureCommand {
+            source_link,
+            title,
+            saving_reason,
+            copied_text,
+            copied_image,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn capture_artwork_fallback(
+    source_link: String,
+    title: String,
+    saving_reason: Option<String>,
+    copied_text: Option<String>,
+    copied_image_file_name: Option<String>,
+    copied_image_bytes: Option<Vec<u8>>,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    let copied_image = match (copied_image_file_name, copied_image_bytes) {
+        (Some(file_name), Some(bytes)) if !bytes.is_empty() => {
+            Some(CopiedImageCommand { file_name, bytes })
+        }
+        _ => None,
+    };
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .capture_artwork_fallback(ManualFallbackCaptureCommand {
+            source_link,
+            title,
+            saving_reason,
+            copied_text,
+            copied_image,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn workbench_snapshot(
+    artwork_sort: String,
+    selected_item_id: Option<String>,
+    search_query: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<WorkbenchSnapshotView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .workbench_snapshot(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort,
+            search_query,
+            selected_item_id,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn refresh_workbench(
+    artwork_sort: String,
+    selected_item_id: Option<String>,
+    search_query: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<WorkbenchSnapshotView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .refresh_workbench(WorkbenchSnapshotCommand {
+            home_subvault: "Paintings".to_string(),
+            artwork_sort,
+            search_query,
+            selected_item_id,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn prepare_thumbnail_previews(
+    limit: usize,
+    state: State<'_, CommandState>,
+    gate: State<'_, ThumbnailPreparationGate>,
+) -> Result<ThumbnailPreparationView, String> {
+    let state = Arc::clone(state.inner());
+    let gate = Arc::clone(gate.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_thumbnail_previews_live_with(&state, &gate, limit, || {})
+    })
+    .await
+    .map_err(|error| format!("thumbnail task failed: {error}"))?
+}
+
+#[tauri::command]
+fn activity_log_path(state: State<'_, CommandState>) -> Result<String, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .activity_log_path()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn move_item_to_trash(id: String, state: State<'_, CommandState>) -> Result<SavedItemView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .move_item_to_trash(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn restore_trashed_item(
+    id: String,
+    state: State<'_, CommandState>,
+) -> Result<SavedItemView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .restore_trashed_item(id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn permanently_delete_trashed_item(
+    id: String,
+    confirmed_id: String,
+    state: State<'_, CommandState>,
+) -> Result<PermanentDeletionView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .permanently_delete_trashed_item(id, confirmed_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_item_record(
+    id: String,
+    expected_revision: String,
+    overwrite_conflict: bool,
+    title: String,
+    creator: String,
+    year: String,
+    saving_reason: String,
+    summary: String,
+    tags: Vec<String>,
+    state: State<'_, CommandState>,
+) -> Result<ItemRecordSaveView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .save_item_record(SaveItemRecordCommand {
+            id,
+            expected_revision,
+            overwrite_conflict,
+            title,
+            creator,
+            year,
+            saving_reason,
+            summary,
+            tags,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_review_reason(
+    item_id: String,
+    reason_id: String,
+    expected_revision: String,
+    action: String,
+    correction: Option<String>,
+    state: State<'_, CommandState>,
+) -> Result<ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .resolve_review_reason(ResolveReviewReasonCommand {
+            item_id,
+            reason_id,
+            expected_revision,
+            action,
+            correction,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_duplicate_candidate(
+    item_id: String,
+    reason_id: String,
+    expected_revision: String,
+    action: String,
+    state: State<'_, CommandState>,
+) -> Result<DuplicateCandidateResolutionView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .resolve_duplicate_candidate(ResolveDuplicateCandidateCommand {
+            item_id,
+            reason_id,
+            expected_revision,
+            action,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn confirm_item_folder_rename(
+    id: String,
+    current_path: String,
+    proposed_path: String,
+    state: State<'_, CommandState>,
+) -> Result<ItemDetailsView, String> {
+    state
+        .lock()
+        .map_err(|_| "desktop state is unavailable".to_string())?
+        .confirm_item_folder_rename(ConfirmItemFolderRenameCommand {
+            id,
+            current_path,
+            proposed_path,
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn main() {
+    tauri::Builder::default()
+        .register_uri_scheme_protocol("vault-media", |context, request| {
+            let state = context.app_handle().state::<CommandState>();
+            match read_active_vault_thumbnail(state.inner(), request.uri().path()) {
+                Ok(bytes) => tauri::http::Response::builder()
+                    .header(tauri::http::header::CONTENT_TYPE, "image/png")
+                    .body(bytes)
+                    .expect("valid Thumbnail Preview response"),
+                Err(message) => tauri::http::Response::builder()
+                    .status(tauri::http::StatusCode::FORBIDDEN)
+                    .header(
+                        tauri::http::header::CONTENT_TYPE,
+                        "text/plain; charset=utf-8",
+                    )
+                    .body(message.into_bytes())
+                    .expect("valid media refusal response"),
+            }
+        })
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let app_state_dir = app.path().app_data_dir()?;
+            app.manage(Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+                app_state_dir,
+            ))));
+            app.manage(Arc::new(AtomicBool::new(false)));
+            app.manage(Arc::new(ArtworkCancellationFlag::default()));
+            app.manage(Arc::new(Mutex::new(())) as ThumbnailPreparationGate);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            startup,
+            create_vault,
+            open_vault,
+            confirm_vault_repair,
+            cancel_vault_repair,
+            add_artwork_files,
+            run_paintings_import,
+            cancel_paintings_import,
+            capture_source_link,
+            capture_idea_source,
+            capture_manual_fallback,
+            capture_artwork_fallback,
+            get_item_details,
+            read_idea_source,
+            summarize_idea_source,
+            start_artwork_enrichment,
+            resume_artwork_enrichment,
+            cancel_artwork_enrichment,
+            artwork_enrichment_status,
+            configure_openai_provider,
+            openai_provider_status,
+            workbench_snapshot,
+            refresh_workbench,
+            prepare_thumbnail_previews,
+            activity_log_path,
+            move_item_to_trash,
+            restore_trashed_item,
+            permanently_delete_trashed_item,
+            save_item_record,
+            resolve_review_reason,
+            resolve_duplicate_candidate,
+            confirm_item_folder_rename
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run Gruenes Gewoelbe");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn selection_stays_available_while_real_thumbnail_previews_are_prepared() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-selection-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let vault_root = root.join("vault");
+        let fixture = include_bytes!("../tests/browser/workbench-layout.spec.ts-snapshots/workbench-desktop-linux.png");
+        let fixture_count = std::env::var("GG_SELECTION_ITEMS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| (1..=64).contains(count))
+            .unwrap_or(16);
+        let selected_id = {
+            let mut guard = state.lock().expect("desktop state");
+            guard
+                .create_vault(vault_root.to_string_lossy().into_owned())
+                .expect("create fixture Vault");
+            let mut selected_id = None;
+            for index in 0..fixture_count {
+                let saved = guard
+                    .capture_artwork_fallback(ManualFallbackCaptureCommand {
+                        source_link: format!("https://example.com/artwork/{index}"),
+                        title: format!("Fixture artwork {index}"),
+                        saving_reason: None,
+                        copied_text: None,
+                        copied_image: Some(CopiedImageCommand {
+                            file_name: format!("fixture-{index}.png"),
+                            bytes: fixture.to_vec(),
+                        }),
+                    })
+                    .expect("capture fixture artwork");
+                selected_id.get_or_insert(saved.id);
+            }
+            selected_id.expect("selected fixture item")
+        };
+
+        let measure = |operation: &mut dyn FnMut()| {
+            let started = Instant::now();
+            operation();
+            started.elapsed()
+        };
+        let cold_details = measure(&mut || {
+            state
+                .lock()
+                .expect("desktop state")
+                .get_item_details(selected_id.clone())
+                .expect("cold item details");
+        });
+        let warm_details = measure(&mut || {
+            state
+                .lock()
+                .expect("desktop state")
+                .get_item_details(selected_id.clone())
+                .expect("warm item details");
+        });
+        let snapshot = measure(&mut || {
+            state
+                .lock()
+                .expect("desktop state")
+                .workbench_snapshot(WorkbenchSnapshotCommand {
+                    home_subvault: "Paintings".to_string(),
+                    artwork_sort: "newest".to_string(),
+                    search_query: None,
+                    selected_item_id: Some(selected_id.clone()),
+                })
+                .expect("workbench snapshot");
+        });
+
+        let preparation_finished = Arc::new(AtomicBool::new(false));
+        let worker_state = Arc::clone(&state);
+        let gate = Arc::new(Mutex::new(()));
+        let worker_gate = Arc::clone(&gate);
+        let worker_finished = Arc::clone(&preparation_finished);
+        let (started_sender, started_receiver) = mpsc::channel();
+        let preparation_started = Instant::now();
+        let worker = std::thread::spawn(move || {
+            let result = prepare_thumbnail_previews_live_with(
+                &worker_state,
+                &worker_gate,
+                fixture_count,
+                || started_sender.send(()).expect("report preparation start"),
+            );
+            worker_finished.store(true, Ordering::Release);
+            result
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("thumbnail preparation started after its Active Vault snapshot");
+        let selection_started = Instant::now();
+        state
+            .lock()
+            .expect("desktop state")
+            .get_item_details(selected_id)
+            .expect("item details during preparation");
+        let selection_during_preparation = selection_started.elapsed();
+        let preparation_was_finished = preparation_finished.load(Ordering::Acquire);
+        let preparation = worker
+            .join()
+            .expect("thumbnail worker")
+            .expect("prepare real thumbnails");
+        let preparation_elapsed = preparation_started.elapsed();
+
+        eprintln!(
+            "selection measurement: fixture_bytes={} items={fixture_count} first_details_after_setup={cold_details:?} repeat_details={warm_details:?} snapshot={snapshot:?} selection_during_preparation={selection_during_preparation:?} preparation={preparation_elapsed:?}",
+            fixture.len(),
+        );
+        assert_eq!(preparation.generated, fixture_count);
+        assert!(
+            !preparation_was_finished,
+            "selection completed only after thumbnail preparation released the global command-state lock"
+        );
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn selection_stale_thumbnail_failure_does_not_change_the_previous_vault_record() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-stale-preview-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let first = root.join("first");
+        let second = root.join("second");
+        let (id, item_folder) = {
+            let mut guard = state.lock().expect("desktop state");
+            guard
+                .create_vault(first.to_string_lossy().into_owned())
+                .expect("create first Vault");
+            let saved = guard
+                .capture_artwork_fallback(ManualFallbackCaptureCommand {
+                    source_link: "https://example.com/damaged".to_string(),
+                    title: "Damaged fixture".to_string(),
+                    saving_reason: None,
+                    copied_text: None,
+                    copied_image: Some(CopiedImageCommand {
+                        file_name: "damaged.png".to_string(),
+                        bytes: b"not a decodable PNG".to_vec(),
+                    }),
+                })
+                .expect("capture damaged artwork");
+            (saved.id, PathBuf::from(saved.item_folder))
+        };
+        let switch_state = Arc::clone(&state);
+        let result = prepare_thumbnail_previews_live_with(
+            &state,
+            &Arc::new(Mutex::new(())),
+            1,
+            move || {
+                switch_state
+                    .lock()
+                    .expect("desktop state")
+                    .create_vault(second.to_string_lossy().into_owned())
+                    .expect("switch Active Vault");
+            },
+        );
+
+        assert!(result
+            .expect_err("stale preparation must fail")
+            .contains("Active Vault changed"));
+        assert!(!fs::read_to_string(item_folder.join("record.md"))
+            .expect("read original Item Record")
+            .contains("thumbnail-preview-unavailable"));
+        assert!(!first
+            .join(".gruenesgewolbe/thumbnails")
+            .join(format!("{id}.placeholder.png"))
+            .exists());
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn media_protocol_reads_only_the_current_active_vault_thumbnails() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-media-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let first = root.join("first");
+        let second = root.join("second");
+        state
+            .lock()
+            .expect("desktop state")
+            .create_vault(first.to_string_lossy().into_owned())
+            .expect("create first Vault");
+        let first_thumbnail = first.join(".gruenesgewolbe/thumbnails/first.png");
+        std::fs::create_dir_all(first_thumbnail.parent().expect("thumbnail parent"))
+            .expect("create thumbnail directory");
+        std::fs::write(&first_thumbnail, b"first").expect("write first thumbnail");
+        let non_preview = first_thumbnail.with_extension("txt");
+        std::fs::write(&non_preview, b"not an image").expect("write non-preview file");
+        let encoded_first = first_thumbnail.to_string_lossy().replace('/', "%2F");
+        assert_eq!(
+            read_active_vault_thumbnail(&state, &format!("/{encoded_first}"))
+                .expect("read Active Vault thumbnail"),
+            b"first"
+        );
+        assert!(read_active_vault_thumbnail(
+            &state,
+            &format!("/{}", non_preview.to_string_lossy().replace('/', "%2F")),
+        )
+        .is_err());
+
+        state
+            .lock()
+            .expect("desktop state")
+            .create_vault(second.to_string_lossy().into_owned())
+            .expect("create second Vault");
+        assert!(read_active_vault_thumbnail(&state, &format!("/{encoded_first}")).is_err());
+        assert!(read_active_vault_thumbnail(
+            &state,
+            &format!(
+                "/{}",
+                first
+                    .join("vault.toml")
+                    .to_string_lossy()
+                    .replace('/', "%2F")
+            ),
+        )
+        .is_err());
+
+        std::fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_after_switching_to_an_identical_copied_vault() {
+        let (root, state, id, _) = summary_fixture("summary-stale-vault");
+        let first = state
+            .lock()
+            .expect("desktop state")
+            .active_vault_root()
+            .expect("active vault");
+        let second = root.join("copied-vault");
+        copy_directory(&first, &second);
+        let switch_state = Arc::clone(&state);
+
+        let result = summarize_live_with(
+            &state,
+            id.clone(),
+            "standard",
+            Some(first.as_path()),
+            move |_, _, _| {
+                switch_state
+                    .lock()
+                    .expect("desktop state")
+                    .open_vault(second.to_string_lossy().into_owned())
+                    .expect("switch to copied vault");
+                Ok(summary_response())
+            },
+        );
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        assert_eq!(
+            state
+                .lock()
+                .expect("desktop state")
+                .read_idea_source(id)
+                .expect("read copied source")
+                .summary,
+            None
+        );
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_when_preserved_source_changes_during_provider_call() {
+        let (root, state, id, item_folder) = summary_fixture("summary-stale-source");
+        let source_path = item_folder.join("source-copies/cleaned-text.md");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, move |_, _, _| {
+            fs::write(source_path, "A newer preserved source.\n").expect("replace source");
+            Ok(summary_response())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        let source = state
+            .lock()
+            .expect("desktop state")
+            .read_idea_source(id)
+            .expect("read current source");
+        assert_eq!(source.cleaned_text, "A newer preserved source.");
+        assert_eq!(source.summary, None);
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn summary_is_not_applied_when_item_record_changes_during_provider_call() {
+        let (root, state, id, item_folder) = summary_fixture("summary-stale-record");
+        let record_path = item_folder.join("record.md");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, move |_, _, _| {
+            let record = fs::read_to_string(&record_path).expect("read record");
+            fs::write(
+                &record_path,
+                record.replace("title: Source", "title: Revised source"),
+            )
+            .expect("revise record");
+            Ok(summary_response())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        assert_eq!(
+            state
+                .lock()
+                .expect("desktop state")
+                .read_idea_source(id)
+                .expect("read source")
+                .summary,
+            None
+        );
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn provider_failure_keeps_the_preserved_source_without_a_summary() {
+        let (root, state, id, _) = summary_fixture("summary-provider-failure");
+        let result = summarize_live_with(&state, id.clone(), "standard", None, |_, text, _| {
+            assert_eq!(text, "Original preserved source.");
+            Err("simulated provider failure".to_string())
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { .. }));
+        let source = state
+            .lock()
+            .expect("desktop state")
+            .read_idea_source(id)
+            .expect("read source after failure");
+        assert_eq!(source.cleaned_text, "Original preserved source.");
+        assert_eq!(source.summary, None);
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn off_budget_skips_before_provider_access_and_preserves_source() {
+        let (root, state, id, _) = summary_fixture("summary-budget-off");
+        fs::remove_file(root.join("app-state/openai-provider.toml"))
+            .expect("remove fixture provider configuration");
+        let result = summarize_live_with(&state, id.clone(), "off", None, |_, _, _| {
+            panic!("provider must not be called when summary budget is off")
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Skipped { .. }));
+        let source = state
+            .lock()
+            .expect("desktop state")
+            .read_idea_source(id)
+            .expect("read preserved source");
+        assert_eq!(source.cleaned_text, "Original preserved source.");
+        assert_eq!(source.summary, None);
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    #[test]
+    fn invalid_budget_is_rejected_before_provider_access() {
+        let (root, state, id, _) = summary_fixture("summary-budget-invalid");
+        fs::remove_file(root.join("app-state/openai-provider.toml"))
+            .expect("remove fixture provider configuration");
+        let result = summarize_live_with(&state, id, "invalid", None, |_, _, _| {
+            panic!("provider must not be called for an invalid budget")
+        });
+
+        assert!(matches!(result, SummarizeIdeaSourceView::Failed { reason: Some(reason) } if reason == "unsupported AI budget mode"));
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
+
+    fn summary_fixture(name: &str) -> (PathBuf, CommandState, String, PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("gruenes-gewolbe-{name}-{unique}"));
+        let state = Arc::new(Mutex::new(TauriCommandState::with_app_state_dir(
+            root.join("app-state"),
+        )));
+        let saved = {
+            let mut guard = state.lock().expect("desktop state");
+            guard
+                .create_vault(root.join("vault").to_string_lossy().into_owned())
+                .expect("create vault");
+            guard
+                .configure_openai_provider(OpenAiProviderConfig {
+                    api_key: "test-key".to_string(),
+                    model: "test-model".to_string(),
+                })
+                .expect("configure provider");
+            guard
+                .capture_idea(CaptureIdeaCommand {
+                    source_link: "https://example.com/source".to_string(),
+                    title: "Source".to_string(),
+                    saving_reason: None,
+                    copied_text: Some("Original preserved source.".to_string()),
+                })
+                .expect("capture source")
+        };
+        (root, state, saved.id, PathBuf::from(saved.item_folder))
+    }
+
+    fn summary_response() -> AiProviderResponse {
+        AiProviderResponse {
+            summary: Some("Generated summary.".to_string()),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 0,
+        }
+    }
+
+    fn copy_directory(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).expect("create copied directory");
+        for entry in fs::read_dir(source).expect("read source directory") {
+            let entry = entry.expect("read source entry");
+            let target = destination.join(entry.file_name());
+            if entry.file_type().expect("read source type").is_dir() {
+                copy_directory(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).expect("copy source file");
+            }
+        }
+    }
+}

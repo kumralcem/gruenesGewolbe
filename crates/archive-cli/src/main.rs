@@ -1,0 +1,330 @@
+use std::env;
+use std::path::PathBuf;
+use std::process;
+
+use gruenes_gewolbe_core::{
+    DuplicateCandidateAction, DuplicateCandidateResolution, DuplicateCandidateResolutionOutcome,
+    ManualFallbackCapture, Vault,
+};
+
+fn main() {
+    match run(env::args().skip(1).collect()) {
+        Ok(output) => {
+            println!("{output}");
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn run(args: Vec<String>) -> Result<String, String> {
+    let [command, rest @ ..] = args.as_slice() else {
+        return Err(usage());
+    };
+
+    match command.as_str() {
+        "create" => {
+            let [path] = rest else {
+                return Err(usage());
+            };
+            let path = PathBuf::from(path);
+            let vault = Vault::create(&path).map_err(|error| error.to_string())?;
+            Ok(format!("created\t{}", vault.root().display()))
+        }
+        "open" => {
+            let [path] = rest else {
+                return Err(usage());
+            };
+            let path = PathBuf::from(path);
+            let vault = Vault::open(&path).map_err(|error| error.to_string())?;
+            Ok(format!("opened\t{}", vault.root().display()))
+        }
+        "validate" => {
+            let [path] = rest else {
+                return Err(usage());
+            };
+            let path = PathBuf::from(path);
+            Vault::validate(&path).map_err(|error| error.to_string())?;
+            Ok(format!("valid\t{}", path.display()))
+        }
+        "import-paintings" => {
+            let [vault_path, source_folder] = rest else {
+                return Err(usage());
+            };
+            let vault_path = PathBuf::from(vault_path);
+            let source_folder = PathBuf::from(source_folder);
+            let vault = Vault::open(&vault_path).map_err(|error| error.to_string())?;
+            let imported = vault
+                .import_paintings_folder(source_folder)
+                .map_err(|error| error.to_string())?;
+            Ok(format!(
+                "imported-paintings\t{}\t{}",
+                vault.root().display(),
+                imported.len()
+            ))
+        }
+        "add-artwork-files" => {
+            let [vault_path, source_files @ ..] = rest else {
+                return Err(usage());
+            };
+            if source_files.is_empty() {
+                return Err(usage());
+            }
+            let vault =
+                Vault::open(PathBuf::from(vault_path)).map_err(|error| error.to_string())?;
+            let added = vault
+                .add_artwork_files(source_files.iter().map(PathBuf::from))
+                .map_err(|error| error.to_string())?;
+            Ok(added
+                .into_iter()
+                .map(|item| {
+                    format!(
+                        "added-artwork\t{}\t{}\t{}",
+                        item.id(),
+                        cli_field(item.home_subvault()),
+                        cli_field(&item.item_folder().display().to_string())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "rebuild-index" => {
+            let [vault_path] = rest else {
+                return Err(usage());
+            };
+            let vault_path = PathBuf::from(vault_path);
+            let vault = Vault::open(&vault_path).map_err(|error| error.to_string())?;
+            let rebuilt = vault
+                .rebuild_metadata_index()
+                .map_err(|error| error.to_string())?;
+            let mut lines = vec![format!(
+                "rebuilt-metadata-index\t{}\t{}",
+                vault.root().display(),
+                rebuilt.indexed_items()
+            )];
+            lines.extend(rebuilt.omitted_paths().iter().map(|path| {
+                format!(
+                    "omitted-item-record\t{}",
+                    cli_field(&path.display().to_string())
+                )
+            }));
+            Ok(lines.join("\n"))
+        }
+        "problems" => {
+            let [vault_path] = rest else {
+                return Err(usage());
+            };
+            let vault =
+                Vault::open(PathBuf::from(vault_path)).map_err(|error| error.to_string())?;
+            let problems = vault.vault_problems().map_err(|error| error.to_string())?;
+            Ok(problems
+                .into_iter()
+                .map(|problem| {
+                    format!(
+                        "vault-problem\t{}\t{}",
+                        cli_field(&problem.path().display().to_string()),
+                        cli_field(problem.error())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "search" => {
+            let [vault_path, query] = rest else {
+                return Err(usage());
+            };
+            let vault_path = PathBuf::from(vault_path);
+            let vault = Vault::open(&vault_path).map_err(|error| error.to_string())?;
+            let results = vault
+                .search_metadata(query)
+                .map_err(|error| error.to_string())?;
+            Ok(results
+                .into_iter()
+                .map(|result| {
+                    let saved_item = result.saved_item();
+                    format!(
+                        "search-result\t{}\t{}\t{}",
+                        saved_item.id(),
+                        saved_item.home_subvault(),
+                        saved_item.item_folder().display()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "capture-manual-text" => {
+            let [vault_path, source_link, title, saving_reason, copied_text] = rest else {
+                return Err(usage());
+            };
+            let vault_path = PathBuf::from(vault_path);
+            let vault = Vault::open(&vault_path).map_err(|error| error.to_string())?;
+            let captured = vault
+                .manual_fallback_capture(ManualFallbackCapture {
+                    source_link: source_link.to_string(),
+                    title: title.to_string(),
+                    saving_reason: Some(saving_reason.to_string()),
+                    copied_text: Some(copied_text.to_string()),
+                    copied_image: None,
+                })
+                .map_err(|error| error.to_string())?;
+            Ok(format!(
+                "captured-manual-text\t{}\t{}\t{}",
+                captured.id(),
+                captured.home_subvault(),
+                captured.item_folder().display()
+            ))
+        }
+        "inspect-item" => {
+            let [vault_path, item_id] = rest else {
+                return Err(usage());
+            };
+            let vault_path = PathBuf::from(vault_path);
+            let vault = Vault::open(&vault_path).map_err(|error| error.to_string())?;
+            let details = match vault.item_details(item_id) {
+                Ok(details) => details,
+                Err(error) => {
+                    let message = error.to_string();
+                    vault
+                        .record_error_event("inspect-item", item_id, &message)
+                        .map_err(|error| error.to_string())?;
+                    return Err(format!("error\tinspect-item\t{}", cli_field(&message)));
+                }
+            };
+            let folder_name = details
+                .item_folder()
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            Ok(format!(
+                "item\t{}\t{}\t{}\t{}\nfolder\tname\t{}\nfolder\tpath\t{}\nfield\ttitle\t{}\nfield\tcreator\t{}\nfield\tyear\t{}\nfield\treview_status\t{}\nfile\tprimary\t{}",
+                details.id(),
+                cli_field(details.home_subvault()),
+                cli_field(&details.item_folder().display().to_string()),
+                cli_field(details.title()),
+                cli_field(&folder_name),
+                cli_field(&details.item_folder().display().to_string()),
+                cli_field(details.title()),
+                cli_field(details.creator()),
+                cli_field(details.year()),
+                cli_field(details.review_status()),
+                cli_field(&details.primary_file().display().to_string()),
+            ))
+        }
+        "trash-item" => {
+            let [vault_path, item_id] = rest else {
+                return Err(usage());
+            };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let item = vault
+                .move_item_to_trash(item_id)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "trashed-item\t{}\t{}\t{}",
+                item.id(),
+                cli_field(item.home_subvault()),
+                cli_field(&item.item_folder().display().to_string())
+            ))
+        }
+        "restore-item" => {
+            let [vault_path, item_id] = rest else {
+                return Err(usage());
+            };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let item = vault
+                .restore_trashed_item(item_id)
+                .map_err(|e| e.to_string())?;
+            Ok(format!(
+                "restored-item\t{}\t{}\t{}",
+                item.id(),
+                cli_field(item.home_subvault()),
+                cli_field(&item.item_folder().display().to_string())
+            ))
+        }
+        "permanently-delete-item" => {
+            let [vault_path, item_id, flag, confirmed_id] = rest else {
+                return Err(usage());
+            };
+            if flag != "--confirm" {
+                return Err("permanent deletion requires --confirm <exact-item-id>".to_string());
+            }
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let outcome = vault
+                .permanently_delete_trashed_item(item_id, confirmed_id)
+                .map_err(|e| e.to_string())?;
+            let mut lines = vec![format!("permanently-deleted-item\t{}", outcome.id())];
+            lines.extend(
+                outcome
+                    .collections()
+                    .iter()
+                    .map(|name| format!("affected-collection\t{}", cli_field(name))),
+            );
+            lines.extend(outcome.incoming_item_links().iter().map(|link| {
+                format!(
+                    "removed-incoming-item-link\t{}\t{}",
+                    link.source_item_id(),
+                    cli_field(link.label())
+                )
+            }));
+            Ok(lines.join("\n"))
+        }
+        "resolve-duplicate-candidate" => {
+            let [vault_path, item_id, reason_id, decision] = rest else {
+                return Err(usage());
+            };
+            let action = match decision.as_str() {
+                "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
+                "keep-both" => DuplicateCandidateAction::KeepBoth,
+                "move-this-item-to-vault-trash" => {
+                    DuplicateCandidateAction::MoveThisItemToVaultTrash
+                }
+                _ => return Err(
+                    "decision must be not-a-duplicate, keep-both, or move-this-item-to-vault-trash"
+                        .to_string(),
+                ),
+            };
+            let vault = Vault::open(PathBuf::from(vault_path)).map_err(|e| e.to_string())?;
+            let revision = vault
+                .item_details(item_id)
+                .map_err(|e| e.to_string())?
+                .record_revision()
+                .to_string();
+            let outcome = vault
+                .resolve_duplicate_candidate(DuplicateCandidateResolution {
+                    item_id: item_id.to_string(),
+                    reason_id: reason_id.to_string(),
+                    expected_revision: revision,
+                    action,
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(match outcome {
+                DuplicateCandidateResolutionOutcome::Active(item) => format!(
+                    "resolved-duplicate-candidate\t{}\t{}\t{}",
+                    item.id(),
+                    decision,
+                    item.review_status()
+                ),
+                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => format!(
+                    "resolved-duplicate-candidate\t{}\t{}\t{}",
+                    item.id(),
+                    decision,
+                    cli_field(&item.item_folder().display().to_string())
+                ),
+            })
+        }
+        _ => Err(usage()),
+    }
+}
+
+fn usage() -> String {
+    "usage: ggvault <create|open|validate|rebuild-index|problems> <vault-path> | ggvault add-artwork-files <vault-path> <image-file>... | ggvault import-paintings <vault-path> <source-folder> | ggvault search <vault-path> <query> | ggvault capture-manual-text <vault-path> <source-link> <title> <saving-reason> <copied-text> | ggvault <inspect-item|trash-item|restore-item> <vault-path> <item-id> | ggvault permanently-delete-item <vault-path> <item-id> --confirm <exact-item-id> | ggvault resolve-duplicate-candidate <vault-path> <item-id> <reason-id> <not-a-duplicate|keep-both|move-this-item-to-vault-trash>"
+        .to_string()
+}
+
+fn cli_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+}

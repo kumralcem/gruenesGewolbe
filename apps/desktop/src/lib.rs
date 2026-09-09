@@ -1,0 +1,2454 @@
+use std::fs::{self, OpenOptions};
+use std::io;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+const KNOWN_VAULTS_FILE: &str = "known-vaults.tsv";
+const LAST_ACTIVE_VAULT_FILE: &str = "last-active-vault.txt";
+const OPENAI_PROVIDER_FILE: &str = "openai-provider.toml";
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub mod source_extractor;
+pub mod artwork_enrichment;
+
+use gruenes_gewolbe_core::{
+    AddArtworkItem, AiBudgetMode, AiEnrichmentResult, AiProvider, AiProviderResponse, ArtworkGridItem,
+    ArtworkImportMetadata, ArtworkImportOptions, ArtworkImportOutcome, ArtworkSort, Collection,
+    CollectionDefinition, CopiedImage, DuplicateCandidateAction, DuplicateCandidateResolution,
+    DuplicateCandidateResolutionOutcome, ExactDuplicatePolicy, ExtractedTextCapture,
+    IdeaSourceContent, IdeaSourceListItem, ImportProgress, ImportRunAction, ImportRunSummary,
+    ItemDetails, ItemFolderRenameProposal, ItemLinkDefinition, ItemRecordEdit,
+    ManualFallbackCapture, PermanentDeletion, ReviewQueueItem, ReviewReason, ReviewReasonAction,
+    ReviewReasonResolution, SavedItem, SearchResult, SelectedFileImportSummary,
+    SourceCaptureResult, SourceExtraction, SourceExtractionRequest, SourceExtractor,
+    SourceLinkCapture, TagDefinition, ThumbnailPreparation, TrashedItem, UpdateItemRecord, Vault,
+    VaultError, VaultOpen, VaultProblem, VaultRepairProposal,
+};
+
+#[derive(Debug, Default)]
+pub struct DesktopShell {
+    active_vault: Option<Vault>,
+    pending_vault_repair: Option<VaultRepairProposal>,
+    app_state_dir: Option<PathBuf>,
+    known_vault_roots: Vec<PathBuf>,
+    startup_notice: Option<String>,
+}
+
+impl DesktopShell {
+    pub fn with_app_state_dir(app_state_dir: impl AsRef<Path>) -> Self {
+        let app_state_dir = app_state_dir.as_ref().to_path_buf();
+        let known_vault_roots = read_known_vault_roots(&app_state_dir).unwrap_or_default();
+        let (active_vault, pending_vault_repair, startup_notice) =
+            match read_last_active_vault_root(&app_state_dir) {
+                Ok(Some(root)) => match Vault::open_or_repair(&root) {
+                    Ok(VaultOpen::Opened(vault)) => (Some(vault), None, None),
+                    Ok(VaultOpen::RepairRequired(proposal)) => (None, Some(proposal), None),
+                    Err(_) => (
+                        None,
+                        None,
+                        Some(format!(
+                            "last active vault is unavailable: {}",
+                            root.display()
+                        )),
+                    ),
+                },
+                Ok(None) => (None, None, None),
+                Err(error) => (
+                    None,
+                    None,
+                    Some(format!("last active vault could not be read: {error}")),
+                ),
+            };
+        Self {
+            active_vault,
+            pending_vault_repair,
+            app_state_dir: Some(app_state_dir),
+            known_vault_roots,
+            startup_notice,
+        }
+    }
+
+    pub fn create_vault(&mut self, root: impl AsRef<Path>) -> Result<ActiveVault, VaultError> {
+        let vault = Vault::create(root)?;
+        self.set_active_vault(vault)
+    }
+
+    pub fn open_vault(&mut self, root: impl AsRef<Path>) -> Result<ActiveVault, VaultError> {
+        let vault = Vault::open(root)?;
+        self.set_active_vault(vault)
+    }
+
+    pub fn request_open_vault(
+        &mut self,
+        root: impl AsRef<Path>,
+    ) -> Result<OpenVaultResult, VaultError> {
+        match Vault::open_or_repair(root)? {
+            VaultOpen::Opened(vault) => self.set_active_vault(vault).map(OpenVaultResult::Opened),
+            VaultOpen::RepairRequired(proposal) => {
+                self.pending_vault_repair = Some(proposal.clone());
+                Ok(OpenVaultResult::RepairRequired(proposal))
+            }
+        }
+    }
+
+    pub fn cancel_vault_repair(&mut self, root: impl AsRef<Path>) -> Result<(), DesktopShellError> {
+        let root = root.as_ref();
+        if self
+            .pending_vault_repair
+            .as_ref()
+            .is_some_and(|proposal| proposal.root() == root)
+        {
+            self.pending_vault_repair = None;
+            return Ok(());
+        }
+
+        Err(DesktopShellError::NoPendingVaultRepair(root.to_path_buf()))
+    }
+
+    pub fn confirm_vault_repair(
+        &mut self,
+        root: impl AsRef<Path>,
+    ) -> Result<ActiveVault, DesktopShellError> {
+        let root = root.as_ref();
+        let proposal = self
+            .pending_vault_repair
+            .as_ref()
+            .filter(|proposal| proposal.root() == root)
+            .cloned()
+            .ok_or_else(|| DesktopShellError::NoPendingVaultRepair(root.to_path_buf()))?;
+        let vault = proposal.confirm().map_err(DesktopShellError::Vault)?;
+        self.set_active_vault(vault)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn switch_active_vault(
+        &mut self,
+        root: impl AsRef<Path>,
+    ) -> Result<ActiveVault, VaultError> {
+        self.open_vault(root)
+    }
+
+    pub fn active_vault(&self) -> Option<ActiveVault> {
+        self.active_vault
+            .as_ref()
+            .map(|vault| ActiveVault::from(vault.root()))
+    }
+
+    pub fn known_vaults(&self) -> Result<Vec<KnownVault>, DesktopShellError> {
+        let roots = if let Some(app_state_dir) = self.app_state_dir.as_ref() {
+            read_known_vault_roots(app_state_dir).map_err(DesktopShellError::Io)?
+        } else {
+            self.known_vault_roots.clone()
+        };
+
+        Ok(roots.into_iter().map(|root| KnownVault { root }).collect())
+    }
+
+    pub fn startup_state(&self) -> Result<DesktopStartup, DesktopShellError> {
+        Ok(DesktopStartup {
+            active_vault: self.active_vault(),
+            known_vaults: self.known_vaults()?,
+            repair_proposal: self.pending_vault_repair.clone(),
+            notice: self.startup_notice.clone(),
+        })
+    }
+
+    pub fn add_artwork_item(&self, item: AddArtworkItem) -> Result<SavedItem, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .add_artwork_item(item)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn add_artwork_files(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+        metadata: ArtworkImportMetadata,
+    ) -> Result<Vec<SavedItem>, DesktopShellError> {
+        self.add_artwork_files_with_options(source_files, metadata, ExactDuplicatePolicy::Skip)
+            .map(|summary| summary.imported_items().to_vec())
+    }
+
+    pub fn add_artwork_files_with_options(
+        &self,
+        source_files: impl IntoIterator<Item = PathBuf>,
+        metadata: ArtworkImportMetadata,
+        exact_duplicate_policy: ExactDuplicatePolicy,
+    ) -> Result<SelectedFileImportSummary, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .add_artwork_files_with_options(
+                source_files,
+                ArtworkImportOptions {
+                    metadata,
+                    exact_duplicate_policy,
+                },
+            )
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn import_paintings_folder(
+        &self,
+        source_folder: impl AsRef<Path>,
+    ) -> Result<Vec<SavedItem>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .import_paintings_folder(source_folder)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn run_paintings_import<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        on_progress: F,
+    ) -> Result<ImportRunSummary, DesktopShellError>
+    where
+        F: FnMut(&ImportProgress) -> bool,
+    {
+        self.run_paintings_import_with_metadata(
+            source_folder,
+            ArtworkImportMetadata::default(),
+            ExactDuplicatePolicy::Skip,
+            on_progress,
+        )
+    }
+
+    pub fn run_paintings_import_with_metadata<F>(
+        &self,
+        source_folder: impl AsRef<Path>,
+        metadata: ArtworkImportMetadata,
+        exact_duplicate_policy: ExactDuplicatePolicy,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummary, DesktopShellError>
+    where
+        F: FnMut(&ImportProgress) -> bool,
+    {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .run_paintings_import_with_options(
+                source_folder,
+                ArtworkImportOptions {
+                    metadata,
+                    exact_duplicate_policy,
+                },
+                |progress| {
+                    if on_progress(progress) {
+                        ImportRunAction::Cancel
+                    } else {
+                        ImportRunAction::Continue
+                    }
+                },
+            )
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn search_metadata(&self, query: &str) -> Result<Vec<SearchResult>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .search_metadata(query)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn open_saved_item(&self, id: &str) -> Result<SavedItem, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault.open_saved_item(id).map_err(DesktopShellError::Vault)
+    }
+
+    pub fn browse_artwork_items(
+        &self,
+        home_subvault: &str,
+    ) -> Result<Vec<ArtworkGridItem>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .browse_artwork_items(home_subvault)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn browse_idea_sources(&self) -> Result<Vec<IdeaSourceListItem>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .browse_idea_sources()
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn review_queue(&self) -> Result<Vec<ReviewQueueItem>, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault.review_queue().map_err(DesktopShellError::Vault)
+    }
+
+    pub fn workbench_snapshot(
+        &self,
+        request: WorkbenchRequest,
+    ) -> Result<WorkbenchSnapshot, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        let search_results = match request.search_query.as_deref().map(str::trim) {
+            Some(query) if !query.is_empty() => vault
+                .search_metadata(query)
+                .map_err(DesktopShellError::Vault)?,
+            _ => Vec::new(),
+        };
+        let artwork_items = vault
+            .browse_artwork_items_sorted(&request.home_subvault, request.artwork_sort)
+            .map_err(DesktopShellError::Vault)?;
+        let selected_item = match request.selected_item_id.as_deref() {
+            Some(id) => match vault.item_details(id) {
+                Ok(details) => Some(details),
+                Err(VaultError::MalformedItemRecord(_) | VaultError::SavedItemNotFound(_)) => None,
+                Err(error) => return Err(DesktopShellError::Vault(error)),
+            },
+            None => None,
+        };
+
+        Ok(WorkbenchSnapshot {
+            active_vault: ActiveVault::from(vault.root()),
+            subvaults: vault.list_subvaults().map_err(DesktopShellError::Vault)?,
+            collections: vault.list_collections().map_err(DesktopShellError::Vault)?,
+            artwork_items,
+            idea_sources: vault
+                .browse_idea_sources()
+                .map_err(DesktopShellError::Vault)?,
+            review_queue: vault.review_queue().map_err(DesktopShellError::Vault)?,
+            search_results,
+            selected_item,
+            trashed_items: vault
+                .list_trashed_items()
+                .map_err(DesktopShellError::Vault)?,
+            vault_problems: vault.vault_problems().map_err(DesktopShellError::Vault)?,
+        })
+    }
+
+    pub fn refresh_workbench(
+        &self,
+        request: WorkbenchRequest,
+    ) -> Result<WorkbenchSnapshot, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .rebuild_metadata_index()
+            .map_err(DesktopShellError::Vault)?;
+        self.workbench_snapshot(request)
+    }
+
+    pub fn prepare_thumbnail_previews(
+        &self,
+        limit: usize,
+    ) -> Result<ThumbnailPreparation, DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .prepare_thumbnail_previews("Paintings", limit)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<(), DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .prepare_thumbnail_preview(id)
+            .map(|_| ())
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn activity_log_path(&self) -> Result<PathBuf, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        Ok(vault.activity_log_path())
+    }
+
+    pub fn item_details(&self, id: &str) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        match vault.item_details(id) {
+            Ok(details) => Ok(details),
+            Err(error) => {
+                let message = error.to_string();
+                vault
+                    .record_error_event("item-details", id, &message)
+                    .map_err(DesktopShellError::Vault)?;
+                Err(DesktopShellError::Vault(error))
+            }
+        }
+    }
+
+    pub fn read_idea_source(&self, id: &str) -> Result<IdeaSourceContent, DesktopShellError> {
+        self.active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?
+            .read_idea_source(id)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn update_item_record(
+        &self,
+        update: UpdateItemRecord,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .update_item_record(update)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn save_item_record_edit(
+        &self,
+        edit: ItemRecordEdit,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .save_item_record_edit(edit)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn resolve_review_reason(
+        &self,
+        resolution: ReviewReasonResolution,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .resolve_review_reason(resolution)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn resolve_duplicate_candidate(
+        &self,
+        resolution: DuplicateCandidateResolution,
+    ) -> Result<DuplicateCandidateResolutionOutcome, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .resolve_duplicate_candidate(resolution)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn confirm_item_folder_rename(
+        &self,
+        id: &str,
+        proposal: &ItemFolderRenameProposal,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .confirm_item_folder_rename(id, proposal)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn manual_fallback_capture(
+        &self,
+        capture: ManualFallbackCapture,
+    ) -> Result<SavedItem, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .manual_fallback_capture(capture)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn capture_artwork_fallback(
+        &self,
+        capture: ManualFallbackCapture,
+    ) -> Result<SavedItem, DesktopShellError> {
+        self.active_vault.as_ref().ok_or(DesktopShellError::NoActiveVault)?
+            .capture_artwork_fallback(capture).map_err(DesktopShellError::Vault)
+    }
+
+    pub fn capture_extracted_text(
+        &self,
+        capture: ExtractedTextCapture,
+    ) -> Result<SavedItem, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .capture_extracted_text(capture)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn capture_source_link(
+        &self,
+        capture: SourceLinkCapture,
+        extractor: &dyn SourceExtractor,
+    ) -> Result<SourceCaptureResult, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .capture_source_link(capture, extractor)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn upsert_tag(&self, tag: TagDefinition) -> Result<(), DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault.upsert_tag(tag).map_err(DesktopShellError::Vault)
+    }
+
+    pub fn add_tags_to_item(
+        &self,
+        id: &str,
+        tags: Vec<String>,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .add_tags_to_item(id, tags)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn create_collection(
+        &self,
+        collection: CollectionDefinition,
+    ) -> Result<Collection, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .create_collection(collection)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn add_item_to_collection(
+        &self,
+        collection_id: &str,
+        item_id: &str,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .add_item_to_collection(collection_id, item_id)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn add_item_link(
+        &self,
+        item_id: &str,
+        link: ItemLinkDefinition,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .add_item_link(item_id, link)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn enrich_idea_with_ai(
+        &self,
+        id: &str,
+        budget_mode: AiBudgetMode,
+        provider: &dyn AiProvider,
+    ) -> Result<AiEnrichmentResult, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .enrich_idea_with_ai(id, budget_mode, provider)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn suggest_artwork_metadata_with_ai(
+        &self,
+        id: &str,
+        budget_mode: AiBudgetMode,
+        provider: &dyn AiProvider,
+    ) -> Result<AiEnrichmentResult, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+
+        vault
+            .suggest_artwork_metadata_with_ai(id, budget_mode, provider)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn apply_artwork_enrichment_response(
+        &self,
+        id: &str,
+        expected_revision: &str,
+        budget_mode: AiBudgetMode,
+        response: AiProviderResponse,
+    ) -> Result<ItemDetails, DesktopShellError> {
+        let vault = self
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .apply_artwork_enrichment_response(
+                id,
+                expected_revision,
+                budget_mode,
+                response,
+                false,
+            )
+            .map_err(DesktopShellError::Vault)?;
+        vault.item_details(id).map_err(DesktopShellError::Vault)
+    }
+
+    pub fn configure_openai_provider(
+        &self,
+        config: OpenAiProviderConfig,
+    ) -> Result<(), DesktopShellError> {
+        let app_state_dir = self
+            .app_state_dir
+            .as_ref()
+            .ok_or(DesktopShellError::AppStateNotConfigured)?;
+        fs::create_dir_all(app_state_dir).map_err(DesktopShellError::Io)?;
+        let path = app_state_dir.join(OPENAI_PROVIDER_FILE);
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(DesktopShellError::Io)?;
+        #[cfg(unix)]
+        fs::set_permissions(
+            &path,
+            <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+        )
+        .map_err(DesktopShellError::Io)?;
+        file.write_all(openai_provider_config_toml(&config).as_bytes())
+            .map_err(DesktopShellError::Io)
+    }
+
+    pub fn openai_provider_config(&self) -> Result<OpenAiProviderConfig, DesktopShellError> {
+        let app_state_dir = self
+            .app_state_dir
+            .as_ref()
+            .ok_or(DesktopShellError::AppStateNotConfigured)?;
+        let path = app_state_dir.join(OPENAI_PROVIDER_FILE);
+        parse_openai_provider_config(
+            &path,
+            &fs::read_to_string(&path).map_err(DesktopShellError::Io)?,
+        )
+    }
+
+    fn set_active_vault(&mut self, vault: Vault) -> Result<ActiveVault, VaultError> {
+        let active_vault = ActiveVault::from(vault.root());
+        self.remember_vault_root(vault.root())?;
+        if let Some(app_state_dir) = self.app_state_dir.as_ref() {
+            write_last_active_vault_root(app_state_dir, vault.root())?;
+        }
+        self.active_vault = Some(vault);
+        self.pending_vault_repair = None;
+        self.startup_notice = None;
+        Ok(active_vault)
+    }
+
+    fn remember_vault_root(&mut self, root: &Path) -> Result<(), VaultError> {
+        if !self.known_vault_roots.iter().any(|known| known == root) {
+            self.known_vault_roots.push(root.to_path_buf());
+        }
+
+        if let Some(app_state_dir) = self.app_state_dir.as_ref() {
+            write_known_vault_roots(app_state_dir, &self.known_vault_roots)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchRequest {
+    pub home_subvault: String,
+    pub artwork_sort: ArtworkSort,
+    pub search_query: Option<String>,
+    pub selected_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkbenchSnapshot {
+    active_vault: ActiveVault,
+    subvaults: Vec<String>,
+    collections: Vec<Collection>,
+    artwork_items: Vec<ArtworkGridItem>,
+    idea_sources: Vec<IdeaSourceListItem>,
+    review_queue: Vec<ReviewQueueItem>,
+    search_results: Vec<SearchResult>,
+    selected_item: Option<ItemDetails>,
+    trashed_items: Vec<TrashedItem>,
+    vault_problems: Vec<VaultProblem>,
+}
+
+impl WorkbenchSnapshot {
+    pub fn active_vault(&self) -> &ActiveVault {
+        &self.active_vault
+    }
+
+    pub fn subvaults(&self) -> &[String] {
+        &self.subvaults
+    }
+
+    pub fn collections(&self) -> &[Collection] {
+        &self.collections
+    }
+
+    pub fn artwork_items(&self) -> &[ArtworkGridItem] {
+        &self.artwork_items
+    }
+
+    pub fn idea_sources(&self) -> &[IdeaSourceListItem] {
+        &self.idea_sources
+    }
+
+    pub fn review_queue(&self) -> &[ReviewQueueItem] {
+        &self.review_queue
+    }
+
+    pub fn search_results(&self) -> &[SearchResult] {
+        &self.search_results
+    }
+
+    pub fn selected_item(&self) -> Option<&ItemDetails> {
+        self.selected_item.as_ref()
+    }
+    pub fn trashed_items(&self) -> &[TrashedItem] {
+        &self.trashed_items
+    }
+
+    pub fn vault_problems(&self) -> &[VaultProblem] {
+        &self.vault_problems
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TauriCommandState {
+    shell: DesktopShell,
+}
+
+impl TauriCommandState {
+    pub fn with_app_state_dir(app_state_dir: impl AsRef<Path>) -> Self {
+        Self {
+            shell: DesktopShell::with_app_state_dir(app_state_dir),
+        }
+    }
+
+    pub fn startup(&self) -> Result<DesktopStartupView, DesktopShellError> {
+        self.shell.startup_state().map(DesktopStartupView::from)
+    }
+
+    pub fn active_vault_root(&self) -> Option<PathBuf> {
+        self.shell
+            .active_vault()
+            .map(|vault| vault.root().to_path_buf())
+    }
+
+    pub fn create_vault(&mut self, root: String) -> Result<ActiveVaultView, DesktopShellError> {
+        self.shell
+            .create_vault(root)
+            .map(ActiveVaultView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn open_vault(&mut self, root: String) -> Result<OpenVaultView, DesktopShellError> {
+        self.shell
+            .request_open_vault(root)
+            .map(OpenVaultView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn confirm_vault_repair(
+        &mut self,
+        root: String,
+    ) -> Result<ActiveVaultView, DesktopShellError> {
+        self.shell
+            .confirm_vault_repair(root)
+            .map(ActiveVaultView::from)
+    }
+
+    pub fn cancel_vault_repair(&mut self, root: String) -> Result<(), DesktopShellError> {
+        self.shell.cancel_vault_repair(root)
+    }
+
+    pub fn import_paintings(
+        &self,
+        command: ImportPaintingsCommand,
+    ) -> Result<Vec<SavedItemView>, DesktopShellError> {
+        self.shell
+            .import_paintings_folder(command.source_folder)
+            .map(|items| items.into_iter().map(SavedItemView::from).collect())
+    }
+
+    pub fn run_paintings_import<F>(
+        &self,
+        command: RunPaintingsImportCommand,
+        mut on_progress: F,
+    ) -> Result<ImportRunSummaryView, DesktopShellError>
+    where
+        F: FnMut(&ImportProgressView) -> bool,
+    {
+        self.shell
+            .run_paintings_import_with_metadata(
+                command.source_folder,
+                ArtworkImportMetadata {
+                    creator: non_empty(command.creator),
+                    year: non_empty(command.year),
+                    saving_reason: non_empty(command.saving_reason),
+                },
+                if command.import_exact_duplicates {
+                    ExactDuplicatePolicy::ImportAnyway
+                } else {
+                    ExactDuplicatePolicy::Skip
+                },
+                |progress| on_progress(&ImportProgressView::from(progress)),
+            )
+            .map(ImportRunSummaryView::from)
+    }
+
+    pub fn add_artwork_files(
+        &self,
+        command: AddArtworkFilesCommand,
+    ) -> Result<SelectedFileImportSummaryView, DesktopShellError> {
+        self.shell
+            .add_artwork_files_with_options(
+                command.source_files.into_iter().map(PathBuf::from),
+                ArtworkImportMetadata {
+                    creator: non_empty(command.creator),
+                    year: non_empty(command.year),
+                    saving_reason: non_empty(command.saving_reason),
+                },
+                if command.import_exact_duplicates {
+                    ExactDuplicatePolicy::ImportAnyway
+                } else {
+                    ExactDuplicatePolicy::Skip
+                },
+            )
+            .map(ArtworkImportOutcomeView::from)
+    }
+
+    pub fn capture_idea(
+        &self,
+        command: CaptureIdeaCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .manual_fallback_capture(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: None,
+            })
+            .map(SavedItemView::from)
+    }
+
+    pub fn capture_idea_source(
+        &self,
+        command: CaptureIdeaCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        if let Some(expected_root) = expected_active_root {
+            if self.active_vault_root().as_deref() != Some(expected_root) {
+                return Err(DesktopShellError::ActiveVaultChanged);
+            }
+        }
+        if non_empty(command.copied_text.clone()).is_some() {
+            return self
+                .capture_idea(command)
+                .map(|item| SourceCaptureResultView::Captured { item });
+        }
+        let extraction = match extractor.extract(SourceExtractionRequest {
+            source_link: command.source_link.clone(),
+        }) {
+            SourceExtraction::ExtractedText { title, cleaned_text } => SourceExtraction::ExtractedText { title, cleaned_text },
+            SourceExtraction::ExtractedImage { .. } => SourceExtraction::NeedsManualFallback {
+                reason: "This URL exposed an image but no readable Idea Source text; paste the source text instead".to_string(),
+            },
+            fallback => fallback,
+        };
+        struct Completed(SourceExtraction);
+        impl SourceExtractor for Completed {
+            fn extract(&self, _: SourceExtractionRequest) -> SourceExtraction {
+                self.0.clone()
+            }
+        }
+        self.capture_source_link(
+            CaptureSourceLinkCommand {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+            },
+            &Completed(extraction),
+            expected_active_root,
+        )
+    }
+
+    pub fn capture_source_link(
+        &self,
+        command: CaptureSourceLinkCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        if let Some(expected_root) = expected_active_root {
+            if self.active_vault_root().as_deref() != Some(expected_root) {
+                return Err(DesktopShellError::ActiveVaultChanged);
+            }
+        }
+        self.shell
+            .capture_source_link(
+                SourceLinkCapture {
+                    source_link: command.source_link,
+                    title: command.title,
+                    saving_reason: command.saving_reason,
+                },
+                extractor,
+            )
+            .map(SourceCaptureResultView::from)
+    }
+
+    pub fn capture_artwork_source_link(
+        &self,
+        command: CaptureSourceLinkCommand,
+        extractor: &dyn SourceExtractor,
+        expected_active_root: Option<&Path>,
+    ) -> Result<SourceCaptureResultView, DesktopShellError> {
+        struct ArtworkOnly<'a>(&'a dyn SourceExtractor);
+        impl SourceExtractor for ArtworkOnly<'_> {
+            fn extract(&self, request: SourceExtractionRequest) -> SourceExtraction {
+                match self.0.extract(request) {
+                    SourceExtraction::ExtractedText { .. } => SourceExtraction::NeedsManualFallback {
+                        reason: "This page exposed text but no painting image. Choose or paste its image to save in Paintings, or capture the page from Idea Sources.".to_string(),
+                    },
+                    result => result,
+                }
+            }
+        }
+        self.capture_source_link(command, &ArtworkOnly(extractor), expected_active_root)
+    }
+
+    pub fn capture_artwork_fallback(
+        &self,
+        command: ManualFallbackCaptureCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .capture_artwork_fallback(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: command.copied_image.map(|image| CopiedImage {
+                    file_name: image.file_name,
+                    bytes: image.bytes,
+                }),
+            })
+            .map(SavedItemView::from)
+    }
+
+    pub fn capture_manual_fallback(
+        &self,
+        command: ManualFallbackCaptureCommand,
+    ) -> Result<SavedItemView, DesktopShellError> {
+        self.shell
+            .manual_fallback_capture(ManualFallbackCapture {
+                source_link: command.source_link,
+                title: command.title,
+                saving_reason: command.saving_reason,
+                copied_text: command.copied_text,
+                copied_image: command.copied_image.map(|image| CopiedImage {
+                    file_name: image.file_name,
+                    bytes: image.bytes,
+                }),
+            })
+            .map(SavedItemView::from)
+    }
+
+    pub fn workbench_snapshot(
+        &self,
+        command: WorkbenchSnapshotCommand,
+    ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
+        self.shell
+            .workbench_snapshot(workbench_request(command)?)
+            .map(WorkbenchSnapshotView::from)
+    }
+
+    pub fn refresh_workbench(
+        &self,
+        command: WorkbenchSnapshotCommand,
+    ) -> Result<WorkbenchSnapshotView, DesktopShellError> {
+        self.shell
+            .refresh_workbench(workbench_request(command)?)
+            .map(WorkbenchSnapshotView::from)
+    }
+
+    pub fn prepare_thumbnail_previews(
+        &self,
+        limit: usize,
+    ) -> Result<ThumbnailPreparationView, DesktopShellError> {
+        self.shell
+            .prepare_thumbnail_previews(limit)
+            .map(ThumbnailPreparationView::from)
+    }
+
+    pub fn prepare_thumbnail_preview(&self, id: &str) -> Result<(), DesktopShellError> {
+        self.shell.prepare_thumbnail_preview(id)
+    }
+
+    pub fn activity_log_path(&self) -> Result<String, DesktopShellError> {
+        self.shell
+            .activity_log_path()
+            .map(|path| path_string(&path))
+    }
+
+    pub fn get_item_details(&self, id: String) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .item_details(&id)
+            .map(|details| ItemDetailsView::from(&details))
+    }
+
+    pub fn read_idea_source(&self, id: String) -> Result<IdeaSourceContentView, DesktopShellError> {
+        self.shell
+            .read_idea_source(&id)
+            .map(IdeaSourceContentView::from)
+    }
+
+    pub fn configure_openai_provider(
+        &self,
+        config: OpenAiProviderConfig,
+    ) -> Result<(), DesktopShellError> {
+        self.shell.configure_openai_provider(config)
+    }
+
+    pub fn openai_provider_status(&self) -> OpenAiProviderStatusView {
+        match self.shell.openai_provider_config() {
+            Ok(config) if !config.api_key.trim().is_empty() && !config.model.trim().is_empty() => {
+                OpenAiProviderStatusView {
+                    configured: true,
+                    model: Some(config.model),
+                }
+            }
+            _ => OpenAiProviderStatusView {
+                configured: false,
+                model: None,
+            },
+        }
+    }
+
+    pub fn shell_openai_provider_config(&self) -> Result<OpenAiProviderConfig, DesktopShellError> {
+        self.shell.openai_provider_config()
+    }
+
+    pub fn apply_artwork_enrichment_response(
+        &self,
+        id: String,
+        expected_revision: String,
+        budget_mode: AiBudgetMode,
+        response: AiProviderResponse,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .apply_artwork_enrichment_response(
+                &id,
+                &expected_revision,
+                budget_mode,
+                response,
+            )
+            .map(|details| ItemDetailsView::from(&details))
+    }
+
+    pub fn summarize_idea_source(
+        &self,
+        id: String,
+        budget_mode: &str,
+        provider: &dyn AiProvider,
+    ) -> Result<SummarizeIdeaSourceView, DesktopShellError> {
+        let budget_mode = parse_ai_budget_mode(budget_mode)?;
+        if budget_mode == AiBudgetMode::Off {
+            return Ok(SummarizeIdeaSourceView::Skipped {
+                reason: Some("AI budget is off".to_string()),
+            });
+        }
+        self.shell
+            .enrich_idea_with_ai(&id, budget_mode, provider)
+            .map(|result| match result.accepted_summary() {
+                Some(summary) => SummarizeIdeaSourceView::Generated {
+                    summary: summary.to_string(),
+                },
+                None => SummarizeIdeaSourceView::Unavailable {
+                    reason: Some("The provider returned no summary".to_string()),
+                },
+            })
+    }
+
+    pub fn move_item_to_trash(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .move_item_to_trash(&id)
+            .map(SavedItemView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn restore_trashed_item(&self, id: String) -> Result<SavedItemView, DesktopShellError> {
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .restore_trashed_item(&id)
+            .map(SavedItemView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn permanently_delete_trashed_item(
+        &self,
+        id: String,
+        confirmed_id: String,
+    ) -> Result<PermanentDeletionView, DesktopShellError> {
+        let vault = self
+            .shell
+            .active_vault
+            .as_ref()
+            .ok_or(DesktopShellError::NoActiveVault)?;
+        vault
+            .permanently_delete_trashed_item(&id, &confirmed_id)
+            .map(PermanentDeletionView::from)
+            .map_err(DesktopShellError::Vault)
+    }
+
+    pub fn save_item_record(
+        &self,
+        command: SaveItemRecordCommand,
+    ) -> Result<ItemRecordSaveView, DesktopShellError> {
+        let id = command.id.clone();
+        match self.shell.save_item_record_edit(command.into()) {
+            Ok(item) => Ok(ItemRecordSaveView::Saved {
+                item: ItemDetailsView::from(&item),
+            }),
+            Err(DesktopShellError::Vault(VaultError::ItemRecordConflict { .. })) => {
+                let external = self.shell.item_details(&id)?;
+                Ok(ItemRecordSaveView::Conflict {
+                    external_item: ItemDetailsView::from(&external),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn resolve_review_reason(
+        &self,
+        command: ResolveReviewReasonCommand,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        let action = match command.action.as_str() {
+            "accept" => ReviewReasonAction::Accept,
+            "correct" => ReviewReasonAction::Correct {
+                value: command.correction.unwrap_or_default(),
+            },
+            "dismiss" => ReviewReasonAction::Dismiss,
+            action => {
+                return Err(DesktopShellError::InvalidReviewReasonAction(
+                    action.to_string(),
+                ))
+            }
+        };
+        self.shell
+            .resolve_review_reason(ReviewReasonResolution {
+                item_id: command.item_id,
+                reason_id: command.reason_id,
+                expected_revision: command.expected_revision,
+                action,
+            })
+            .map(|item| ItemDetailsView::from(&item))
+    }
+
+    pub fn resolve_duplicate_candidate(
+        &self,
+        command: ResolveDuplicateCandidateCommand,
+    ) -> Result<DuplicateCandidateResolutionView, DesktopShellError> {
+        let action = match command.action.as_str() {
+            "not-a-duplicate" => DuplicateCandidateAction::NotADuplicate,
+            "keep-both" => DuplicateCandidateAction::KeepBoth,
+            "move-this-item-to-vault-trash" => DuplicateCandidateAction::MoveThisItemToVaultTrash,
+            action => {
+                return Err(DesktopShellError::InvalidReviewReasonAction(
+                    action.to_string(),
+                ))
+            }
+        };
+        self.shell
+            .resolve_duplicate_candidate(DuplicateCandidateResolution {
+                item_id: command.item_id,
+                reason_id: command.reason_id,
+                expected_revision: command.expected_revision,
+                action,
+            })
+            .map(|outcome| match outcome {
+                DuplicateCandidateResolutionOutcome::Active(item) => {
+                    DuplicateCandidateResolutionView::Active {
+                        item: ItemDetailsView::from(&item),
+                    }
+                }
+                DuplicateCandidateResolutionOutcome::MovedToVaultTrash(item) => {
+                    DuplicateCandidateResolutionView::MovedToVaultTrash {
+                        item: SavedItemView::from(item),
+                    }
+                }
+            })
+    }
+
+    pub fn confirm_item_folder_rename(
+        &self,
+        command: ConfirmItemFolderRenameCommand,
+    ) -> Result<ItemDetailsView, DesktopShellError> {
+        self.shell
+            .confirm_item_folder_rename(
+                &command.id,
+                &ItemFolderRenameProposal::reviewed(command.current_path, command.proposed_path),
+            )
+            .map(|item| ItemDetailsView::from(&item))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportPaintingsCommand {
+    pub source_folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunPaintingsImportCommand {
+    pub source_folder: String,
+    pub creator: Option<String>,
+    pub year: Option<String>,
+    pub saving_reason: Option<String>,
+    pub import_exact_duplicates: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveItemRecordCommand {
+    pub id: String,
+    pub expected_revision: String,
+    pub overwrite_conflict: bool,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub saving_reason: String,
+    pub summary: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveReviewReasonCommand {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: String,
+    pub correction: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveDuplicateCandidateCommand {
+    pub item_id: String,
+    pub reason_id: String,
+    pub expected_revision: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+pub enum DuplicateCandidateResolutionView {
+    Active { item: ItemDetailsView },
+    MovedToVaultTrash { item: SavedItemView },
+}
+
+impl From<SaveItemRecordCommand> for ItemRecordEdit {
+    fn from(command: SaveItemRecordCommand) -> Self {
+        Self {
+            id: command.id,
+            expected_revision: command.expected_revision,
+            overwrite_conflict: command.overwrite_conflict,
+            title: command.title,
+            creator: command.creator,
+            year: command.year,
+            saving_reason: command.saving_reason,
+            summary: command.summary,
+            tags: command.tags,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmItemFolderRenameCommand {
+    pub id: String,
+    pub current_path: String,
+    pub proposed_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportProgressView {
+    pub processed: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
+impl From<&ImportProgress> for ImportProgressView {
+    fn from(progress: &ImportProgress) -> Self {
+        Self {
+            processed: progress.processed(),
+            total: progress.total(),
+            current_file: progress.current_file().display().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportSkippedEntryView {
+    pub path: String,
+    pub reason: String,
+    pub existing_item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportDuplicateCandidateEntryView {
+    pub path: String,
+    pub item_id: String,
+    pub candidate_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportFailedEntryView {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportVaultProblemView {
+    pub path: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtworkImportOutcomeView {
+    pub imported_count: usize,
+    pub skipped_count: usize,
+    pub duplicate_candidate_count: usize,
+    pub exact_duplicate_count: usize,
+    pub cancelled_count: usize,
+    pub failed_count: usize,
+    pub cancelled: bool,
+    pub imported_items: Vec<SavedItemView>,
+    pub skipped_entries: Vec<ImportSkippedEntryView>,
+    pub duplicate_candidate_entries: Vec<ImportDuplicateCandidateEntryView>,
+    pub cancelled_files: Vec<String>,
+    pub failed_entries: Vec<ImportFailedEntryView>,
+    pub maintenance_errors: Vec<String>,
+    pub vault_problems: Vec<ImportVaultProblemView>,
+}
+
+pub type ImportRunSummaryView = ArtworkImportOutcomeView;
+pub type SelectedFileImportSummaryView = ArtworkImportOutcomeView;
+
+impl From<ImportRunSummary> for ArtworkImportOutcomeView {
+    fn from(summary: ImportRunSummary) -> Self {
+        Self::from_outcome(&summary)
+    }
+}
+
+impl From<SelectedFileImportSummary> for ArtworkImportOutcomeView {
+    fn from(summary: SelectedFileImportSummary) -> Self {
+        Self::from_outcome(&summary)
+    }
+}
+
+impl ArtworkImportOutcomeView {
+    fn from_outcome(summary: &ArtworkImportOutcome) -> Self {
+        Self {
+            imported_count: summary.imported_count(),
+            skipped_count: summary.skipped_count(),
+            duplicate_candidate_count: summary.duplicate_candidate_count(),
+            exact_duplicate_count: summary.exact_duplicate_count(),
+            cancelled_count: summary.cancelled_count(),
+            failed_count: summary.failed_count(),
+            cancelled: summary.was_cancelled(),
+            imported_items: summary
+                .imported_items()
+                .iter()
+                .cloned()
+                .map(SavedItemView::from)
+                .collect(),
+            skipped_entries: summary
+                .skipped_entries()
+                .iter()
+                .map(|entry| ImportSkippedEntryView {
+                    path: entry.path().display().to_string(),
+                    reason: entry.reason().to_string(),
+                    existing_item_id: entry.existing_item_id().map(ToOwned::to_owned),
+                })
+                .collect(),
+            duplicate_candidate_entries: summary
+                .duplicate_candidate_entries()
+                .iter()
+                .map(|entry| ImportDuplicateCandidateEntryView {
+                    path: entry.path().display().to_string(),
+                    item_id: entry.item_id().to_string(),
+                    candidate_count: entry.candidate_count(),
+                })
+                .collect(),
+            cancelled_files: summary
+                .cancelled_files()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            failed_entries: summary
+                .failed_entries()
+                .iter()
+                .map(|entry| ImportFailedEntryView {
+                    path: entry.path().display().to_string(),
+                    error: entry.error().to_string(),
+                })
+                .collect(),
+            maintenance_errors: summary.maintenance_errors().to_vec(),
+            vault_problems: summary
+                .vault_problems()
+                .iter()
+                .map(|problem| ImportVaultProblemView {
+                    path: problem.path().display().to_string(),
+                    error: problem.error().to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddArtworkFilesCommand {
+    pub source_files: Vec<String>,
+    pub creator: Option<String>,
+    pub year: Option<String>,
+    pub saving_reason: Option<String>,
+    pub import_exact_duplicates: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureIdeaCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+    pub copied_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureSourceLinkCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualFallbackCaptureCommand {
+    pub source_link: String,
+    pub title: String,
+    pub saving_reason: Option<String>,
+    pub copied_text: Option<String>,
+    pub copied_image: Option<CopiedImageCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopiedImageCommand {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbenchSnapshotCommand {
+    pub home_subvault: String,
+    pub artwork_sort: String,
+    pub search_query: Option<String>,
+    pub selected_item_id: Option<String>,
+}
+
+fn workbench_request(
+    command: WorkbenchSnapshotCommand,
+) -> Result<WorkbenchRequest, DesktopShellError> {
+    Ok(WorkbenchRequest {
+        home_subvault: command.home_subvault,
+        artwork_sort: parse_artwork_sort(&command.artwork_sort)?,
+        search_query: command.search_query,
+        selected_item_id: command.selected_item_id,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveVaultView {
+    pub root: String,
+}
+
+impl From<ActiveVault> for ActiveVaultView {
+    fn from(vault: ActiveVault) -> Self {
+        Self {
+            root: path_string(vault.root()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VaultRepairProposalView {
+    pub root: String,
+    pub directories: Vec<String>,
+}
+
+impl From<&VaultRepairProposal> for VaultRepairProposalView {
+    fn from(proposal: &VaultRepairProposal) -> Self {
+        Self {
+            root: path_string(proposal.root()),
+            directories: proposal
+                .directories()
+                .iter()
+                .map(|path| path_string(path))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OpenVaultView {
+    Opened { vault: ActiveVaultView },
+    RepairRequired { proposal: VaultRepairProposalView },
+}
+
+impl From<OpenVaultResult> for OpenVaultView {
+    fn from(result: OpenVaultResult) -> Self {
+        match result {
+            OpenVaultResult::Opened(vault) => Self::Opened {
+                vault: ActiveVaultView::from(vault),
+            },
+            OpenVaultResult::RepairRequired(proposal) => Self::RepairRequired {
+                proposal: VaultRepairProposalView::from(&proposal),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KnownVaultView {
+    pub root: String,
+}
+
+impl From<&KnownVault> for KnownVaultView {
+    fn from(vault: &KnownVault) -> Self {
+        Self {
+            root: path_string(vault.root()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DesktopStartupView {
+    pub active_vault: Option<ActiveVaultView>,
+    pub known_vaults: Vec<KnownVaultView>,
+    pub repair_proposal: Option<VaultRepairProposalView>,
+    pub notice: Option<String>,
+}
+
+impl From<DesktopStartup> for DesktopStartupView {
+    fn from(startup: DesktopStartup) -> Self {
+        Self {
+            active_vault: startup.active_vault().cloned().map(ActiveVaultView::from),
+            known_vaults: startup
+                .known_vaults()
+                .iter()
+                .map(KnownVaultView::from)
+                .collect(),
+            repair_proposal: startup.repair_proposal().map(VaultRepairProposalView::from),
+            notice: startup.notice().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SavedItemView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IdeaSourceContentView {
+    pub id: String,
+    pub source_link: String,
+    pub cleaned_text: String,
+    pub summary: Option<String>,
+}
+
+impl From<IdeaSourceContent> for IdeaSourceContentView {
+    fn from(source: IdeaSourceContent) -> Self {
+        Self {
+            id: source.id().to_string(),
+            source_link: source.source_link().to_string(),
+            cleaned_text: source.cleaned_text().to_string(),
+            summary: source.summary().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenAiProviderStatusView {
+    pub configured: bool,
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SummarizeIdeaSourceView {
+    Generated { summary: String },
+    Unavailable { reason: Option<String> },
+    Skipped { reason: Option<String> },
+    Failed { reason: Option<String> },
+}
+
+impl From<SavedItem> for SavedItemView {
+    fn from(item: SavedItem) -> Self {
+        Self {
+            id: item.id().to_string(),
+            home_subvault: item.home_subvault().to_string(),
+            item_folder: path_string(item.item_folder()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SourceCaptureResultView {
+    Captured {
+        item: SavedItemView,
+    },
+    NeedsManualFallback {
+        source_link: String,
+        title: String,
+        saving_reason: Option<String>,
+        reason: String,
+    },
+}
+
+impl From<SourceCaptureResult> for SourceCaptureResultView {
+    fn from(result: SourceCaptureResult) -> Self {
+        match result {
+            SourceCaptureResult::Captured(item) => Self::Captured {
+                item: SavedItemView::from(item),
+            },
+            SourceCaptureResult::NeedsManualFallback(prompt) => Self::NeedsManualFallback {
+                source_link: prompt.source_link().to_string(),
+                title: prompt.title().to_string(),
+                saving_reason: prompt.saving_reason().map(str::to_string),
+                reason: prompt.reason().to_string(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CollectionView {
+    pub id: String,
+    pub name: String,
+}
+
+impl From<&Collection> for CollectionView {
+    fn from(collection: &Collection) -> Self {
+        Self {
+            id: collection.id().to_string(),
+            name: collection.name().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtworkGridItemView {
+    pub id: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub primary_file: String,
+    pub thumbnail_file: String,
+    pub thumbnail_is_placeholder: bool,
+    pub review_status: String,
+}
+
+impl From<&ArtworkGridItem> for ArtworkGridItemView {
+    fn from(item: &ArtworkGridItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            title: item.title().to_string(),
+            creator: item.creator().to_string(),
+            year: item.year().to_string(),
+            primary_file: path_string(item.primary_file()),
+            thumbnail_file: path_string(item.thumbnail_file()),
+            thumbnail_is_placeholder: item.thumbnail_is_placeholder(),
+            review_status: item.review_status().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IdeaSourceItemView {
+    pub id: String,
+    pub title: String,
+    pub source_link: String,
+    pub source_copy: Option<String>,
+    pub review_status: String,
+    pub saving_reason: Option<String>,
+}
+
+impl From<&IdeaSourceListItem> for IdeaSourceItemView {
+    fn from(item: &IdeaSourceListItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            title: item.title().to_string(),
+            source_link: item.source_link().to_string(),
+            source_copy: item.source_copy().map(path_string),
+            review_status: item.review_status().to_string(),
+            saving_reason: item.saving_reason().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewQueueItemView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_type: String,
+    pub title: String,
+    pub review_status: String,
+    pub saving_reason: Option<String>,
+    pub review_reasons: Vec<ReviewReasonView>,
+}
+
+impl From<&ReviewQueueItem> for ReviewQueueItemView {
+    fn from(item: &ReviewQueueItem) -> Self {
+        Self {
+            id: item.saved_item().id().to_string(),
+            home_subvault: item.home_subvault().to_string(),
+            item_type: item.item_type().to_string(),
+            title: item.title().to_string(),
+            review_status: item.review_status().to_string(),
+            saving_reason: item.saving_reason().map(str::to_string),
+            review_reasons: item
+                .review_reasons()
+                .iter()
+                .map(ReviewReasonView::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewReasonView {
+    pub id: String,
+    pub kind: String,
+    pub target_field: Option<String>,
+    pub message: String,
+    pub evidence: String,
+    pub candidate_item_id: Option<String>,
+}
+
+impl From<&ReviewReason> for ReviewReasonView {
+    fn from(reason: &ReviewReason) -> Self {
+        Self {
+            id: reason.id().to_string(),
+            kind: reason.kind().to_string(),
+            target_field: reason.target_field().map(str::to_string),
+            message: reason.message().to_string(),
+            evidence: reason.evidence().to_string(),
+            candidate_item_id: reason.candidate_item_id().map(str::to_string),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SearchResultView {
+    pub id: String,
+    pub home_subvault: String,
+    pub title: String,
+}
+
+impl From<&SearchResult> for SearchResultView {
+    fn from(result: &SearchResult) -> Self {
+        Self {
+            id: result.saved_item().id().to_string(),
+            home_subvault: result.saved_item().home_subvault().to_string(),
+            title: result.title().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemDetailsView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub primary_file: String,
+    pub review_status: String,
+    pub review_reasons: Vec<ReviewReasonView>,
+    pub duplicate_candidates: Vec<DuplicateCandidateView>,
+    pub tags: Vec<String>,
+    pub collections: Vec<String>,
+    pub item_links: Vec<ItemLinkView>,
+    pub saving_reason: Option<String>,
+    pub source_link: Option<String>,
+    pub summary: Option<String>,
+    pub source_copy: Option<String>,
+    pub record_revision: String,
+    pub folder_rename_proposal: Option<ItemFolderRenameProposalView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DuplicateCandidateView {
+    pub item_id: String,
+    pub signal: String,
+}
+
+impl From<&ItemDetails> for ItemDetailsView {
+    fn from(details: &ItemDetails) -> Self {
+        Self {
+            id: details.id().to_string(),
+            home_subvault: details.home_subvault().to_string(),
+            item_folder: path_string(details.item_folder()),
+            title: details.title().to_string(),
+            creator: details.creator().to_string(),
+            year: details.year().to_string(),
+            primary_file: path_string(details.primary_file()),
+            review_status: details.review_status().to_string(),
+            review_reasons: details
+                .review_reasons()
+                .iter()
+                .map(ReviewReasonView::from)
+                .collect(),
+            duplicate_candidates: details
+                .duplicate_candidates()
+                .iter()
+                .map(|candidate| DuplicateCandidateView {
+                    item_id: candidate.item_id().to_string(),
+                    signal: candidate.signal().to_string(),
+                })
+                .collect(),
+            tags: details.tags().into_iter().map(str::to_string).collect(),
+            collections: details
+                .collections()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            item_links: details
+                .item_links()
+                .iter()
+                .map(|link| ItemLinkView {
+                    link_type: link.link_type().to_string(),
+                    target: link.target().to_string(),
+                    label: link.label().to_string(),
+                    target_in_vault_trash: link.target_in_vault_trash(),
+                })
+                .collect(),
+            saving_reason: details.saving_reason().map(str::to_string),
+            source_link: details.source_link().map(str::to_string),
+            summary: details.summary().map(str::to_string),
+            source_copy: details.source_copy().map(path_string),
+            record_revision: details.record_revision().to_string(),
+            folder_rename_proposal: details
+                .folder_rename_proposal()
+                .map(ItemFolderRenameProposalView::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ItemLinkView {
+    pub link_type: String,
+    pub target: String,
+    pub label: String,
+    pub target_in_vault_trash: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ItemFolderRenameProposalView {
+    pub current_path: String,
+    pub proposed_path: String,
+}
+
+impl From<&ItemFolderRenameProposal> for ItemFolderRenameProposalView {
+    fn from(proposal: &ItemFolderRenameProposal) -> Self {
+        Self {
+            current_path: path_string(proposal.current_path()),
+            proposed_path: path_string(proposal.proposed_path()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ItemRecordSaveView {
+    Saved { item: ItemDetailsView },
+    Conflict { external_item: ItemDetailsView },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WorkbenchSnapshotView {
+    pub active_vault: ActiveVaultView,
+    pub subvaults: Vec<String>,
+    pub collections: Vec<CollectionView>,
+    pub artwork_items: Vec<ArtworkGridItemView>,
+    pub idea_sources: Vec<IdeaSourceItemView>,
+    pub review_queue: Vec<ReviewQueueItemView>,
+    pub search_results: Vec<SearchResultView>,
+    pub selected_item: Option<ItemDetailsView>,
+    pub trashed_items: Vec<TrashedItemView>,
+    pub vault_problems: Vec<VaultProblemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ThumbnailPreparationView {
+    pub generated: usize,
+    pub remaining: usize,
+}
+
+impl From<ThumbnailPreparation> for ThumbnailPreparationView {
+    fn from(preparation: ThumbnailPreparation) -> Self {
+        Self {
+            generated: preparation.generated(),
+            remaining: preparation.remaining(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TrashedItemView {
+    pub id: String,
+    pub home_subvault: String,
+    pub item_folder: String,
+    pub title: String,
+    pub creator: String,
+    pub year: String,
+    pub review_status: String,
+    pub tags: Vec<String>,
+    pub collections: Vec<String>,
+    pub incoming_item_links: Vec<IncomingItemLinkView>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IncomingItemLinkView {
+    pub source_item_id: String,
+    pub label: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PermanentDeletionView {
+    pub id: String,
+    pub collections: Vec<String>,
+    pub incoming_item_links: Vec<IncomingItemLinkView>,
+}
+impl From<PermanentDeletion> for PermanentDeletionView {
+    fn from(outcome: PermanentDeletion) -> Self {
+        Self {
+            id: outcome.id().into(),
+            collections: outcome.collections().to_vec(),
+            incoming_item_links: outcome
+                .incoming_item_links()
+                .iter()
+                .map(|link| IncomingItemLinkView {
+                    source_item_id: link.source_item_id().into(),
+                    label: link.label().into(),
+                })
+                .collect(),
+        }
+    }
+}
+impl From<&TrashedItem> for TrashedItemView {
+    fn from(item: &TrashedItem) -> Self {
+        Self {
+            id: item.id().into(),
+            home_subvault: item.home_subvault().into(),
+            item_folder: path_string(item.item_folder()),
+            title: item.title().into(),
+            creator: item.creator().into(),
+            year: item.year().into(),
+            review_status: item.review_status().into(),
+            tags: item.tags().into_iter().map(str::to_string).collect(),
+            collections: item.collections().into_iter().map(str::to_string).collect(),
+            incoming_item_links: item
+                .incoming_item_links()
+                .iter()
+                .map(|l| IncomingItemLinkView {
+                    source_item_id: l.source_item_id().into(),
+                    label: l.label().into(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VaultProblemView {
+    pub path: String,
+    pub error: String,
+}
+
+impl From<&VaultProblem> for VaultProblemView {
+    fn from(problem: &VaultProblem) -> Self {
+        Self {
+            path: path_string(problem.path()),
+            error: problem.error().to_string(),
+        }
+    }
+}
+
+impl From<WorkbenchSnapshot> for WorkbenchSnapshotView {
+    fn from(snapshot: WorkbenchSnapshot) -> Self {
+        Self {
+            active_vault: ActiveVaultView::from(snapshot.active_vault().clone()),
+            subvaults: snapshot.subvaults().to_vec(),
+            collections: snapshot
+                .collections()
+                .iter()
+                .map(CollectionView::from)
+                .collect(),
+            artwork_items: snapshot
+                .artwork_items()
+                .iter()
+                .map(ArtworkGridItemView::from)
+                .collect(),
+            idea_sources: snapshot
+                .idea_sources()
+                .iter()
+                .map(IdeaSourceItemView::from)
+                .collect(),
+            review_queue: snapshot
+                .review_queue()
+                .iter()
+                .map(ReviewQueueItemView::from)
+                .collect(),
+            search_results: snapshot
+                .search_results()
+                .iter()
+                .map(SearchResultView::from)
+                .collect(),
+            selected_item: snapshot.selected_item().map(ItemDetailsView::from),
+            trashed_items: snapshot
+                .trashed_items()
+                .iter()
+                .map(TrashedItemView::from)
+                .collect(),
+            vault_problems: snapshot
+                .vault_problems()
+                .iter()
+                .map(VaultProblemView::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenVaultResult {
+    Opened(ActiveVault),
+    RepairRequired(VaultRepairProposal),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveVault {
+    root: PathBuf,
+}
+
+impl ActiveVault {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl From<&Path> for ActiveVault {
+    fn from(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownVault {
+    root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopStartup {
+    active_vault: Option<ActiveVault>,
+    known_vaults: Vec<KnownVault>,
+    repair_proposal: Option<VaultRepairProposal>,
+    notice: Option<String>,
+}
+
+impl DesktopStartup {
+    pub fn active_vault(&self) -> Option<&ActiveVault> {
+        self.active_vault.as_ref()
+    }
+
+    pub fn known_vaults(&self) -> &[KnownVault] {
+        &self.known_vaults
+    }
+
+    pub fn repair_proposal(&self) -> Option<&VaultRepairProposal> {
+        self.repair_proposal.as_ref()
+    }
+
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+}
+
+impl KnownVault {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiProviderConfig {
+    pub api_key: String,
+    pub model: String,
+}
+
+impl OpenAiProviderConfig {
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+#[derive(Debug)]
+pub enum DesktopShellError {
+    NoActiveVault,
+    ActiveVaultChanged,
+    NoPendingVaultRepair(PathBuf),
+    AppStateNotConfigured,
+    MalformedProviderConfig(PathBuf),
+    UnsupportedArtworkSort(String),
+    UnsupportedAiBudgetMode(String),
+    InvalidReviewReasonAction(String),
+    Io(io::Error),
+    Vault(VaultError),
+}
+
+impl std::fmt::Display for DesktopShellError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoActiveVault => write!(f, "no active vault is open"),
+            Self::ActiveVaultChanged => write!(
+                f,
+                "Active Vault changed while the Source Link was being captured"
+            ),
+            Self::NoPendingVaultRepair(path) => {
+                write!(f, "no vault repair is pending for: {}", path.display())
+            }
+            Self::AppStateNotConfigured => write!(f, "app state directory is not configured"),
+            Self::MalformedProviderConfig(path) => {
+                write!(f, "provider config is malformed: {}", path.display())
+            }
+            Self::UnsupportedArtworkSort(sort) => write!(f, "unsupported artwork sort: {sort}"),
+            Self::UnsupportedAiBudgetMode(mode) => write!(f, "unsupported AI budget mode: {mode}"),
+            Self::InvalidReviewReasonAction(action) => {
+                write!(f, "invalid review reason action: {action}")
+            }
+            Self::Io(error) => write!(f, "{error}"),
+            Self::Vault(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for DesktopShellError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NoActiveVault => None,
+            Self::ActiveVaultChanged => None,
+            Self::NoPendingVaultRepair(_) => None,
+            Self::AppStateNotConfigured => None,
+            Self::MalformedProviderConfig(_) => None,
+            Self::UnsupportedArtworkSort(_) => None,
+            Self::UnsupportedAiBudgetMode(_) => None,
+            Self::InvalidReviewReasonAction(_) => None,
+            Self::Io(error) => Some(error),
+            Self::Vault(error) => Some(error),
+        }
+    }
+}
+
+fn openai_provider_config_toml(config: &OpenAiProviderConfig) -> String {
+    format!(
+        "api_key = \"{}\"\nmodel = \"{}\"\n",
+        escape_toml_string(&config.api_key),
+        escape_toml_string(&config.model)
+    )
+}
+
+fn parse_openai_provider_config(
+    path: &Path,
+    contents: &str,
+) -> Result<OpenAiProviderConfig, DesktopShellError> {
+    let api_key = toml_string_value(contents, "api_key")
+        .ok_or_else(|| DesktopShellError::MalformedProviderConfig(path.to_path_buf()))?;
+    let model = toml_string_value(contents, "model")
+        .ok_or_else(|| DesktopShellError::MalformedProviderConfig(path.to_path_buf()))?;
+
+    Ok(OpenAiProviderConfig { api_key, model })
+}
+
+fn toml_string_value(contents: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key} = \"");
+    contents.lines().find_map(|line| {
+        let value = line.strip_prefix(&prefix)?.strip_suffix('"')?;
+        Some(value.replace("\\\"", "\"").replace("\\\\", "\\"))
+    })
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn path_string(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn parse_artwork_sort(sort: &str) -> Result<ArtworkSort, DesktopShellError> {
+    match sort {
+        "newest" => Ok(ArtworkSort::Newest),
+        "oldest" => Ok(ArtworkSort::Oldest),
+        "title" => Ok(ArtworkSort::Title),
+        "creator" => Ok(ArtworkSort::Creator),
+        "year" => Ok(ArtworkSort::Year),
+        _ => Err(DesktopShellError::UnsupportedArtworkSort(sort.to_string())),
+    }
+}
+
+fn parse_ai_budget_mode(mode: &str) -> Result<AiBudgetMode, DesktopShellError> {
+    match mode {
+        "off" => Ok(AiBudgetMode::Off),
+        "cheap" => Ok(AiBudgetMode::Cheap),
+        "standard" => Ok(AiBudgetMode::Standard),
+        "deep" => Ok(AiBudgetMode::Deep),
+        value => Err(DesktopShellError::UnsupportedAiBudgetMode(
+            value.to_string(),
+        )),
+    }
+}
+
+fn read_known_vault_roots(app_state_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let path = app_state_dir.join(KNOWN_VAULTS_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    Ok(fs::read_to_string(path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
+fn write_known_vault_roots(app_state_dir: &Path, roots: &[PathBuf]) -> Result<(), VaultError> {
+    fs::create_dir_all(app_state_dir)?;
+    let mut contents = String::new();
+    for root in roots {
+        contents.push_str(&root.display().to_string());
+        contents.push('\n');
+    }
+    fs::write(app_state_dir.join(KNOWN_VAULTS_FILE), contents)?;
+    Ok(())
+}
+
+fn read_last_active_vault_root(app_state_dir: &Path) -> io::Result<Option<PathBuf>> {
+    let path = app_state_dir.join(LAST_ACTIVE_VAULT_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let root = fs::read_to_string(path)?;
+    let root = root.trim_end();
+    if root.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(PathBuf::from(root)))
+}
+
+fn write_last_active_vault_root(app_state_dir: &Path, root: &Path) -> Result<(), VaultError> {
+    fs::create_dir_all(app_state_dir)?;
+    fs::write(
+        app_state_dir.join(LAST_ACTIVE_VAULT_FILE),
+        root.display().to_string(),
+    )?;
+    Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub struct OpenAiResponsesProvider {
+    client: reqwest::blocking::Client,
+    api_key: String,
+    model: String,
+}
+
+#[cfg(feature = "tauri-runtime")]
+impl OpenAiResponsesProvider {
+    pub fn new(config: OpenAiProviderConfig) -> Result<Self, String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|error| format!("OpenAI client could not start: {error}"))?;
+        Ok(Self {
+            client,
+            api_key: config.api_key,
+            model: config.model,
+        })
+    }
+
+    pub fn summarize(
+        &self,
+        cleaned_text: &str,
+        budget_mode: AiBudgetMode,
+    ) -> Result<gruenes_gewolbe_core::AiProviderResponse, String> {
+        let (max_input_chars, max_output_tokens) = match budget_mode {
+            AiBudgetMode::Off => return Err("AI budget is off".to_string()),
+            AiBudgetMode::Cheap => (40_000, 250),
+            AiBudgetMode::Standard => (100_000, 500),
+            AiBudgetMode::Deep => (200_000, 800),
+        };
+        if cleaned_text.chars().count() > max_input_chars {
+            return Err(format!("Preserved source is too long for the selected AI budget (limit: {max_input_chars} characters)"));
+        }
+        let response = self.client
+            .post("https://api.openai.com/v1/responses")
+            .bearer_auth(&self.api_key)
+            .json(&serde_json::json!({
+                "model": self.model,
+                "instructions": "Summarize this preserved source faithfully. State its central point, the main supporting ideas, and why it may be useful later. Do not invent facts. Return only the summary in compact prose.",
+                "input": cleaned_text,
+                "max_output_tokens": max_output_tokens,
+                "store": false
+            }))
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map_err(|error| format!("OpenAI summary request failed: {error}"))?;
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        response
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("OpenAI summary response could not be read: {error}"))?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("OpenAI summary response exceeded the 1 MiB limit".to_string());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("OpenAI summary response was invalid: {error}"))?;
+        if value.get("status").and_then(serde_json::Value::as_str) != Some("completed") {
+            return Err("OpenAI did not complete the summary response".to_string());
+        }
+        let summary = value
+            .get("output")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.get("content").and_then(serde_json::Value::as_array))
+            .flatten()
+            .find_map(|content| {
+                (content.get("type").and_then(serde_json::Value::as_str) == Some("output_text"))
+                    .then(|| content.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+            })
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| "OpenAI returned no summary text".to_string())?
+            .to_string();
+        Ok(gruenes_gewolbe_core::AiProviderResponse {
+            summary: Some(summary),
+            tags: Vec::new(),
+            suggestions: Vec::new(),
+            better_file_candidates: Vec::new(),
+            estimated_cost_cents: 0,
+        })
+    }
+}

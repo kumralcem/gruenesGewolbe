@@ -1,0 +1,57 @@
+
+> gruenes-gewolbe-desktop-ui@0.1.0 test /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> bash ../../scripts/check-bounded.sh pnpm exec playwright test
+
+Running as unit: run-p74304-i67668.service
+
+Running 42 tests using 1 worker
+
+  ✓   1 tests/browser/artwork-organization.spec.ts:20:1 › opens Settings without a Vault and persists bounded enrichment controls (1.1s)
+  ✓   2 tests/browser/artwork-organization.spec.ts:41:1 › keeps artwork details sticky and refreshes locally on focus (1.6s)
+  ✓   3 tests/browser/artwork-organization.spec.ts:69:1 › Paintings fallback preserves a pasted image through the artwork destination (1.0s)
+  ✓   4 tests/browser/artwork-organization.spec.ts:95:1 › starts bounded enrichment and sends cancellation separately from focus refresh (835ms)
+  ✓   5 tests/browser/artwork-organization.spec.ts:116:1 › recovers a paused enrichment checkpoint and resumes to completed (865ms)
+  ✓   6 tests/browser/artwork-organization.spec.ts:136:1 › shows a rejected provider without leaving a batch running (1.0s)
+  ✓   7 tests/browser/artwork.spec.ts:3:1 › adds selected artwork files, sorts the gallery, and opens primary-file details (1.1s)
+  ✓   8 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Not a Duplicate (911ms)
+  ✓   9 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Keep Both (929ms)
+  ✓  10 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Move This Item to Vault Trash (1.0s)
+  ✓  11 tests/browser/import-run.spec.ts:4:1 › shows Import Run progress, supports cancellation, and renders the partial summary (815ms)
+  ✓  12 tests/browser/item-record-editing.spec.ts:4:1 › edits an Item Record, resolves conflicts, refreshes, and confirms a folder rename (1.9s)
+  ✓  13 tests/browser/malformed-records.spec.ts:3:1 › keeps valid Saved Items usable around a malformed Item Record (1.3s)
+  ✓  14 tests/browser/review-reasons.spec.ts:4:1 › opens Review Queue reasons and resolves each concern independently (1.1s)
+  ✓  15 tests/browser/startup.spec.ts:3:1 › first launch offers only functional vault actions (688ms)
+  ✓  16 tests/browser/startup.spec.ts:37:1 › creates a format-v2 vault in the selected folder (729ms)
+  ✓  17 tests/browser/startup.spec.ts:73:1 › shows a creation refusal without activating the folder (622ms)
+  ✓  18 tests/browser/startup.spec.ts:107:1 › opens a known vault from the navigation (709ms)
+  ✓  19 tests/browser/startup.spec.ts:142:1 › opens a selected vault through the native-dialog boundary (684ms)
+  ✓  20 tests/browser/startup.spec.ts:183:1 › shows a native-dialog failure as a visible error (690ms)
+  ✓  21 tests/browser/startup.spec.ts:217:1 › renders a restored last-active vault on restart (700ms)
+  ✓  22 tests/browser/startup.spec.ts:249:1 › keeps a missing last-active vault visible and explains the fallback (595ms)
+  ✓  23 tests/browser/startup.spec.ts:283:1 › lists proposed repair directories and cancellation leaves the vault unopened (754ms)
+  ✓  24 tests/browser/startup.spec.ts:330:1 › confirmed repair opens the repaired vault (693ms)
+  ✓  25 tests/browser/startup.spec.ts:368:1 › unsafe structural conflicts remain visible errors (650ms)
+  ✓  26 tests/browser/thumbnail-preparation.spec.ts:3:1 › shows the gallery before preparing missing Thumbnail Previews in background batches (930ms)
+  ✓  27 tests/browser/thumbnail-preparation.spec.ts:78:1 › does not rebuild the full workbench after every background Thumbnail Preview (1.1s)
+  ✓  28 tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied (1.2s)
+  ✓  29 tests/browser/url-capture.spec.ts:61:1 › shows an automatically generated summary when a provider is configured (1.0s)
+  ✓  30 tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key (852ms)
+  ✓  31 tests/browser/url-capture.spec.ts:123:1 › never saves an empty fallback from the Paintings link capture (887ms)
+  ✓  32 tests/browser/url-capture.spec.ts:149:1 › captures a supported Wikimedia source without opening Manual Fallback (800ms)
+  ✓  33 tests/browser/vault-trash.spec.ts:3:1 › moves an item to visible Vault Trash and restores it (998ms)
+  ✓  34 tests/browser/vault-trash.spec.ts:31:1 › permanent deletion shows impact and requires the stable item ID (874ms)
+  ✓  35 tests/browser/workbench-interactions.spec.ts:7:1 › keeps delayed Item Details responsive and scoped to the latest selection (3.9s)
+  ✓  36 tests/browser/workbench-interactions.spec.ts:100:1 › uses lightweight Item Details for artwork selection and ignores stale responses (973ms)
+  ✓  37 tests/browser/workbench-interactions.spec.ts:146:1 › opens an Idea Source reader when selected from search results (799ms)
+  ✓  38 tests/browser/workbench-interactions.spec.ts:179:1 › ignores a delayed Idea Source reader after switching to Paintings (1.2s)
+  ✓  39 tests/browser/workbench-interactions.spec.ts:217:1 › keeps navigation in the viewport and opens dismissible details without jumping (1.3s)
+  ✓  40 tests/browser/workbench-interactions.spec.ts:286:1 › places Vault Trash after the Saved Item gallery (597ms)
+  ✓  41 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the desktop viewport (991ms)
+  ✓  42 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the constrained viewport (721ms)
+
+  42 passed (46.3s)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 47.189s
+             CPU time consumed: 43.874s
+                   Memory peak: 884.8M (swap: 0B)

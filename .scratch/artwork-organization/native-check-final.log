@@ -1,0 +1,8 @@
+Running as unit: run-p78072-i96314.service
+    Checking gruenes-gewolbe-desktop v0.1.0 (/home/cem/Sync/Projects/gruenesGewolbe/apps/desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.44s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1.504s
+             CPU time consumed: 1.395s
+                   Memory peak: 355.9M (swap: 0B)

@@ -1,0 +1,24 @@
+Running as unit: run-p61113-i86872.service
+   Compiling gruenes-gewolbe-core v0.1.0 (/home/cem/Sync/Projects/gruenesGewolbe/crates/archive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.55s
+     Running tests/capture.rs (target/debug/deps/capture-adfb71b77194d494)
+
+running 10 tests
+test idea_source_reader_rejects_symlinks_outside_the_item_folder ... ok
+test idea_source_reader_rejects_traversal_and_empty_source_copies ... ok
+test oversized_pasted_text_is_rejected_before_an_item_folder_is_created ... ok
+test preserved_idea_source_can_be_read_after_reopening_offline ... ok
+test url_capture_persists_extracted_cleaned_text_when_extraction_succeeds ... ok
+test url_capture_preserves_extracted_visual_bytes_with_source_provenance ... ok
+test url_capture_returns_a_manual_fallback_prompt_when_extraction_is_blocked ... ok
+test user_can_capture_a_source_link_with_extracted_cleaned_text ... ok
+test user_can_capture_a_source_link_with_manual_fallback_image_bytes ... ok
+test user_can_capture_a_source_link_with_manual_fallback_text ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 3.765s
+             CPU time consumed: 3.527s
+                   Memory peak: 454.5M (swap: 0B)

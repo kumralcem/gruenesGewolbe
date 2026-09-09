@@ -1,0 +1,52 @@
+
+> gruenes-gewolbe-desktop-ui@0.1.0 test /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> bash ../../scripts/check-bounded.sh pnpm exec playwright test tests/browser/artwork-organization.spec.ts
+
+Running as unit: run-p61909-i62589.service
+
+Running 4 tests using 1 worker
+
+  ✓  1 tests/browser/artwork-organization.spec.ts:20:1 › opens Settings without a Vault and persists bounded enrichment controls (1.1s)
+  ✓  2 tests/browser/artwork-organization.spec.ts:41:1 › keeps artwork details sticky and refreshes locally on focus (980ms)
+  ✘  3 tests/browser/artwork-organization.spec.ts:60:1 › Paintings fallback preserves a pasted image through the artwork destination (5.9s)
+  ✓  4 tests/browser/artwork-organization.spec.ts:86:1 › starts bounded enrichment and sends cancellation separately from focus refresh (1.0s)
+
+
+  1) tests/browser/artwork-organization.spec.ts:60:1 › Paintings fallback preserves a pasted image through the artwork destination
+
+    Error: expect(received).toContain(expected) // indexOf
+
+    Expected value: "artwork:study.png:"
+    Received array: ["artwork:study.png:null"]
+
+    Call Log:
+    - Timeout 5000ms exceeded while waiting on the predicate
+
+      81 |   });
+      82 |   await page.getByRole("button", { name: "Save Artwork" }).click();
+    > 83 |   await expect.poll(() => page.evaluate(() => (window as unknown as { __testCalls: string[] }).__testCalls)).toContain("artwork:study.png:");
+         |                                                                                                              ^
+      84 | });
+      85 |
+      86 | test("starts bounded enrichment and sends cancellation separately from focus refresh", async ({ page }) => {
+        at /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/artwork-organization.spec.ts:83:110
+
+    Error Context: test-results/artwork-organization-Paint-e6cff-ugh-the-artwork-destination/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/artwork-organization-Paint-e6cff-ugh-the-artwork-destination/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/artwork-organization-Paint-e6cff-ugh-the-artwork-destination/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    tests/browser/artwork-organization.spec.ts:60:1 › Paintings fallback preserves a pasted image through the artwork destination
+  3 passed (12.8s)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 13.738s
+             CPU time consumed: 8.733s
+                   Memory peak: 893.3M (swap: 0B)
+ ELIFECYCLE  Test failed. See above for more details.

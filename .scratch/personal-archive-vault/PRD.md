@@ -123,6 +123,7 @@ The vault files are canonical. Derived indexes, embeddings, cached thumbnails, a
 - Tauri command tests should be thin and confirm that UI-facing commands call archive core behavior correctly.
 - CLI tests should use the same archive core seam and verify command-level behavior for validation, import, rebuild, search, and inspect.
 - UI tests should focus on workbench workflows at a high level: open vault, browse subvault, search, inspect item details, edit metadata, review item, and import paintings.
+- For the first usable Linux workbench, run browser-level Playwright tests against controlled Tauri-command responses and keep a manual smoke checklist for the real Tauri window. Revisit automated native-window end-to-end testing once the Offline Archive Loop is stable and its maintenance cost can be justified.
 
 ## Out of Scope
 

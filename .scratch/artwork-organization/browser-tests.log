@@ -1,0 +1,218 @@
+
+> gruenes-gewolbe-desktop-ui@0.1.0 test /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop
+> bash ../../scripts/check-bounded.sh pnpm exec playwright test
+
+Running as unit: run-p63863-i54515.service
+
+Running 40 tests using 1 worker
+
+  ✓   1 tests/browser/artwork-organization.spec.ts:20:1 › opens Settings without a Vault and persists bounded enrichment controls (1.2s)
+  ✓   2 tests/browser/artwork-organization.spec.ts:41:1 › keeps artwork details sticky and refreshes locally on focus (994ms)
+  ✓   3 tests/browser/artwork-organization.spec.ts:60:1 › Paintings fallback preserves a pasted image through the artwork destination (1.0s)
+  ✓   4 tests/browser/artwork-organization.spec.ts:86:1 › starts bounded enrichment and sends cancellation separately from focus refresh (788ms)
+  ✓   5 tests/browser/artwork.spec.ts:3:1 › adds selected artwork files, sorts the gallery, and opens primary-file details (1.3s)
+  ✓   6 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Not a Duplicate (1.1s)
+  ✓   7 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Keep Both (999ms)
+  ✓   8 tests/browser/duplicate-candidate-resolution.spec.ts:4:3 › shows comparison evidence and resolves with Move This Item to Vault Trash (988ms)
+  ✓   9 tests/browser/import-run.spec.ts:4:1 › shows Import Run progress, supports cancellation, and renders the partial summary (906ms)
+  ✓  10 tests/browser/item-record-editing.spec.ts:4:1 › edits an Item Record, resolves conflicts, refreshes, and confirms a folder rename (1.8s)
+  ✓  11 tests/browser/malformed-records.spec.ts:3:1 › keeps valid Saved Items usable around a malformed Item Record (1.1s)
+  ✓  12 tests/browser/review-reasons.spec.ts:4:1 › opens Review Queue reasons and resolves each concern independently (962ms)
+  ✓  13 tests/browser/startup.spec.ts:3:1 › first launch offers only functional vault actions (685ms)
+  ✓  14 tests/browser/startup.spec.ts:37:1 › creates a format-v2 vault in the selected folder (795ms)
+  ✓  15 tests/browser/startup.spec.ts:73:1 › shows a creation refusal without activating the folder (625ms)
+  ✓  16 tests/browser/startup.spec.ts:107:1 › opens a known vault from the navigation (737ms)
+  ✓  17 tests/browser/startup.spec.ts:142:1 › opens a selected vault through the native-dialog boundary (743ms)
+  ✓  18 tests/browser/startup.spec.ts:183:1 › shows a native-dialog failure as a visible error (621ms)
+  ✓  19 tests/browser/startup.spec.ts:217:1 › renders a restored last-active vault on restart (674ms)
+  ✓  20 tests/browser/startup.spec.ts:249:1 › keeps a missing last-active vault visible and explains the fallback (587ms)
+  ✓  21 tests/browser/startup.spec.ts:283:1 › lists proposed repair directories and cancellation leaves the vault unopened (782ms)
+  ✓  22 tests/browser/startup.spec.ts:330:1 › confirmed repair opens the repaired vault (744ms)
+  ✓  23 tests/browser/startup.spec.ts:368:1 › unsafe structural conflicts remain visible errors (649ms)
+  ✓  24 tests/browser/thumbnail-preparation.spec.ts:3:1 › shows the gallery before preparing missing Thumbnail Previews in background batches (923ms)
+  ✓  25 tests/browser/thumbnail-preparation.spec.ts:78:1 › does not rebuild the full workbench after every background Thumbnail Preview (1.5s)
+  ✘  26 tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied (30.0s)
+  ✓  27 tests/browser/url-capture.spec.ts:61:1 › shows an automatically generated summary when a provider is configured (1.4s)
+  ✘  28 tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key (30.0s)
+  ✓  29 tests/browser/url-capture.spec.ts:123:1 › never saves an empty fallback from the Paintings link capture (1.2s)
+  ✓  30 tests/browser/url-capture.spec.ts:149:1 › captures a supported Wikimedia source without opening Manual Fallback (809ms)
+  ✓  31 tests/browser/vault-trash.spec.ts:3:1 › moves an item to visible Vault Trash and restores it (1.1s)
+  ✓  32 tests/browser/vault-trash.spec.ts:31:1 › permanent deletion shows impact and requires the stable item ID (809ms)
+  ✓  33 tests/browser/workbench-interactions.spec.ts:7:1 › keeps delayed Item Details responsive and scoped to the latest selection (3.9s)
+  ✓  34 tests/browser/workbench-interactions.spec.ts:100:1 › uses lightweight Item Details for artwork selection and ignores stale responses (871ms)
+  ✓  35 tests/browser/workbench-interactions.spec.ts:146:1 › opens an Idea Source reader when selected from search results (735ms)
+  ✓  36 tests/browser/workbench-interactions.spec.ts:179:1 › ignores a delayed Idea Source reader after switching to Paintings (1.2s)
+  ✓  37 tests/browser/workbench-interactions.spec.ts:217:1 › keeps navigation in the viewport and opens dismissible details without jumping (1.2s)
+  ✓  38 tests/browser/workbench-interactions.spec.ts:286:1 › places Vault Trash after the Saved Item gallery (601ms)
+  ✘  39 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the desktop viewport (1.8s)
+  ✘  40 tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the constrained viewport (1.6s)
+
+
+  1) tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: 'Add Idea Source' })
+
+
+      35 |   await page.goto("/");
+      36 |   await page.getByRole("button", { name: "Settings" }).click();
+    > 37 |   await page.getByRole("button", { name: "Add Idea Source" }).click();
+         |                                                               ^
+      38 |   const capture = page.getByRole("region", { name: "Add Idea Source" });
+      39 |   await capture.getByLabel("Source Link").fill("https://x.com/example/status/1");
+      40 |   await capture.getByLabel(/Saving Reason/).fill("Remember the composition notes");
+        at /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/url-capture.spec.ts:37:63
+
+    Error Context: test-results/url-capture-keeps-an-unsup-30752-ble-source-text-is-supplied/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/url-capture-keeps-an-unsup-30752-ble-source-text-is-supplied/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/url-capture-keeps-an-unsup-30752-ble-source-text-is-supplied/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for getByText('Set up summaries')
+
+
+      111 |   await page.goto("/");
+      112 |   await page.getByRole("button", { name: /Idea Sources/ }).click();
+    > 113 |   await page.getByText("Set up summaries").click();
+          |                                            ^
+      114 |   await page.getByLabel("OpenAI API Key").fill("secret-test-key");
+      115 |   await page.getByLabel("Model").fill("gpt-4.1-mini");
+      116 |   await page.getByRole("button", { name: "Save Summary Settings" }).click();
+        at /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/url-capture.spec.ts:113:44
+
+    Error Context: test-results/url-capture-configures-sum-6b16e-hout-exposing-the-saved-key/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/url-capture-configures-sum-6b16e-hout-exposing-the-saved-key/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/url-capture-configures-sum-6b16e-hout-exposing-the-saved-key/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the desktop viewport
+
+    Error: expect(page).toHaveScreenshot(expected) failed
+
+      398 pixels (ratio 0.01 of all image pixels) are different.
+
+      Snapshot: workbench-desktop.png
+
+    Call log:
+      - Expect "toHaveScreenshot(workbench-desktop.png)" with timeout 5000ms
+        - verifying given screenshot expectation
+      - taking page screenshot
+        - disabled all CSS animations
+      - waiting for fonts to load...
+      - fonts loaded
+      - 398 pixels (ratio 0.01 of all image pixels) are different.
+      - waiting 100ms before taking screenshot
+      - taking page screenshot
+        - disabled all CSS animations
+      - waiting for fonts to load...
+      - fonts loaded
+      - captured a stable screenshot
+      - 398 pixels (ratio 0.01 of all image pixels) are different.
+
+
+      102 |     expect(hasHorizontalOverflow).toBe(false);
+      103 |
+    > 104 |     await expect(page).toHaveScreenshot(`workbench-${viewport.name}.png`, {
+          |                        ^
+      105 |       animations: "disabled",
+      106 |       fullPage: true,
+      107 |     });
+        at /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/workbench-layout.spec.ts:104:24
+
+    attachment #1: workbench-desktop (image/png) ───────────────────────────────────────────────────
+    Expected: tests/browser/workbench-layout.spec.ts-snapshots/workbench-desktop-linux.png
+    Received: test-results/workbench-layout-dense-wor-1de9c-ent-at-the-desktop-viewport/workbench-desktop-actual.png
+    Diff:     test-results/workbench-layout-dense-wor-1de9c-ent-at-the-desktop-viewport/workbench-desktop-diff.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/workbench-layout-dense-wor-1de9c-ent-at-the-desktop-viewport/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workbench-layout-dense-wor-1de9c-ent-at-the-desktop-viewport/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/workbench-layout-dense-wor-1de9c-ent-at-the-desktop-viewport/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the constrained viewport
+
+    Error: expect(page).toHaveScreenshot(expected) failed
+
+      76286 pixels (ratio 0.12 of all image pixels) are different.
+
+      Snapshot: workbench-constrained.png
+
+    Call log:
+      - Expect "toHaveScreenshot(workbench-constrained.png)" with timeout 5000ms
+        - verifying given screenshot expectation
+      - taking page screenshot
+        - disabled all CSS animations
+      - waiting for fonts to load...
+      - fonts loaded
+      - 76286 pixels (ratio 0.12 of all image pixels) are different.
+      - waiting 100ms before taking screenshot
+      - taking page screenshot
+        - disabled all CSS animations
+      - waiting for fonts to load...
+      - fonts loaded
+      - captured a stable screenshot
+      - 76286 pixels (ratio 0.12 of all image pixels) are different.
+
+
+      102 |     expect(hasHorizontalOverflow).toBe(false);
+      103 |
+    > 104 |     await expect(page).toHaveScreenshot(`workbench-${viewport.name}.png`, {
+          |                        ^
+      105 |       animations: "disabled",
+      106 |       fullPage: true,
+      107 |     });
+        at /home/cem/Sync/Projects/gruenesGewolbe/apps/desktop/tests/browser/workbench-layout.spec.ts:104:24
+
+    attachment #1: workbench-constrained (image/png) ───────────────────────────────────────────────
+    Expected: tests/browser/workbench-layout.spec.ts-snapshots/workbench-constrained-linux.png
+    Received: test-results/workbench-layout-dense-wor-37d2f-at-the-constrained-viewport/workbench-constrained-actual.png
+    Diff:     test-results/workbench-layout-dense-wor-37d2f-at-the-constrained-viewport/workbench-constrained-diff.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/workbench-layout-dense-wor-37d2f-at-the-constrained-viewport/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/workbench-layout-dense-wor-37d2f-at-the-constrained-viewport/trace.zip
+    Usage:
+
+        pnpm exec playwright show-trace test-results/workbench-layout-dense-wor-37d2f-at-the-constrained-viewport/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4 failed
+    tests/browser/url-capture.spec.ts:3:1 › keeps an unsupported Idea Source draft until readable source text is supplied
+    tests/browser/url-capture.spec.ts:96:1 › configures summarization outside the Vault without exposing the saved key
+    tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the desktop viewport
+    tests/browser/workbench-layout.spec.ts:11:3 › dense workbench remains coherent at the constrained viewport
+  36 passed (1.8m)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 1min 49.157s
+             CPU time consumed: 47.305s
+                   Memory peak: 747.8M (swap: 0B)
+ ELIFECYCLE  Test failed. See above for more details.
