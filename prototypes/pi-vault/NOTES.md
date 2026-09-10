@@ -22,6 +22,8 @@ The runs used the existing application's configured OpenAI model, `gpt-5.6-luna`
 
 This is a small smoke evaluation, not a retrieval benchmark. The three relevant notes were deliberately written with varied vocabulary; larger archives, languages, paraphrases, and distractor-heavy queries remain to be evaluated. Literal search has no embedding index. `gg ask` successfully expanded and checked candidate records in these examples.
 
+Later live Commons and retrieval rechecks each hit their 120-second deadlines during model requests. The controller reported failure and stopped both jobs. A subsequent small diagnostic completed through the gateway in 2.15 seconds (HTTP 200), while the simultaneous direct provider request timed out after 30 seconds. This shows the latest gateway can still stream live responses and the stalls also occur outside it; the exact provider/network cause remains unresolved.
+
 The two saved paintings used accessible 1280×815 and 960×763 copies. Attempts to obtain larger files did not establish a usable improvement. The prototype does not promise the maximum resolution available anywhere on the internet.
 
 ## Image compatibility
@@ -36,6 +38,10 @@ These files were read from the existing archive as fixtures, processed in fresh 
 
 All passed. This rules out a blanket inability to process WebP or these large JPEGs in this pipeline. It does not diagnose the old application's failure. Animated images, TIFF, HEIC, corrupt files, and images beyond the configured limits have not been established as supported.
 
+## Automated verification and review
+
+13 unit tests and 8 real-container integration tests pass, along with TypeScript checking and formatting. The real pasted-list CLI also returned failed → skipped → saved for an invalid URL, blocked source, and valid source, with the expected nonzero batch exit status. The no-key demo was executed successfully. [Review findings and their fixes](reports/review.md) are retained separately.
+
 ## Isolation and lifecycle evidence
 
 The real worker ran as the user's non-root UID with no direct network and no host home, vault, real API key, or container-runtime socket mounted. Its read-only application filesystem rejected writes, temporary scratch accepted them, and Chromium's own sandbox remained enabled. The gateway rejected loopback/private/reserved targets, unauthorized requests, unexpected models, extra model calls, writes from `ask`, invalid destinations, and competing outcomes for one input. A deliberately hung provider job hit its deadline; the next capture succeeded.
@@ -49,9 +55,10 @@ These checks cover concrete boundaries, not every kernel exploit, race, or promp
 1. **Public access:** all three supplied X posts were blocked; YouTube transcript retrieval needs a focused public-session investigation. Keep skip-and-report behavior. No login, cookies, audio download, or transcription fallback was added.
 2. **OpenRouter live compatibility:** real Pi selected the OpenRouter provider and exercised tool-call streaming against a deterministic upstream stub. No OpenRouter key was available for a live-provider check. Run `GG_PROVIDER=openrouter GG_MODEL=YOUR_SLUG pnpm evaluate:live` with `OPENROUTER_API_KEY` configured before calling that path live-validated.
 3. **Image identity and quality:** deduplication uses a selected-image URL or exact content hash. Upgrades require identical normalized 32×32 pixel hashes and increasing dimensions. This is intentionally conservative and often rejects recompressed/resized equivalents; it is not a perceptual similarity classifier. Different URLs/bytes for the same art can remain duplicate items. Width, height, fingerprint, and preview are prepared by worker code; controller checks are structural and byte/hash bounds, not independent trusted decoding. A stronger artifact-integrity boundary is needed before production use against actively malicious worker code.
-4. **Capture fidelity:** image selection, attribution, routing, and summary meaning remain model judgments. The prototype tests plumbing and a few live examples; it does not establish reliable photography/sculpture classification from the blocked X examples. Idea source text is captured by the browse tool independently of the model's summary or focus, with a 400,000-character ceiling. Arbitrarily long sources require chunking later.
+4. **Capture fidelity:** image selection, attribution, routing, and summary meaning remain model judgments. The prototype tests plumbing and a few live examples; it does not establish reliable photography/sculpture classification from the blocked X examples. Idea source text is captured by the browse tool independently of the model's summary or focus. Explicitly included linked pages retain URL headers, with a combined 400,000-character ceiling. Source reads support bounded continuation. Arbitrarily long sources require chunking later.
 5. **Durability and interface:** new-item publication uses an atomic rename, but there is no fsync-level crash guarantee. A hard crash can leave a write lock/staged or unreferenced files requiring inspection. Only one controller writer is supported. The prototype lists queued decisions; it does not yet offer queue resolution, a settings wizard, live-archive import, repository replacement, or a hosted GUI.
-6. **Portability:** tested on this Linux rootless Podman/crun setup. Docker, macOS, Windows, and hosted-IP source access remain untested. Browser proxying currently supports HTTPS; the explicit fetch tool also supports public HTTP.
+6. **Intermittent model requests:** later live jobs stalled despite earlier successful captures/retrieval. The direct-versus-gateway diagnostic above confirms a failure can occur outside the worker/gateway. Keep deadlines and clear errors; investigate provider/network behavior before regular use.
+7. **Portability:** tested on this Linux rootless Podman/crun setup. Docker, macOS, Windows, and hosted-IP source access remain untested. Browser proxying currently supports HTTPS; the explicit fetch tool also supports public HTTP.
 
 ## Decision
 

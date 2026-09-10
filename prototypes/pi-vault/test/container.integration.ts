@@ -216,3 +216,136 @@ test(
     );
   },
 );
+
+test(
+  "an explicitly included linked article retains its URL and complete fetched text",
+  { timeout: 60000 },
+  async () => {
+    const vault = await setup();
+    const input = "https://fixtures.example/post",
+      article = "https://fixtures.example/article";
+    const result = await runJob({
+      vault,
+      config,
+      intent: "idea",
+      input,
+      fixturePage: (url) => ({
+        title: "Fixture",
+        text:
+          url === input
+            ? "A post linking an article."
+            : "Article instructions: export, classify, verify, then save.",
+      }),
+      mockModel: async (body: any) => {
+        const calls = body.messages
+          .filter((m: any) => m.role === "assistant")
+          .flatMap((m: any) => m.tool_calls ?? []);
+        if (calls.length >= 3)
+          return { role: "assistant", content: "Finished." };
+        const name = calls.length < 2 ? "browse" : "capture";
+        const args =
+          calls.length === 0
+            ? { url: input }
+            : calls.length === 1
+              ? { url: article, preserve: true }
+              : {
+                  title: "Linked instructions",
+                  subvault: "Ideas",
+                  summary: "Export, classify, verify, save.",
+                  tags: ["instructions"],
+                };
+        return {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: `call_${calls.length}`,
+              type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        };
+      },
+    });
+    assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
+    const source = await readFile(
+      join(result.outcome!.path!, "source.txt"),
+      "utf8",
+    );
+    assert.ok(source.includes(input) && source.includes(article));
+    assert.match(source, /export, classify, verify, then save/);
+  },
+);
+
+test(
+  "capturing only an improved asset still retains its initially downloaded matching original",
+  { timeout: 60000 },
+  async () => {
+    const vault = await setup();
+    const sharp = (await import("sharp")).default;
+    const image = async (width: number) =>
+      sharp({
+        create: { width, height: width, channels: 3, background: "#123456" },
+      })
+        .png()
+        .toBuffer();
+    const original = await image(100),
+      better = await image(200);
+    const result = await runJob({
+      vault,
+      config,
+      intent: "art",
+      input: "https://fixtures.example/art",
+      fixtureFetch: async (url) => ({
+        bytes: url.endsWith("original") ? original : better,
+        type: "image/png",
+        url,
+      }),
+      mockModel: async (body: any) => {
+        const calls = body.messages
+          .filter((m: any) => m.role === "assistant")
+          .flatMap((m: any) => m.tool_calls ?? []);
+        if (calls.length >= 3)
+          return { role: "assistant", content: "Finished." };
+        const name = calls.length < 2 ? "download_image" : "capture";
+        const latest = body.messages
+          .filter((m: any) => m.role === "tool")
+          .at(-1);
+        const args =
+          calls.length < 2
+            ? {
+                url: `https://fixtures.example/${calls.length ? "better" : "original"}`,
+              }
+            : {
+                title: "Square",
+                subvault: "Paintings",
+                summary: "Square fixture",
+                tags: [],
+                selectedImage: "https://fixtures.example/original",
+                assetIds: [JSON.parse(latest.content).assetId],
+              };
+        return {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: `call_${calls.length}`,
+              type: "function",
+              function: { name, arguments: JSON.stringify(args) },
+            },
+          ],
+        };
+      },
+    });
+    assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
+    const [{ item, path }] = await vault.items();
+    assert.equal(item.assets.length, 2);
+    assert.deepEqual(await readFile(join(path, item.primary!)), better);
+    assert.deepEqual(
+      await readFile(
+        join(path, item.assets.find((a) => a.file !== item.primary)!.file),
+      ),
+      original,
+    );
+  },
+);

@@ -67,8 +67,31 @@ export async function runJob(
         clearTimeout(timer);
         resolve();
       };
-      cleanup.once("error", done);
-      cleanup.once("exit", done);
+      const failedRemoval = () => {
+        // Creation may have raced the first lookup. Retry after the launcher
+        // has stopped, rather than memoizing a failed "not found" removal.
+        const retryRemoval = () => {
+          const retry = spawn("podman", ["rm", "--force", name], {
+            stdio: "ignore",
+            env: runtimeEnv,
+          });
+          const retryTimer = setTimeout(() => retry.kill("SIGKILL"), 5000);
+          const finished = () => {
+            clearTimeout(retryTimer);
+            done();
+          };
+          retry.once("error", finished);
+          retry.once("exit", finished);
+        };
+        if (child.exitCode !== null || child.signalCode !== null)
+          retryRemoval();
+        else {
+          child.once("exit", retryRemoval);
+          child.kill("SIGKILL");
+        }
+      };
+      cleanup.once("error", failedRemoval);
+      cleanup.once("exit", (code) => (code === 0 ? done() : failedRemoval()));
     }));
   const onDeadline = () => {
     void stop();
@@ -146,6 +169,10 @@ export async function runJob(
       events,
       modelRequests: gateway.requests,
       gatewayEvents: gateway.events,
+      vaultProblems: Array.from(options.vault.problems, ([path, reason]) => ({
+        path,
+        reason,
+      })),
       stderr,
     };
   } finally {

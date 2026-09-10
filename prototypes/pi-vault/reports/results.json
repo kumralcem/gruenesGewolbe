@@ -137,9 +137,92 @@
     }
   ],
   "automated": {
-    "unitTestsPassed": 9,
-    "containerTestsPassed": 5,
-    "typecheck": "passed"
+    "unitTestsPassed": 13,
+    "containerTestsPassed": 8,
+    "typecheck": "passed",
+    "formatCheck": "passed",
+    "cliStdinBatch": {
+      "states": [
+        "failed",
+        "skipped",
+        "saved"
+      ],
+      "exitCode": 1,
+      "result": "passed"
+    }
   },
-  "openrouter": "Real Pi with mocked upstream protocol; live provider not tested because no OpenRouter key was configured"
+  "openrouter": "Real Pi with mocked upstream protocol; live provider not tested because no OpenRouter key was configured",
+  "followUpLive": [
+    {
+      "run": "final-live.jsonl",
+      "input": "https://www.youtube.com/watch?v=xJaMTo2YgO8",
+      "exitCode": 0,
+      "outcome": {
+        "status": "skipped",
+        "reason": "The YouTube page is accessible, but no existing transcript is available; audio may not be downloaded or transcribed.",
+        "sourceUrl": "https://www.youtube.com/watch?v=xJaMTo2YgO8"
+      },
+      "modelRequests": 3,
+      "retrievedTitles": []
+    },
+    {
+      "run": "final-live.jsonl",
+      "input": "https://en.wikipedia.org/wiki/Inbox_Zero",
+      "exitCode": 0,
+      "outcome": {
+        "status": "saved"
+      },
+      "modelRequests": 4,
+      "retrievedTitles": []
+    },
+    {
+      "run": "youtube-locale.jsonl",
+      "input": "https://www.youtube.com/watch?v=xJaMTo2YgO8",
+      "exitCode": 0,
+      "outcome": {
+        "status": "skipped",
+        "reason": "The YouTube page is accessible, but no existing transcript was available for this video. I did not retrieve or transcribe audio.",
+        "sourceUrl": "https://www.youtube.com/watch?v=xJaMTo2YgO8"
+      },
+      "modelRequests": 3,
+      "retrievedTitles": []
+    },
+    {
+      "run": "reviewed-live.jsonl",
+      "input": "https://commons.wikimedia.org/wiki/File:Le_Chevalier_aux_Fleurs_1894_Georges_Rochegrosse_1859_1938.jpg",
+      "exitCode": 1,
+      "outcome": {
+        "status": "failed",
+        "reason": "Job deadline exceeded",
+        "sourceUrl": "https://commons.wikimedia.org/wiki/File:Le_Chevalier_aux_Fleurs_1894_Georges_Rochegrosse_1859_1938.jpg"
+      },
+      "modelRequests": 1,
+      "retrievedTitles": []
+    },
+    {
+      "run": "reviewed-live.jsonl",
+      "input": "Find useful saved material about managing an email inbox",
+      "exitCode": 1,
+      "outcome": {
+        "status": "failed",
+        "reason": "Job deadline exceeded",
+        "sourceUrl": "Find useful saved material about managing an email inbox"
+      },
+      "modelRequests": 3,
+      "retrievedTitles": []
+    }
+  ],
+  "providerDiagnostic": [
+    {
+      "path": "direct",
+      "error": "Timed out or transport failure",
+      "seconds": 30.001
+    },
+    {
+      "path": "gateway",
+      "status": 200,
+      "bytes": 5517,
+      "seconds": 2.147
+    }
+  ]
 }

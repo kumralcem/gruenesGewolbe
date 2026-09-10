@@ -146,3 +146,52 @@ test("a competing writer is rejected without changing existing records", async (
   assert.equal((await vault.items()).length, 0);
   await unlink(join(root, ".write-lock"));
 });
+
+test("a malformed record cannot hide valid searchable items", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gg-malformed-test-"));
+  const vault = await Vault.create(root, ["Ideas"]);
+  await vault.save({
+    kind: "idea",
+    title: "Customer email",
+    summary: "Triage support mail",
+    sourceText: "Actual source",
+    tags: ["support"],
+    sourceUrl: "https://example.org/valid",
+    subvault: "Ideas",
+  });
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const id = "11111111-1111-4111-8111-111111111111";
+  const path = join(root, "subvaults", "Ideas", "items", id);
+  await mkdir(path);
+  await writeFile(
+    join(path, "record.md"),
+    `---\n${JSON.stringify({ id, title: "Broken" })}\n---\n`,
+  );
+  assert.equal((await vault.search("customer"))[0].title, "Customer email");
+  assert.ok(vault.problems.has(path));
+});
+
+test("source reads can inspect a later match without returning an unbounded document", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-window-test-")),
+    ["Ideas"],
+  );
+  await vault.save({
+    kind: "idea",
+    title: "Long source",
+    summary: "A short summary",
+    sourceText:
+      "x".repeat(70000) +
+      " Customer support requires human approval before sending.",
+    tags: [],
+    sourceUrl: "https://example.org/long",
+    subvault: "Ideas",
+  });
+  const [hit] = await vault.search("customer");
+  const first = await vault.read(hit.id);
+  assert.equal(first.sourceText.length, 60000);
+  assert.equal(first.nextOffset, 60000);
+  const tail = await vault.read(hit.id, first.nextOffset!);
+  assert.match(tail.sourceText, /human approval/);
+  assert.equal(tail.nextOffset, null);
+});

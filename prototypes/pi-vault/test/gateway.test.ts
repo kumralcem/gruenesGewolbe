@@ -166,3 +166,59 @@ test("invalid budgets are rejected before opening a gateway", async () => {
       /maxSeconds/,
     );
 });
+
+test("model gateway disallows extra completions and provider-hosted tools", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-model-scope-test-")),
+    ["Ideas"],
+  );
+  const gateway = await createGateway({
+    vault,
+    intent: "ask",
+    input: "find notes",
+    config: { provider: "openai", model: "future" },
+    mockModel: async () => ({ role: "assistant", content: "ok" }),
+  });
+  try {
+    for (const body of [
+      { n: 2 },
+      { plugins: [{ id: "web" }] },
+      { models: ["different-model"] },
+      { provider: { order: ["unconfigured"] } },
+      { tools: [{ type: "web_search" }] },
+      { tools: [{ type: "code_interpreter" }] },
+      { background: true },
+      { previous_response_id: "other-job" },
+    ]) {
+      const response = await request(
+        gateway.socket,
+        gateway.token,
+        "/model/chat/completions",
+        { model: "future", ...body },
+      );
+      assert.equal(response.status, 400);
+    }
+    assert.equal(
+      (
+        await request(
+          gateway.socket,
+          gateway.token,
+          "/model/chat/completions",
+          {
+            model: "future",
+            n: 1,
+            tools: [
+              {
+                type: "function",
+                function: { name: "search", parameters: { type: "object" } },
+              },
+            ],
+          },
+        )
+      ).status,
+      200,
+    );
+  } finally {
+    await gateway.close();
+  }
+});

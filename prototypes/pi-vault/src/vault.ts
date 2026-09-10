@@ -62,10 +62,35 @@ const recordText = (item: Item) =>
 function parseRecord(source: string): Item {
   const match = source.match(/^---\n([\s\S]+?)\n---\n/);
   if (!match) throw Error("Unrecognized prototype record");
-  return JSON.parse(match[1]);
+  const item = JSON.parse(match[1]);
+  if (
+    !item ||
+    !["art", "idea"].includes(item.kind) ||
+    !text(item.id, 36) ||
+    !text(item.title, 300) ||
+    !text(item.summary) ||
+    !text(item.sourceUrl, 4000) ||
+    !text(item.capturedAt, 100) ||
+    !Array.isArray(item.tags) ||
+    item.tags.length > 30 ||
+    !item.tags.every((tag: unknown) => text(tag, 80)) ||
+    !Array.isArray(item.assets) ||
+    !item.assets.every(
+      (asset: any) =>
+        asset &&
+        text(asset.file, 100) &&
+        /^[a-f0-9]{64}$/.test(asset.hash) &&
+        /^[a-f0-9]{64}$/.test(asset.visualHash) &&
+        Number.isSafeInteger(asset.width) &&
+        Number.isSafeInteger(asset.height),
+    )
+  )
+    throw Error("Malformed prototype record");
+  return item;
 }
 
 export class Vault {
+  readonly problems = new Map<string, string>();
   private pending: Promise<unknown> = Promise.resolve();
   private constructor(
     readonly root: string,
@@ -134,24 +159,40 @@ export class Vault {
             await readFile(join(path, "record.md"), "utf8"),
           );
           if (item.id === dir) results.push({ item, path });
-        } catch {
-          /* A malformed item must not hide valid records. */
+          this.problems.delete(path);
+        } catch (error) {
+          this.problems.set(
+            path,
+            error instanceof Error ? error.message : String(error),
+          );
         }
       }
     }
     return results;
   }
-  async read(id: string) {
+  async read(id: string, offset = 0) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 400000)
+      throw Error("Invalid source offset");
     const found = (await this.items()).find((v) => v.item.id === id);
     if (!found) throw Error("Unknown item ID");
-    let sourceText = "";
+    let sourceText = "",
+      totalCharacters = 0;
     if (found.item.kind === "idea") {
       await plain(join(found.path, "source.txt"));
-      sourceText = (
-        await readFile(join(found.path, "source.txt"), "utf8")
-      ).slice(0, 60000);
+      const full = await readFile(join(found.path, "source.txt"), "utf8");
+      totalCharacters = full.length;
+      sourceText = full.slice(offset, offset + 60000);
     }
-    return { ...found, sourceText };
+    return {
+      ...found,
+      sourceText,
+      offset,
+      totalCharacters,
+      nextOffset:
+        offset + sourceText.length < totalCharacters
+          ? offset + sourceText.length
+          : null,
+    };
   }
   async search(query: string): Promise<Hit[]> {
     if (!text(query, 1000)) throw Error("Invalid query");

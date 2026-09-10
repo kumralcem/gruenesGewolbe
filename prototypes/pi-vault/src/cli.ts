@@ -172,6 +172,15 @@ try {
         }
       }
     }
+    if (vault.problems.size)
+      console.error(
+        JSON.stringify({
+          vaultProblems: Array.from(vault.problems, ([path, reason]) => ({
+            path,
+            reason,
+          })),
+        }),
+      );
   }
 } catch (e) {
   console.error(e instanceof Error ? e.message : String(e));

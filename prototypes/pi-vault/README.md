@@ -81,9 +81,9 @@ pnpm test:container
 pnpm evaluate:images '/absolute/path/to/example.webp' '/absolute/path/to/large.jpeg'
 ```
 
-Unit tests cover persistence, source retention, duplicates/upgrades, destination traversal and symlinks, write locking, queue rules, private-address rejection, gateway authentication, fixed model/request limits, read-only ask, and one outcome per input. Container tests use actual Pi/Chromium and a model stub to exercise isolation, batches, provider protocol selection, retrieval, and cancellation followed by a successful entry.
+The final suite has 13 unit tests and 8 container integration tests. Unit tests cover persistence, source retention, duplicates/upgrades, destination traversal and symlinks, write locking, queue rules, private-address rejection, gateway authentication, fixed model/request limits, read-only ask, and one outcome per input. Container tests use actual Pi/Chromium and a model stub to exercise isolation, batches, provider protocol selection, retrieval, and cancellation followed by a successful entry.
 
-For the live-source evaluation, set `GG_MODEL`, the matching API-key environment variable, and optionally `GG_PROVIDER=openrouter`, then run `pnpm evaluate:live`. This incurs provider usage: nine sequential jobs, each capped at ten model requests and 150 seconds. It writes a fresh vault and detailed report under `.runs/`. No live test runs by default in the automated suite.
+For the live-source evaluation, set `GG_MODEL`, the matching API-key environment variable, and optionally `GG_PROVIDER=openrouter`, then run `pnpm evaluate:live`. This incurs provider usage: nine sequential jobs, each capped at ten model requests and 150 seconds. It writes a fresh vault and detailed report under `.runs/`. No live test runs by default in the automated suite. To compare a tiny direct OpenAI request with one through the controller, run `node --import tsx scripts/diagnose-provider.ts` with `GG_MODEL` and `OPENAI_API_KEY` set; each request has a 30-second deadline.
 
 ## Files and boundaries
 

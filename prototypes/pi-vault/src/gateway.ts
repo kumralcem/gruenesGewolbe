@@ -82,6 +82,67 @@ export async function createGateway(options: GatewayOptions) {
           throw Error("This input already has an outcome");
       }
       if (route === "/model/chat/completions" || route === "/model/responses") {
+        // Admit only the request surface used by Pi's two configured APIs.
+        // In particular, OpenRouter plugins/fallback models/provider routing
+        // are separate fields, so restricting `tools` alone is insufficient.
+        const fields = new Set([
+          "model",
+          "messages",
+          "input",
+          "instructions",
+          "stream",
+          "stream_options",
+          "max_output_tokens",
+          "max_tokens",
+          "max_completion_tokens",
+          "temperature",
+          "top_p",
+          "tools",
+          "tool_choice",
+          "parallel_tool_calls",
+          "store",
+          "reasoning",
+          "reasoning_effort",
+          "text",
+          "include",
+          "prompt_cache_key",
+          "prompt_cache_retention",
+          "prompt_cache_options",
+          "metadata",
+          "safety_identifier",
+          "service_tier",
+          "user",
+          "truncation",
+          "n",
+        ]);
+        if (Object.keys(input).some((key) => !fields.has(key)))
+          throw Error(
+            "Unsupported model request field; provider extensions and routing overrides are disabled",
+          );
+        if (input.n !== undefined && input.n !== 1)
+          throw Error("Only one model completion per request is allowed");
+        if (
+          input.background ||
+          input.previous_response_id ||
+          input.conversation
+        )
+          throw Error("Only foreground stateless model requests are allowed");
+        if (
+          input.service_tier &&
+          input.service_tier !== "default" &&
+          input.service_tier !== "auto"
+        )
+          throw Error("Extra provider service tiers are not enabled");
+        if (
+          input.tools !== undefined &&
+          (!Array.isArray(input.tools) ||
+            input.tools.length > 64 ||
+            input.tools.some((tool: any) => tool?.type !== "function"))
+        )
+          throw Error(
+            "Only local function tools are allowed; provider-hosted tools are disabled",
+          );
+        input.store = false;
         if (++requests > (config.maxRequests ?? 10))
           throw Error("Model request budget exceeded");
         if (input.model !== config.model)
@@ -204,7 +265,7 @@ export async function createGateway(options: GatewayOptions) {
       }
       if (route === "/read") {
         if (!seen.has(input.id)) throw Error("Search before reading an item");
-        send(res, 200, await vault.read(input.id));
+        send(res, 200, await vault.read(input.id, input.offset));
         return;
       }
       if (route === "/results" && intent === "ask") {
