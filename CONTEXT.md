@@ -5,7 +5,7 @@ A personal archive for saving, describing, and rediscovering material found whil
 ## Language
 
 **Vault**:
-The user's durable personal archive: a local collection of saved items and their descriptive records that can be copied or backed up as ordinary files.
+The user's durable personal archive: a filesystem collection of saved items and their descriptive records that can be copied or backed up as ordinary files.
 _Avoid_: Database, library, export
 
 **Active Vault**:
@@ -13,7 +13,7 @@ The vault currently opened by the app. The app may remember multiple vault roots
 _Avoid_: Workspace, account, profile
 
 **Subvault**:
-A named home area within a vault for a coherent archive use, such as paintings, historical photos, memes, webcomics, or video essay sources. Subvaults may have their own defaults for item types, records, naming, and views while still sharing the vault's search, tags, collections, links, and indexes.
+A user-controlled home area within a vault for a coherent archive use, such as paintings, photography, sculpture, memes, or idea sources. Capture can choose among existing subvaults, while their creation and removal belong to the user.
 _Avoid_: Separate vault, folder, category
 
 **Home Subvault**:
@@ -29,7 +29,7 @@ A localized condition where one canonical vault file cannot be interpreted or us
 _Avoid_: Review reason, invalid vault, app error
 
 **Item Folder**:
-The ordinary filesystem directory that stores one saved item's files and readable record. Item folders are a recovery format for ownership and backup, while the app interface is the primary way to browse and search the vault.
+The ordinary filesystem directory that keeps one saved item's preserved content and readable item record together. It makes the saved item inspectable and portable independently of the tool used to capture or browse it.
 _Avoid_: Album, directory, container
 
 **Item Record**:
@@ -61,19 +61,31 @@ A thing the user wants to keep and find again, such as an artwork, post, article
 _Avoid_: URL, page, link
 
 **Artwork Saved Item**:
-A saved item whose durable value is primarily a visual artwork or image. Artwork saved items prioritize the best available image file and descriptive metadata such as artist, title, year, style, subjects, and emotional qualities.
+A saved item whose durable value is a visual work, such as a painting, photograph, or sculpture represented by an image. Its kind describes the intended work, so a photograph used to preserve a sculpture can belong to Sculptures while a photograph valued in its own right belongs to Photography.
 _Avoid_: Painting, photo, image
 
+**Visual Capture**:
+Saving one selected image as an Artwork Saved Item, including identifying the depicted work, choosing an existing home subvault, and researching a better copy of that same image when useful. Quoted media, reply media, surrounding discussion, and alternative viewpoints are outside that capture.
+_Avoid_: Painting capture, post capture, discussion capture
+
+**Capture Queue**:
+Captures awaiting a user decision or further instructions, including inputs with no suitable existing home subvault or no unambiguous selected image. A queued capture remains available for later attention without being treated as successfully filed.
+_Avoid_: Review status, activity log, new subvault
+
+**Selected Image**:
+The particular image the user intends to preserve in a Visual Capture. It fixes the photograph, viewpoint, and composition being sought, even when several images depict the same artwork.
+_Avoid_: Any image of the work, representative image
+
 **Idea Source**:
-A saved item whose durable value is the content or argument of a post, blog article, or web page. It keeps locally readable source material and a separate summary; a source link alone does not preserve the idea.
+A saved item whose durable value is the ideas or argument in material such as a post, article, news story, or video transcript. Its summary is the primary surface for rediscovery, supported by preserved readable source text and source links.
 _Avoid_: Bookmark, URL, image capture
 
 **Best Available File**:
-The highest-quality local file the app can reasonably obtain for a saved item. For visual saved items this may be the largest image from the source link at first, with broader web search treated as an optional enrichment step.
+The highest-quality file obtained for a saved item and judged to represent the intended material. For Visual Capture, it must be a copy of the Selected Image, whether obtained from the supplied source or found elsewhere during research.
 _Avoid_: Original, asset, download
 
 **Preserved File**:
-The file saved from the user's chosen source at creation time. Preserved files keep their original format and should not be silently replaced by later enrichment.
+A source file retained in its original format. For Visual Capture, the initially obtained file remains preserved alongside a better copy of the same Selected Image when one is found; choosing a new primary file does not remove the earlier preserved file.
 _Avoid_: Converted file, preview, derivative
 
 **Enrichment**:
@@ -85,12 +97,20 @@ The user's selected cost and depth setting for AI-assisted capture or enrichment
 _Avoid_: Quality setting, model setting, automation level
 
 **Primary File**:
-The file the saved item treats as its main local representation. Enrichment can add candidate files, but changing the primary file requires user approval.
+The file the saved item treats as its main local representation. For Visual Capture it is the chosen copy of the Selected Image, which may be upgraded when a demonstrably better copy is found.
 _Avoid_: Best file, latest file, replacement
 
 **Source Link**:
 The original URL or reference where a saved item was found. Source links provide provenance and a way back to the original, but they are not the durable archive record.
 _Avoid_: Bookmark, capture
+
+**Source Publication Date**:
+When the source material was published, if known. It gives the user context about the age of its claims or instructions without asserting that they remain correct or have become obsolete.
+_Avoid_: Capture date, last checked
+
+**Capture Date**:
+When material was saved into the vault. It describes the saved item's history, not the age or continuing validity of the source's advice.
+_Avoid_: Publication date, last checked
 
 **Import Provenance**:
 The local origin details for an imported item, such as original filename, source folder, and import date. Import provenance helps identify items and audit what happened during import.
@@ -113,7 +133,7 @@ Readable source text with page chrome, navigation, scripts, ads, and unrelated c
 _Avoid_: Raw HTML, screenshot, page dump
 
 **Summary**:
-A compact explanation of a saved item's meaning, why it matters, and its likely future use. For an Idea Source, it explains the source's central point without replacing the preserved source text; summaries are the primary surface for rediscovery and later action.
+The reusable core of an Idea Source, written so the user can find it by the problem, topic, or concept they remember. For instructional or advice material it preserves the steps, conditions, and details needed to follow the source's instructions, removing surrounding narrative; for other material it preserves the central ideas and claims.
 _Avoid_: Abstract, excerpt, description
 
 **Review Status**:
@@ -167,3 +187,8 @@ _Avoid_: Subvault membership, shortcut, duplicate
 **Surrounding Discussion**:
 Comments, replies, quotes, or adjacent thread content around a saved item. Surrounding discussion is excluded by default; if it matters, it should be saved as its own saved item.
 _Avoid_: Context, thread, comments
+
+
+## Pi prototype evidence (2026-09-10)
+
+An independent, runnable prototype now lives in [prototypes/pi-vault/README.md](prototypes/pi-vault/README.md). See [its findings](prototypes/pi-vault/NOTES.md) for live source, image compatibility, retrieval, isolation, and provider results. The old application and live archive remain intact; this evidence precedes the clean CLI replacement. Public X access and standalone YouTube transcript retrieval remain unresolved.
