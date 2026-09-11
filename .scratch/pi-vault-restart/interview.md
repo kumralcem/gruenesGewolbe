@@ -185,10 +185,15 @@ The sequence above was the agreed plan at the end of the interview. The prototyp
 
 ## Prototype implementation update — 2026-09-10
 
-The user authorized a branch and sustained work through a finished prototype. Branch `codex/pi-vault-prototype` adds the independent package at [prototypes/pi-vault](../../prototypes/pi-vault/README.md). Pi 0.85.1 is embedded through its SDK without a fork. Rootless Podman/crun runs the browser, shell tools, and image processing; an inherited private descriptor connects to the trusted controller. Provider credentials and the archive stay outside the worker. Earlier “untested” statements above describe the design-stage state; current results are in [prototype findings](../../prototypes/pi-vault/NOTES.md) and [recorded results](../../prototypes/pi-vault/reports/results.json).
+The user authorized a branch and sustained work through a finished prototype. Branch `codex/pi-vault-prototype` adds the independent package at [prototypes/pi-vault](../../README.md). Pi 0.85.1 is embedded through its SDK without a fork. Rootless Podman/crun runs the browser, shell tools, and image processing; an inherited private descriptor connects to the trusted controller. Provider credentials and the archive stay outside the worker. Earlier “untested” statements above describe the design-stage state; current results are in [prototype findings](../../docs/prototype-results.md) and [recorded results](../../reports/results.json).
 
 The prototype demonstrated live OpenAI Responses streaming, both supplied Wikimedia/Wikipedia painting captures, article capture, deterministic search, and natural-language retrieval of the three relevant customer/email fixture notes with a no-match control. Three real archive image fixtures, including 8000×8000 WebP and a 31 MB JPEG, passed byte-preservation and bounded-preview checks. Automated checks cover controller validation, read-only ask, private-network rejection, real Pi protocol integration, and deadline cancellation. OpenRouter used real Pi against a mock upstream; live provider validation remains open.
 
 All three supplied X posts returned HTTP 403 in the standalone public worker. The YouTube page loaded but its transcript was not retrieved; earlier interactive caption access means this is an extraction/access limitation rather than proof of no captions. These inputs were skipped without items or queue entries. No source-site authentication was introduced.
 
 The existing repository implementation and `/home/cem/Gewolbe` were preserved. The clean CLI settings wizard, queue resolution, repository replacement, production artifact validation, and private hosted GUI remain subsequent work. No live-vault import, deployment, or destructive reset was performed.
+
+
+## Clean restart and authenticated browser capture — 2026-09-11
+
+The user approved removing the old application on the prototype branch and selected Chrome/Chromium for the capture extension. This explicitly supersedes the earlier public-only source-access restriction: the browser may use its session to obtain selected content, with credentials kept outside the agent. The user also requested direct Obsidian compatibility for item records. See [current implementation scope](../browser-capture-restart/implementation.md), ADR-0045, and ADR-0046. The live archive remains unchanged.

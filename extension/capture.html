@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>GG Capture</title>
+    <link rel="stylesheet" href="capture.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="brand">GG</span>
+        <div>
+          <h1>Save something worth keeping.</h1>
+          <p id="source">Capture the page you are viewing.</p>
+        </div>
+      </header>
+      <section class="panel">
+        <h2>What are you keeping?</h2>
+        <div class="intents">
+          <label
+            ><input type="radio" name="intent" value="idea" checked /> An idea
+            or instructions</label
+          ><label
+            ><input type="radio" name="intent" value="art" /> One image</label
+          >
+        </div>
+        <p id="summary"></p>
+        <div id="images" hidden></div>
+        <label class="field"
+          >Focus (optional)<input
+            id="focus"
+            placeholder="What would you like to remember?" /></label
+        ><button id="capture">Send to my vault</button
+        ><button id="allow" hidden>Allow image host and retry</button>
+        <p id="status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="panel">
+        <h2>Recent captures</h2>
+        <button class="secondary" id="refresh">Refresh</button>
+        <ol id="jobs"></ol>
+      </section>
+      <details class="panel" id="settings">
+        <summary>Connect to GG</summary>
+        <p>
+          Run <code>pnpm gg serve --vault PATH --model MODEL</code>, then copy
+          the local address and pairing token shown in your terminal.
+        </p>
+        <label class="field"
+          >Local receiver<input
+            id="receiver"
+            value="http://127.0.0.1:48123" /></label
+        ><label class="field"
+          >Pairing token<input
+            id="token"
+            type="password"
+            autocomplete="off" /></label
+        ><button class="secondary" id="connect">Connect</button>
+        <p id="connection" role="status"></p>
+      </details>
+      <footer>
+        Only the selected page content and image are sent. Your cookie store and
+        model API keys stay outside the capture.
+      </footer>
+    </main>
+    <script type="module" src="capture.js"></script>
+  </body>
+</html>

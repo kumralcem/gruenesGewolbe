@@ -1,0 +1,9 @@
+node_modules
+.git
+.runs
+test
+reports
+.agents
+.scratch
+docs
+extension
