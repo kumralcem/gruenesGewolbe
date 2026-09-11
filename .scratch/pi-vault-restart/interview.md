@@ -1,8 +1,9 @@
-# Pi Vault Restart — Design Interview
+# Pi Vault Restart — Historical Design Interview
 
 Started: 2026-09-10
-Status: ready-for-agent
-Next work: scoped prototype validation; the design is agreed, but no implementation has been tested.
+Status: historical record of the 2026-09-10 interview.
+
+The prototype and subsequent clean restart are complete. Statements below about untested implementation and public-only access describe the design stage; later decisions supersede them. See [current implementation](../browser-capture-restart/implementation.md) and [validation](../../docs/validation.md).
 
 ## Agreed direction
 

@@ -205,7 +205,7 @@ test("a copied vault retains working Obsidian links and searches user-edited YAM
   ]);
   const saved = await vault.save({
     kind: "idea",
-    title: "Customer inbox",
+    title: "Customer inbox \\",
     subvault: "Ideas and advice",
     sourceUrl: "https://example.org/guide",
     summary: "Classify customer messages.\n\n## Steps\n\n1. Review drafts.",
@@ -228,12 +228,16 @@ test("a copied vault retains working Obsidian links and searches user-edited YAM
   const copy = await Vault.open(relocated);
   assert.equal(
     (await copy.search("correspondence"))[0].title,
-    "Customer inbox",
+    "Customer inbox \\",
   );
   const copiedRecord = join(relocated, relative(vault.root, record));
   for (const file of [join(relocated, "GG Index.md"), copiedRecord]) {
     const markdown = await readFile(file, "utf8");
     assert.ok(!markdown.includes(vault.root));
+    assert.ok(
+      !markdown.includes("\\]("),
+      "a backslash in the title must not escape the link delimiter",
+    );
     for (const match of markdown.matchAll(/\]\(([^)]+)\)/g)) {
       if (/^https?:/.test(match[1])) continue;
       assert.ok(

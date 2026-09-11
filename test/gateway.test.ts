@@ -222,3 +222,73 @@ test("model gateway disallows extra completions and provider-hosted tools", asyn
     await gateway.close();
   }
 });
+
+test("browser art saves are bound to the user's selected URL and original bytes", async () => {
+  const sharp = (await import("sharp")).default;
+  const { createHash } = await import("node:crypto");
+  const make = async (color: string) => {
+    const bytes = await sharp({
+      create: { width: 100, height: 100, channels: 3, background: color },
+    })
+      .png()
+      .toBuffer();
+    return {
+      bytes: bytes.toString("base64"),
+      width: 100,
+      height: 100,
+      visualHash: createHash("sha256")
+        .update(await sharp(bytes).resize(32, 32).raw().toBuffer())
+        .digest("hex"),
+    };
+  };
+  const original = await make("#123456"),
+    unrelated = await make("#654321");
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-selected-test-")),
+    ["Paintings"],
+  );
+  const url = "https://private.example/post",
+    imageUrl = url + "/image.png";
+  const gateway = await createGateway({
+    vault,
+    intent: "art",
+    input: url,
+    config: { provider: "openai", model: "test" },
+    browserCapture: {
+      version: 1,
+      intent: "art",
+      url,
+      title: "Selected art",
+      capturedAt: "2026-09-11T10:00:00Z",
+      text: "",
+      image: { url: imageUrl, bytes: original.bytes, mimeType: "image/png" },
+    },
+  });
+  const draft = {
+    kind: "art",
+    title: "Square",
+    subvault: "Paintings",
+    summary: "Selected square",
+    tags: [],
+    sourceUrl: url,
+    selectedImage: imageUrl,
+    assets: [original],
+  };
+  try {
+    for (const bad of [
+      { ...draft, selectedImage: url + "/other" },
+      { ...draft, assets: [unrelated] },
+    ]) {
+      const result = await request(gateway.socket, gateway.token, "/save", bad);
+      assert.equal(result.status, 400);
+      assert.match(result.data.error, /exact browser-selected image/);
+    }
+    assert.equal((await vault.items()).length, 0);
+    assert.equal(
+      (await request(gateway.socket, gateway.token, "/save", draft)).status,
+      200,
+    );
+  } finally {
+    await gateway.close();
+  }
+});

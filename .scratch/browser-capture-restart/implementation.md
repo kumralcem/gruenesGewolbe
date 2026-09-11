@@ -1,6 +1,6 @@
 # Clean GG restart, Chrome capture, and Obsidian records
 
-Status: ready-for-agent (implementation and final review in progress)
+Status: ready-for-human (implemented, tested, and reviewed)
 
 ## Authorized scope
 

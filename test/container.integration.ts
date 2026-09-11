@@ -278,7 +278,7 @@ test(
 );
 
 test(
-  "capturing only an improved asset still retains its initially downloaded matching original",
+  "capturing only an improved asset still retains the exact browser-selected original",
   { timeout: 60000 },
   async () => {
     const vault = await setup();
@@ -296,6 +296,19 @@ test(
       config,
       intent: "art",
       input: "https://fixtures.example/art",
+      browserCapture: {
+        version: 1,
+        intent: "art",
+        url: "https://fixtures.example/art",
+        title: "Selected original",
+        text: "A square",
+        capturedAt: "2026-09-11T10:00:00Z",
+        image: {
+          url: "https://fixtures.example/original",
+          bytes: original.toString("base64"),
+          mimeType: "image/png",
+        },
+      },
       fixtureFetch: async (url) => ({
         bytes: url.endsWith("original") ? original : better,
         type: "image/png",
@@ -305,16 +318,16 @@ test(
         const calls = body.messages
           .filter((m: any) => m.role === "assistant")
           .flatMap((m: any) => m.tool_calls ?? []);
-        if (calls.length >= 3)
+        if (calls.length >= 2)
           return { role: "assistant", content: "Finished." };
-        const name = calls.length < 2 ? "download_image" : "capture";
+        const name = calls.length < 1 ? "download_image" : "capture";
         const latest = body.messages
           .filter((m: any) => m.role === "tool")
           .at(-1);
         const args =
-          calls.length < 2
+          calls.length < 1
             ? {
-                url: `https://fixtures.example/${calls.length ? "better" : "original"}`,
+                url: "https://fixtures.example/better",
               }
             : {
                 title: "Square",

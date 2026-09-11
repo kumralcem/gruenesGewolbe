@@ -194,3 +194,60 @@ test("receiver keeps interrupted and pending inputs across restarts, retries onc
     await receiver.close();
   }
 });
+
+test("retry exposes current progress without the previous failed outcome", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-retry-status-test-")),
+    ["Ideas"],
+  );
+  let calls = 0,
+    release!: () => void,
+    started!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const running = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const receiver = await createReceiver({
+    vault,
+    port: 0,
+    processCapture: async () => {
+      if (++calls === 1)
+        return {
+          outcome: { status: "failed", reason: "Temporary provider error" },
+        };
+      started();
+      await blocked;
+      return { outcome: { status: "skipped" } };
+    },
+  });
+  const headers = {
+    authorization: `Bearer ${receiver.token}`,
+    "content-type": "application/json",
+  };
+  try {
+    const { id } = await (
+      await fetch(receiver.url + "/captures", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(capture),
+      })
+    ).json();
+    await receiver.idle();
+    await fetch(receiver.url + "/captures/" + id + "/retry", {
+      method: "POST",
+      headers,
+    });
+    await running;
+    const job = await (
+      await fetch(receiver.url + "/captures/" + id, { headers })
+    ).json();
+    assert.equal(job.status, "running");
+    assert.equal(job.result, undefined);
+    assert.equal(job.error, undefined);
+  } finally {
+    release();
+    await receiver.close();
+  }
+});

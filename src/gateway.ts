@@ -323,6 +323,22 @@ export async function createGateway(options: GatewayOptions) {
         if (intent !== "art" && intent !== "idea")
           throw Error("No capture capability");
         if (input.kind !== intent) throw Error("Capture intent mismatch");
+        const selected = options.browserCapture?.image;
+        if (intent === "art" && selected) {
+          const original = Buffer.from(selected.bytes, "base64");
+          if (
+            input.selectedImage !== selected.url ||
+            !Array.isArray(input.assets) ||
+            !input.assets.some(
+              (asset: any) =>
+                typeof asset?.bytes === "string" &&
+                Buffer.from(asset.bytes, "base64").equals(original),
+            )
+          )
+            throw Error(
+              "Preserve the exact browser-selected image and its reference",
+            );
+        }
         finishing = true;
         try {
           const result = await vault.save(input as Draft);

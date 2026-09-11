@@ -12,7 +12,12 @@ import {
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Asset, Draft, Hit, Item, Outcome, StoredAsset } from "./types.ts";
-import { renderRecord, readRecord, updateRecord } from "./records.ts";
+import {
+  renderRecord,
+  readRecord,
+  updateRecord,
+  markdownLabel,
+} from "./records.ts";
 
 export const sha = (data: string | Buffer) =>
   createHash("sha256").update(data).digest("hex");
@@ -438,7 +443,7 @@ export class Vault {
     for (const area of this.areas) {
       lines.push(`## ${area}`, "");
       for (const { item } of entries.filter((e) => e.item.subvault === area)) {
-        const label = item.title.replace(/[\[\]\r\n]/g, " ");
+        const label = markdownLabel(item.title);
         lines.push(
           `- [${label}](subvaults/${encodeURIComponent(area)}/items/${item.id}/record.md)`,
         );

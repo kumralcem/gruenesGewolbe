@@ -31,6 +31,20 @@ test(
         return;
       }
       res.writeHead(200, { "content-type": "text/html" });
+      if (req.url === "/selection") {
+        res.end(
+          '<main><p id="public">Public introduction.</p><form><article><p id="draft">PRIVATE_DRAFT_SENTINEL</p></article></form></main>',
+        );
+        return;
+      }
+      if (req.url === "/editor" || req.url === "/form") {
+        const article =
+          "<article" +
+          (req.url === "/editor" ? " contenteditable" : "") +
+          '><p>PRIVATE_DRAFT_SENTINEL</p><img src="/image.png"></article>';
+        res.end(req.url === "/form" ? "<form>" + article + "</form>" : article);
+        return;
+      }
       res.end(
         '<title>Signed-in painting</title><article><h1>Member instructions</h1><p>Export your inbox, classify messages, and review drafts.</p><img src="/image.png" alt="The selected painting"><form><input type="password" value="PASSWORD_SENTINEL"><textarea>PRIVATE_FORM_TEXT</textarea></form><div style="display:none"><span>HIDDEN_SENTINEL</span></div><script>window.secret="SCRIPT_SENTINEL"</script></article>',
       );
@@ -125,6 +139,38 @@ test(
         path: ".runs/extension-evidence/capture.png",
         fullPage: true,
       });
+      for (const path of ["/editor", "/form", "/selection"]) {
+        await page.goto(origin + path);
+        if (path === "/selection")
+          await page.evaluate(() => {
+            const range = document.createRange();
+            range.setStart(document.querySelector("#public")!.firstChild!, 0);
+            range.setEnd(
+              document.querySelector("#draft")!.firstChild!,
+              "PRIVATE_DRAFT_SENTINEL".length,
+            );
+            getSelection()!.removeAllRanges();
+            getSelection()!.addRange(range);
+          });
+        const privateSnapshot = await worker.evaluate(
+          async (tab) => {
+            await (globalThis as any).startCapture(tab);
+            const entries = Object.values(
+              await (globalThis as any).chrome.storage.session.get(null),
+            ) as any[];
+            return entries.find((entry) => entry.snapshot.url === tab.url)
+              .snapshot;
+          },
+          { ...tab, url: origin + path },
+        );
+        assert.doesNotMatch(
+          JSON.stringify(privateSnapshot),
+          /PRIVATE_DRAFT_SENTINEL/,
+        );
+        assert.equal(privateSnapshot.images.length, 0);
+        if (path === "/selection")
+          assert.equal(privateSnapshot.text, "Public introduction.");
+      }
       const manifest = JSON.parse(
         await readFile("extension/manifest.json", "utf8"),
       );

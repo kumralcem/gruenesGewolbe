@@ -3,7 +3,7 @@ import type { Item, StoredAsset } from "./types.ts";
 
 const mediaStart = "<!-- gg:media -->",
   mediaEnd = "<!-- /gg:media -->";
-const escapeLabel = (s: string) => s.replace(/[\[\]\\\n\r]/g, " ");
+export const markdownLabel = (s: string) => s.replace(/[\[\]\\\n\r]/g, " ");
 export const tagName = (s: string) =>
   s
     .trim()
@@ -46,13 +46,13 @@ function media(item: Item) {
   const links = item.assets
     .map(
       (a) =>
-        `- [${escapeLabel(a.file.split("/").at(-1)!)}](${encodeURI(a.file)})`,
+        `- [${markdownLabel(a.file.split("/").at(-1)!)}](${encodeURI(a.file)})`,
     )
     .join("\n");
-  return `${mediaStart}\n${item.primary ? `![${escapeLabel(item.title)}](${encodeURI(item.primary)})\n\n` : ""}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
+  return `${mediaStart}\n${item.primary ? `![${markdownLabel(item.title)}](${encodeURI(item.primary)})\n\n` : ""}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
 }
 export function renderRecord(item: Item) {
-  return `---\n${stringify(properties(item))}---\n\n# ${escapeLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n[Original page](${encodeURI(item.sourceUrl)})\n`;
+  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n[Original page](${encodeURI(item.sourceUrl)})\n`;
 }
 export function readRecord(source: string, assets?: StoredAsset[]): Item {
   const { props, body } = split(source);

@@ -234,6 +234,7 @@ export async function createReceiver(options: ReceiverOptions) {
             await plain(join(root, job.id, "input.json"));
             job.status = "pending";
             delete job.error;
+            delete job.result;
             await save(job);
             queue.push(job.id);
           });

@@ -260,7 +260,11 @@ async function refresh() {
     for (const job of jobs) {
       const li = document.createElement("li");
       li.textContent =
-        job.title + " — " + (job.result?.outcome?.status ?? job.status);
+        job.title +
+        " — " +
+        (["pending", "running"].includes(job.status)
+          ? job.status
+          : (job.result?.outcome?.status ?? job.status));
       const detail = document.createElement("small");
       detail.textContent =
         job.result?.outcome?.path ??

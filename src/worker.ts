@@ -57,6 +57,7 @@ async function getBrowser() {
   return browser;
 }
 const assets = new Map<string, Asset>();
+let selectedBrowserAsset: Asset | undefined;
 const preservedSources = new Map<string, string>();
 function rememberSource(
   url: string,
@@ -287,7 +288,10 @@ const tools = [
           ? browserCapture.image
           : await rpc("/fetch", { url });
       const bytes = Buffer.from(fetched.bytes, "base64");
-      const a = await prepare(bytes);
+      const a =
+        browserCapture?.image?.url === url
+          ? (selectedBrowserAsset ??= await prepare(bytes))
+          : await prepare(bytes);
       const id = randomUUID();
       assets.set(id, a);
       await writeFile(`/work/${id}`, bytes);
@@ -336,12 +340,18 @@ const tools = [
         if (!a) throw Error("Unknown asset ID");
         return a;
       });
+      if (browserCapture?.image)
+        selectedBrowserAsset ??= await prepare(
+          Buffer.from(browserCapture.image.bytes, "base64"),
+        );
       const chosen = images[0];
-      const original = chosen
-        ? Array.from(assets.values()).find(
-            (a) => a.visualHash === chosen.visualHash,
-          )
-        : undefined;
+      const original =
+        selectedBrowserAsset ??
+        (chosen
+          ? Array.from(assets.values()).find(
+              (a) => a.visualHash === chosen.visualHash,
+            )
+          : undefined);
       if (original && !images.includes(original)) images.unshift(original);
       if (images.length > 2)
         throw Error(
@@ -351,6 +361,7 @@ const tools = [
         ...d,
         kind: job.intent,
         sourceUrl: job.input,
+        selectedImage: browserCapture?.image?.url ?? d.selectedImage,
         sourceText: job.intent === "idea" ? sourceText() : undefined,
         assets: images,
       });

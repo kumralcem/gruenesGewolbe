@@ -44,7 +44,7 @@ Once accepted, a capture continues when its tab closes. **Recent captures** show
 
 In Obsidian, choose **Open folder as vault** and select the directory passed to `--vault`. Open **GG Index.md** to browse saved items. No plugin or conversion step is required for new captures.
 
-Each `record.md` has native YAML properties, a title alias, tags, visible dates, a readable summary, a source link, and relative image/source links. Full image files are embedded directly; bounded `preview.jpg` files also exist for future gallery use. You can edit the summary and add properties or notes. GG reads those changes; a later image upgrade preserves them.
+Each `record.md` has native YAML properties, a title alias, tags, visible dates, a readable summary, a source link, and relative image/source links. Full image files are embedded directly; bounded `preview.jpg` files also exist for future gallery use. You can edit the summary and add properties or notes. GG reads edited summaries and preserves additional properties and notes during later image upgrades.
 
 ```text
 my-vault/
@@ -126,6 +126,6 @@ pnpm test:extension
 pnpm demo                             # real Pi, deterministic model stub; no key needed
 ```
 
-The checks cover 21 unit tests, 9 container tests, and a real Chromium extension test. The browser test uses a cookie-protected fixture, verifies exact image bytes and excluded form/script/hidden content, and writes `.runs/extension-evidence/capture.png`. A separate container test sends the snapshot through real Pi without re-fetching the private source. Vault tests copy the archive and verify portable links and search after external Markdown edits.
+The checks cover 23 unit tests, 9 container tests, and a real Chromium extension test. The browser test uses a cookie-protected fixture, verifies exact image bytes and excluded form/script/hidden content, and writes `.runs/extension-evidence/capture.png`. A separate container test sends the snapshot through real Pi without re-fetching the private source. Vault tests copy the archive and verify portable links and search after external Markdown edits.
 
 [Current validation](docs/validation.md) records results and manual checks. [Earlier prototype findings](docs/prototype-results.md) retain the live-source and large JPEG/WebP evidence, including public X/YouTube failures and the untested live OpenRouter path.
