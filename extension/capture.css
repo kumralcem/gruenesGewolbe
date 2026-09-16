@@ -153,3 +153,20 @@ code {
 [hidden] {
   display: none !important;
 }
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.7rem;
+  border: 1px solid #bbc9bf;
+  border-radius: 0.4rem;
+  resize: vertical;
+}
+
+input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin: 0 0.4rem 0 0;
+  vertical-align: middle;
+}

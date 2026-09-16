@@ -1,0 +1,23 @@
+[Unit]
+Description=GG personal archive controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gg serve
+WorkingDirectory=%h
+Environment=GG_STATE_DIR=%h/.config/gg
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+KillMode=mixed
+MemoryMax=3G
+TasksMax=512
+# Rootless Podman needs its user namespace helpers and cgroup delegation.
+Delegate=yes
+
+[Install]
+WantedBy=default.target

@@ -1,3 +1,8 @@
+import { ModelService } from "./model-service.ts";
+import { defaultStateDir, readJson, writeJson } from "./state.ts";
+import { UsagePaused } from "./usage.ts";
+import { fixtureCompletion } from "./model-bridge.ts";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import { connect, type Socket } from "node:net";
 import { mkdtemp, chmod, rm } from "node:fs/promises";
@@ -23,6 +28,8 @@ export interface GatewayOptions {
   fixturePage?: (url: string) => unknown;
   mockModel?: MockModel;
   browserCapture?: BrowserCapture;
+  batchId?: string;
+  instructions?: string;
 }
 async function body(req: http.IncomingMessage, max: number) {
   let size = 0;
@@ -37,6 +44,93 @@ async function body(req: http.IncomingMessage, max: number) {
 export async function createGateway(options: GatewayOptions) {
   const { vault, config, intent } = options;
   validateConfig(config, intent);
+  let batchId = options.batchId ?? randomUUID();
+  const revision = createHash("sha256")
+    .update(
+      JSON.stringify(
+        options.browserCapture ?? { input: options.input, batchId },
+      ),
+    )
+    .digest("hex");
+  const planPath = join(vault.root, ".gg-plans", revision + ".json");
+  const storedPlan =
+    intent === "capture"
+      ? await readJson<
+          | {
+              sourceUrl: string;
+              keys: string[];
+              batchId?: string;
+              completed?: Record<string, Outcome>;
+            }
+          | undefined
+        >(planPath, undefined)
+      : undefined;
+  if (
+    storedPlan &&
+    (storedPlan.sourceUrl !== options.input ||
+      !Array.isArray(storedPlan.keys) ||
+      !storedPlan.keys.length ||
+      storedPlan.keys.length > 20 ||
+      !storedPlan.keys.every(
+        (k) => typeof k === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(k),
+      ))
+  )
+    throw Error("Invalid persisted capture plan");
+  let planned = storedPlan?.keys ?? ["source"];
+  let planFrozen = Boolean(storedPlan);
+  if (storedPlan?.batchId) batchId = storedPlan.batchId;
+  const completed: Record<string, Outcome> = Object.assign(
+    Object.create(null),
+    storedPlan?.completed ?? {},
+  );
+  const savedKeys = new Set<string>();
+  const previousOutcomes: Outcome[] = [];
+  const initiallySaved = new Map<string, Outcome>();
+  for (const [key, value] of Object.entries(completed)) {
+    if (!planned.includes(key) || !value || typeof value.path !== "string")
+      throw Error("Invalid completed capture key");
+    const outcome: Outcome = {
+      ...value,
+      status: value.status === "partial" ? "partial" : "existing",
+    };
+    savedKeys.add(key);
+    initiallySaved.set(key, outcome);
+    previousOutcomes.push(outcome);
+  }
+  if (intent === "capture" && storedPlan) {
+    for (const record of await vault.sourceRecords(options.input)) {
+      const baseline = await readJson<{ revision?: string } | undefined>(
+        join(record.path, ".gg-baseline.json"),
+        undefined,
+      );
+      const key = record.item.captureKey ?? "source";
+      if (
+        !savedKeys.has(key) &&
+        baseline?.revision === revision &&
+        planned.includes(key)
+      ) {
+        const outcome: Outcome = { status: "existing", path: record.path };
+        savedKeys.add(key);
+        initiallySaved.set(key, outcome);
+        previousOutcomes.push(outcome);
+        completed[key] = outcome;
+      }
+    }
+  }
+  const persistPlan = async (keys: string[]) => {
+    if (planFrozen && JSON.stringify(keys) !== JSON.stringify(planned))
+      throw Error(
+        "Retry must retain the original capture plan; save only pending keys",
+      );
+    await writeJson(planPath, {
+      sourceUrl: options.input,
+      keys,
+      batchId,
+      completed,
+    });
+    planned = keys;
+    planFrozen = true;
+  };
   const dir = await mkdtemp(join(tmpdir(), "gg-gateway-"));
   const socket = join(dir, "broker.sock");
   const token = randomBytes(32).toString("hex");
@@ -46,10 +140,17 @@ export async function createGateway(options: GatewayOptions) {
     (config.maxSeconds ?? 180) * 1000,
   );
   const connections = new Set<Socket>();
+  const service = new ModelService(
+    config.stateDir ?? defaultStateDir(),
+    config,
+  );
+  const management: unknown[] = [];
+  let paused: string | undefined;
+  let retryAt: number | undefined;
   let requests = 0,
     networkBytes = 0,
     finishing = false;
-  const outcomes: Outcome[] = [];
+  const outcomes: Outcome[] = previousOutcomes;
   const seen = new Set<string>();
   let answers: unknown[] = [];
   const events: Record<string, unknown>[] = [];
@@ -81,8 +182,118 @@ export async function createGateway(options: GatewayOptions) {
       if (["/save", "/queue", "/finish"].includes(route)) {
         if (input.sourceUrl !== options.input)
           throw Error("Outcome must belong to the submitted input");
-        if (finishing || outcomes.length)
+        if (finishing || (intent !== "capture" && outcomes.length))
           throw Error("This input already has an outcome");
+      }
+      if (route === "/model/pi") {
+        const attempt = () => {
+          if (requests >= (config.maxRequests ?? 10))
+            throw Error("Model request budget exceeded");
+          requests++;
+          events.push({
+            type: "model_request",
+            request: requests,
+            provider: config.provider,
+            model: config.model,
+          });
+        };
+        if (options.mockModel) {
+          attempt();
+          send(
+            res,
+            200,
+            await fixtureCompletion(
+              input.context,
+              config.model,
+              options.mockModel,
+            ),
+          );
+        } else {
+          try {
+            send(
+              res,
+              200,
+              await service.complete(input.context, abort.signal, attempt),
+            );
+          } catch (e) {
+            if (e instanceof UsagePaused) {
+              paused = e.message;
+              retryAt = e.retryAt;
+            }
+            throw e;
+          }
+        }
+        return;
+      }
+      if (route === "/capture-context" && intent === "capture") {
+        const records = await vault.sourceRecords(options.input);
+        send(res, 200, {
+          records: records.map((v) => ({
+            id: v.item.id,
+            key: v.item.captureKey ?? "source",
+            title: v.item.title,
+            summary: v.item.summary.slice(0, 1000),
+          })),
+          plannedKeys: planned,
+          completedKeys: [...savedKeys],
+          pendingKeys: planned.filter((k) => !savedKeys.has(k)),
+          instructions:
+            options.instructions ??
+            options.browserCapture?.instructions ??
+            records[0]?.item.instructions,
+        });
+        return;
+      }
+      if (route === "/plan" && intent === "capture") {
+        if (
+          !Array.isArray(input.keys) ||
+          !input.keys.length ||
+          input.keys.length > 20 ||
+          new Set(input.keys).size !== input.keys.length ||
+          !input.keys.every(
+            (k: unknown) =>
+              typeof k === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(k),
+          )
+        )
+          throw Error("Invalid capture plan");
+        await persistPlan(input.keys);
+        send(res, 200, {
+          keys: planned,
+          pendingKeys: planned.filter((k) => !savedKeys.has(k)),
+        });
+        return;
+      }
+      if (route === "/catalog" && intent === "manage") {
+        const offset = input.offset ?? 0;
+        if (!Number.isSafeInteger(offset) || offset < 0)
+          throw Error("Invalid catalog offset");
+        const all = await vault.items();
+        const records = all.slice(offset, offset + 50);
+        records.forEach((v) => seen.add(v.item.id));
+        send(res, 200, {
+          subvaults: vault.areas,
+          records: records.map((v) => ({
+            id: v.item.id,
+            title: v.item.title,
+            subvault: v.item.subvault,
+            sourceUrl: v.item.sourceUrl,
+          })),
+          history: (await vault.history()).slice(0, 20),
+          nextOffset: offset + 50 < all.length ? offset + 50 : null,
+        });
+        return;
+      }
+      if (route === "/manage" && intent === "manage") {
+        const result = await vault.manage(input, batchId);
+        management.push(result);
+        send(res, 200, result);
+        return;
+      }
+      if (route === "/undo" && intent === "manage") {
+        const result = await vault.undo(input.id);
+        management.push({ undone: result });
+        send(res, 200, result);
+        return;
       }
       if (route === "/model/chat/completions" || route === "/model/responses") {
         // Admit only the request surface used by Pi's two configured APIs.
@@ -224,41 +435,7 @@ export async function createGateway(options: GatewayOptions) {
             });
           return;
         }
-        if (!config.apiKey) throw Error("Provider API key is not configured");
-        const upstream =
-          (config.provider === "openai"
-            ? "https://api.openai.com/v1"
-            : "https://openrouter.ai/api/v1") + route.slice("/model".length);
-        const response = await fetch(upstream, {
-          method: "POST",
-          signal: abort.signal,
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify(input),
-        });
-        if (!response.ok) {
-          const detail = (await response.json().catch(() => ({}))) as any;
-          const message =
-            typeof detail.error?.message === "string"
-              ? detail.error.message
-                  .replaceAll(config.apiKey, "[redacted]")
-                  .slice(0, 700)
-              : "";
-          send(res, response.status, {
-            error: `Provider returned HTTP ${response.status}${message ? ": " + message : ""}`,
-          });
-          return;
-        }
-        res.writeHead(200, {
-          "content-type":
-            response.headers.get("content-type") ?? "application/json",
-        });
-        if (response.body)
-          for await (const chunk of response.body) res.write(chunk);
-        res.end();
-        return;
+        throw Error("Live model calls must use the controller Pi gateway");
       }
       if (
         route === "/browser-capture" &&
@@ -300,7 +477,10 @@ export async function createGateway(options: GatewayOptions) {
         send(res, 200, answers);
         return;
       }
-      if (intent === "ask" && !["/finish"].includes(route))
+      if (
+        (intent === "ask" || intent === "manage") &&
+        !["/finish"].includes(route)
+      )
         throw Error(
           "Ask job has read-only archive access and no website access",
         );
@@ -319,10 +499,101 @@ export async function createGateway(options: GatewayOptions) {
         return;
       }
       if (route === "/save") {
-        if (outcomes.length) throw Error("This input already has an outcome");
-        if (intent !== "art" && intent !== "idea")
+        if (intent !== "capture" && outcomes.length)
+          throw Error("This input already has an outcome");
+        if (!["art", "idea", "capture"].includes(intent))
           throw Error("No capture capability");
-        if (input.kind !== intent) throw Error("Capture intent mismatch");
+        if (intent !== "capture" && input.kind !== intent)
+          throw Error("Capture intent mismatch");
+        if (intent === "capture") {
+          const key = input.captureKey ?? "source";
+          if (!planned.includes(key))
+            throw Error(
+              "Declare record keys with plan_capture before splitting",
+            );
+          if (initiallySaved.has(key)) {
+            send(res, 200, initiallySaved.get(key));
+            return;
+          }
+          if (savedKeys.has(key))
+            throw Error("Record already saved in this job");
+          await persistPlan(planned);
+          const snapshot = options.browserCapture;
+          if (snapshot) {
+            const preservedText = [
+              snapshot.text,
+              snapshot.transcript,
+              input.includeContext ? snapshot.contextText : undefined,
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+            input.sourceText = preservedText.slice(0, 400000);
+            if (
+              !Array.isArray(input.missingMedia ?? []) ||
+              (input.missingMedia ?? []).length > 24 ||
+              (input.missingMedia ?? []).some(
+                (m: unknown) => typeof m !== "string" || m.length > 4000,
+              )
+            )
+              throw Error("Invalid missing-media report");
+            input.missingMedia = [
+              ...(input.missingMedia ?? []),
+              ...(preservedText.length > 400000
+                ? ["Preserved source was truncated at 400,000 characters."]
+                : []),
+              ...(snapshot.warnings ?? []),
+              ...(snapshot.images ?? [])
+                .filter((i) => !i.bytes)
+                .map((i) => `${i.url}: ${i.error ?? "unavailable"}`),
+            ];
+            const provided = new Set(
+              (snapshot.images ?? [])
+                .filter((i) => i.bytes)
+                .map((i) =>
+                  createHash("sha256")
+                    .update(Buffer.from(i.bytes!, "base64"))
+                    .digest("hex"),
+                ),
+            );
+            // Captured media must come from this snapshot; optional public research
+            // is context only and cannot replace the user's captured material.
+            if (
+              (input.assets ?? []).some(
+                (a: any) =>
+                  !provided.has(
+                    createHash("sha256")
+                      .update(Buffer.from(a.bytes, "base64"))
+                      .digest("hex"),
+                  ),
+              )
+            )
+              throw Error("Preserve supplied browser image bytes");
+          }
+          input.instructions =
+            options.instructions ??
+            snapshot?.instructions ??
+            (await vault.sourceRecords(options.input))[0]?.item.instructions;
+          finishing = true;
+          try {
+            const saved = await vault.capture(input, revision, batchId);
+            const result: Outcome = input.missingMedia?.length
+              ? {
+                  ...saved,
+                  status: "partial",
+                  reason:
+                    "Saved available content; missing media is listed in the record. Recapture to supply missing bytes.",
+                }
+              : saved;
+            outcomes.push(result);
+            savedKeys.add(key);
+            completed[key] = result;
+            await persistPlan(planned);
+            send(res, 200, result);
+          } finally {
+            finishing = false;
+          }
+          return;
+        }
         const selected = options.browserCapture?.image;
         if (intent === "art" && selected) {
           const original = Buffer.from(selected.bytes, "base64");
@@ -436,6 +707,17 @@ export async function createGateway(options: GatewayOptions) {
   return {
     socket,
     token,
+    batchId,
+    management,
+    get paused() {
+      return paused;
+    },
+    get retryAt() {
+      return retryAt;
+    },
+    get complete() {
+      return planned.every((key) => savedKeys.has(key));
+    },
     events,
     outcomes,
     signal: abort.signal,

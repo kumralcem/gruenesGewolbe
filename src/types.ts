@@ -1,4 +1,4 @@
-export type Intent = "art" | "idea" | "ask" | "probe";
+export type Intent = "art" | "idea" | "capture" | "manage" | "ask" | "probe";
 export interface Asset {
   bytes: string;
   width: number;
@@ -8,6 +8,9 @@ export interface Asset {
 }
 export interface Draft {
   kind: "art" | "idea";
+  captureKey?: string;
+  instructions?: string;
+  missingMedia?: string[];
   title: string;
   subvault: string;
   sourceUrl: string;
@@ -34,8 +37,19 @@ export interface Item extends Omit<Draft, "assets"> {
   primary?: string;
 }
 export interface Outcome {
-  status: "saved" | "existing" | "upgraded" | "queued" | "skipped" | "failed";
+  status:
+    | "saved"
+    | "existing"
+    | "upgraded"
+    | "updated"
+    | "partial"
+    | "paused"
+    | "queued"
+    | "skipped"
+    | "failed";
   path?: string;
+  operationId?: string;
+  conflicts?: string[];
   reason?: string;
   sourceUrl?: string;
 }
@@ -49,7 +63,10 @@ export interface Hit {
   capturedAt: string;
 }
 export interface Config {
-  provider: "openai" | "openrouter";
+  provider: "openai" | "openrouter" | "openai-codex";
+  stateDir?: string;
+  maxInputTokens?: number;
+  limits?: Partial<import("./usage.ts").Limits>;
   model: string;
   api?: "openai-completions" | "openai-responses";
   apiKey?: string;

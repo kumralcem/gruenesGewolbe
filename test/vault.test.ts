@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, symlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  writeFile,
+  readdir,
+  symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Vault } from "../src/vault.ts";
@@ -247,4 +253,116 @@ test("a copied vault retains working Obsidian links and searches user-edited YAM
   }
   assert.match(await readFile(copiedRecord, "utf8"), /rating: 5/);
   assert.match(await readFile(copiedRecord, "utf8"), /Useful for my team/);
+});
+
+test("agent captures update in Inbox, preserve user edits, and can be undone", async () => {
+  const { writeFile } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "gg-refresh-"));
+  const vault = await Vault.create(root, ["Ideas"]);
+  const draft = {
+    kind: "idea" as const,
+    title: "A page",
+    summary: "First summary",
+    sourceText: "Original text",
+    sourceUrl: "https://example.org/page",
+    subvault: "Unknown",
+    tags: [],
+  };
+  const first = await vault.capture(draft, "v1", "batch1");
+  assert.match(first.path!, /Inbox/);
+  const file = join(first.path!, "record.md");
+  await writeFile(
+    file,
+    (await readFile(file, "utf8")).replace(
+      "First summary",
+      "My edited summary",
+    ) + "\n## My notes\n\nKeep this.\n",
+  );
+  const second = await vault.capture(
+    { ...draft, title: "New title", summary: "Second summary" },
+    "v2",
+    "batch2",
+  );
+  assert.equal(second.path, first.path);
+  const record = await readFile(file, "utf8");
+  assert.match(record, /My edited summary/);
+  assert.match(record, /Keep this/);
+  assert.match(record, /New title/);
+  assert.deepEqual(second.conflicts, ["summary"]);
+  assert.equal((await vault.items()).length, 1);
+  await vault.undo(second.operationId);
+  assert.match(await readFile(file, "utf8"), /title: A page/);
+});
+test("management previews deletion, rejects stale approvals, and reverses moves", async () => {
+  const { writeFile } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "gg-manage-"));
+  const vault = await Vault.create(root, ["Ideas", "Art"]);
+  const saved = await vault.capture(
+    {
+      kind: "idea",
+      title: "Example",
+      summary: "Hello",
+      tags: [],
+      sourceUrl: "https://example.org/a",
+      sourceText: "Source",
+      subvault: "Ideas",
+    },
+    "1",
+  );
+  const id = (await vault.items())[0].item.id;
+  const moved = await vault.manage(
+    { action: "move", id, subvault: "Art" },
+    "batch",
+  );
+  assert.match((await vault.read(id)).path, /Art/);
+  await vault.undo(moved.operationId);
+  assert.equal((await vault.read(id)).path, saved.path);
+  const preview = await vault.manage({ action: "delete", id });
+  assert.equal(preview.requiresConfirmation, true);
+  assert.equal((await vault.items()).length, 1);
+  await writeFile(
+    join(saved.path!, "record.md"),
+    (await readFile(join(saved.path!, "record.md"), "utf8")) + "\nUser edit\n",
+  );
+  await assert.rejects(vault.confirm(preview.proposalId!), /changed/);
+  const latest = await vault.manage({ action: "delete", id });
+  const deleted = await vault.confirm(latest.proposalId!);
+  assert.equal((await vault.items()).length, 0);
+  await vault.undo(deleted.operationId);
+  assert.equal((await vault.items()).length, 1);
+});
+
+test("separate vault instances preserve destination changes and manually edited headings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gg-multi-instance-"));
+  const first = await Vault.create(root, ["Ideas"]),
+    second = await Vault.open(root);
+  await first.manage({ action: "create-subvault", subvault: "Architecture" });
+  await second.manage({ action: "create-subvault", subvault: "Design" });
+  assert.deepEqual((await Vault.open(root)).areas, [
+    "Ideas",
+    "Architecture",
+    "Design",
+  ]);
+  const draft = {
+    kind: "idea" as const,
+    title: "Generated",
+    summary: "Useful",
+    sourceText: "Original",
+    subvault: "Architecture",
+    sourceUrl: "https://example.com/new",
+    tags: [],
+  };
+  const saved = await first.capture(draft, "first");
+  const file = join(saved.path!, "record.md");
+  await writeFile(
+    file,
+    (await readFile(file, "utf8")).replace("# Generated", "# My own heading"),
+  );
+  const updated = await second.capture(
+    { ...draft, title: "New generated title" },
+    "second",
+  );
+  assert.ok(updated.conflicts?.includes("heading"));
+  assert.match(await readFile(file, "utf8"), /# My own heading/);
+  assert.equal((await first.items()).length, 1);
 });

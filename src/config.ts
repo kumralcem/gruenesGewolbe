@@ -1,7 +1,7 @@
 import type { Config, Intent } from "./types.ts";
 
 export function validateConfig(config: Config, intent: Intent) {
-  if (!["openai", "openrouter"].includes(config.provider))
+  if (!["openai", "openrouter", "openai-codex"].includes(config.provider))
     throw Error("Unsupported provider");
   if (
     intent !== "probe" &&
@@ -20,6 +20,7 @@ export function validateConfig(config: Config, intent: Intent) {
   if (intent === "art" && config.vision === false)
     throw Error("Art capture requires a model configured for image input");
   for (const [label, value, ceiling] of [
+    ["maxInputTokens", config.maxInputTokens ?? 64000, 128000],
     ["maxSeconds", config.maxSeconds ?? 180, 600],
     ["maxRequests", config.maxRequests ?? 10, 30],
     ["maxOutputTokens", config.maxOutputTokens ?? 4096, 16384],

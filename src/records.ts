@@ -25,6 +25,9 @@ function properties(item: Item) {
   return Object.fromEntries(
     Object.entries({
       gg_format: 2,
+      captureKey: item.captureKey,
+      instructions: item.instructions,
+      missingMedia: item.missingMedia,
       id: item.id,
       kind: item.kind,
       title: item.title,
@@ -43,13 +46,25 @@ function properties(item: Item) {
   );
 }
 function media(item: Item) {
+  const embeds = (
+    item.captureKey
+      ? item.assets.map((a) => a.file)
+      : item.primary
+        ? [item.primary]
+        : []
+  )
+    .map((file) => `![${markdownLabel(item.title)}](${encodeURI(file)})`)
+    .join("\n\n");
+  const omissions = item.missingMedia?.length
+    ? `Capture notes:\n\n${item.missingMedia.map((m) => "- " + markdownLabel(m)).join("\n")}\n\n`
+    : "";
   const links = item.assets
     .map(
       (a) =>
         `- [${markdownLabel(a.file.split("/").at(-1)!)}](${encodeURI(a.file)})`,
     )
     .join("\n");
-  return `${mediaStart}\n${item.primary ? `![${markdownLabel(item.title)}](${encodeURI(item.primary)})\n\n` : ""}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
+  return `${mediaStart}\n${embeds ? embeds + "\n\n" : ""}${omissions}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" || item.captureKey ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
 }
 export function renderRecord(item: Item) {
   return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n[Original page](${encodeURI(item.sourceUrl)})\n`;
@@ -101,4 +116,103 @@ export function updateRecord(source: string, item: Item) {
       ? body.slice(0, start) + media(item) + body.slice(end + mediaEnd.length)
       : body + "\n\n" + media(item) + "\n";
   return `---\n${doc.toString()}---\n${updated}`;
+}
+
+/** Three-way refresh: only replace generated fields still equal to their baseline. */
+export function refreshRecord(
+  source: string,
+  baseline: Item | undefined,
+  next: Item,
+  note: string,
+) {
+  const { doc, body } = split(source);
+  const current = readRecord(source, next.assets);
+  const conflicts: string[] = [];
+  const generated = properties(next),
+    previous = baseline ? properties(baseline) : {};
+  for (const key of [
+    "kind",
+    "title",
+    "aliases",
+    "subvault",
+    "sourceUrl",
+    "publishedAt",
+    "creator",
+    "year",
+    "tags",
+    "selectedImage",
+    "captureKey",
+    "instructions",
+    "missingMedia",
+  ]) {
+    if (
+      JSON.stringify(split(source).props[key]) === JSON.stringify(previous[key])
+    ) {
+      if (generated[key] === undefined) doc.delete(key);
+      else doc.set(key, generated[key]);
+    } else if (
+      JSON.stringify(split(source).props[key]) !==
+      JSON.stringify(generated[key])
+    )
+      conflicts.push(key);
+  }
+  let updated = body;
+  if (baseline && current.title === baseline.title) {
+    const heading = body.match(/^\s*# ([^\n]*)/)?.[1];
+    if (heading === markdownLabel(baseline.title))
+      updated = updated.replace(
+        /^\s*# [^\n]*/,
+        () => `\n# ${markdownLabel(next.title)}`,
+      );
+    else if (heading !== markdownLabel(next.title)) conflicts.push("heading");
+  }
+  if (baseline && current.summary === baseline.summary) {
+    updated = updated.replace(
+      /(## Summary\s*\n)[\s\S]*?(?=\n## Source\s*\n|$)/,
+      (_all, heading) => `${heading}\n${next.summary}\n`,
+    );
+  } else if (current.summary !== next.summary) conflicts.push("summary");
+  doc.set("primary", next.primary ?? null);
+  doc.set(
+    "files",
+    next.assets.map((a) => a.file),
+  );
+  doc.set("gg_format", 2);
+  const start = updated.indexOf(mediaStart),
+    end = updated.indexOf(mediaEnd, start);
+  if (start >= 0 && end >= 0)
+    updated =
+      updated.slice(0, start) +
+      media(next) +
+      updated.slice(end + mediaEnd.length);
+  const change = `\n\n### ${new Date().toISOString()}\n\n${note}${conflicts.length ? ` Preserved manual edits: ${conflicts.join(", ")}. Proposed generated values are retained in .gg-baseline.json.` : ""}\n`;
+  return { text: `---\n${doc.toString()}---\n${updated}${change}`, conflicts };
+}
+
+export function editRecord(
+  source: string,
+  patch: {
+    title?: string;
+    summary?: string;
+    tags?: string[];
+    subvault?: string;
+  },
+) {
+  const { doc, body } = split(source);
+  for (const key of ["title", "tags", "subvault"] as const)
+    if (patch[key] !== undefined) doc.set(key, patch[key]);
+  let updated = body;
+  if (patch.title !== undefined) {
+    doc.set("aliases", [patch.title]);
+    updated = updated.replace(
+      /^\s*# [^\n]*/,
+      () => `\n# ${markdownLabel(patch.title!)}`,
+    );
+  }
+  if (patch.summary !== undefined)
+    updated = updated.replace(
+      /(## Summary\s*\n)[\s\S]*?(?=\n## Source\s*\n|$)/,
+      (_all, heading) => `${heading}\n${patch.summary}\n`,
+    );
+  return `---\n${doc.toString()}---\n${updated}\n\n<!-- GG management edit ${new Date().toISOString()} -->\n`;
 }

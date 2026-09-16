@@ -292,3 +292,147 @@ test("browser art saves are bound to the user's selected URL and original bytes"
     await gateway.close();
   }
 });
+
+test("browser multi-record plans retain partial saves and retries do not duplicate records", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-multiple-test-")),
+    ["Ideas"],
+  );
+  const input = "https://private.example/article";
+  const options = {
+    vault,
+    intent: "capture" as const,
+    input,
+    config: { provider: "openai" as const, model: "fixture" },
+    browserCapture: {
+      version: 2 as const,
+      intent: "capture" as const,
+      url: input,
+      title: "Two ideas",
+      capturedAt: "2026-09-15T00:00:00Z",
+      text: "Original source",
+      contextText: "Useful reply",
+      instructions: "Create two records",
+      images: [],
+    },
+  };
+  const save = {
+    sourceUrl: input,
+    kind: "idea",
+    subvault: "unknown",
+    title: "First",
+    summary: "Useful summary",
+    tags: [],
+    sourceText: "invented source",
+    captureKey: "first",
+  };
+  const first = await createGateway(options);
+  try {
+    assert.equal(
+      (
+        await request(first.socket, first.token, "/plan", {
+          keys: ["first", "second"],
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await request(first.socket, first.token, "/save", save)).status,
+      200,
+    );
+    assert.equal(first.complete, false);
+  } finally {
+    await first.close();
+  }
+  const newer = await createGateway({
+    ...options,
+    browserCapture: {
+      ...options.browserCapture,
+      capturedAt: "2026-09-16T01:00:00Z",
+    },
+  });
+  try {
+    await request(newer.socket, newer.token, "/plan", {
+      keys: ["first", "second"],
+    });
+    assert.equal(
+      (
+        await request(newer.socket, newer.token, "/save", {
+          ...save,
+          summary: "Newer content must survive",
+        })
+      ).status,
+      200,
+    );
+  } finally {
+    await newer.close();
+  }
+  const retry = await createGateway(options);
+  try {
+    const context = await request(
+      retry.socket,
+      retry.token,
+      "/capture-context",
+      {},
+    );
+    assert.deepEqual(context.data.completedKeys, ["first"]);
+    assert.deepEqual(context.data.pendingKeys, ["second"]);
+    assert.equal(
+      (await request(retry.socket, retry.token, "/plan", { keys: ["first"] }))
+        .status,
+      400,
+    );
+    assert.equal(retry.complete, false);
+    await request(retry.socket, retry.token, "/plan", {
+      keys: ["first", "second"],
+    });
+    assert.equal(
+      (await request(retry.socket, retry.token, "/save", save)).data.status,
+      "existing",
+    );
+    assert.equal(
+      (
+        await request(retry.socket, retry.token, "/save", {
+          ...save,
+          title: "Second",
+          captureKey: "second",
+          includeContext: true,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(retry.complete, true);
+    assert.equal(retry.batchId, first.batchId);
+    assert.equal(
+      (await vault.items()).find((v) => v.item.captureKey === "first")?.item
+        .summary,
+      "Newer content must survive",
+    );
+    assert.equal(
+      (await request(retry.socket, retry.token, "/confirm", { id: "made-up" }))
+        .status,
+      404,
+    );
+    const items = await vault.items();
+    assert.equal(items.length, 2);
+    assert.ok(items.every((v) => v.item.subvault === "Inbox"));
+    assert.equal(
+      (
+        await vault.read(
+          items.find((v) => v.item.captureKey === "first")!.item.id,
+        )
+      ).sourceText,
+      "Original source",
+    );
+    assert.match(
+      (
+        await vault.read(
+          items.find((v) => v.item.captureKey === "second")!.item.id,
+        )
+      ).sourceText,
+      /Useful reply/,
+    );
+  } finally {
+    await retry.close();
+  }
+});

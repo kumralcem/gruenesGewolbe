@@ -31,3 +31,40 @@ test("visual captures require bytes for exactly one selected image", () => {
     /Invalid page/,
   );
 });
+test("an unclassified snapshot preserves multiple images, instructions and missing media", () => {
+  const capture = validateBrowserCapture({
+    ...source,
+    version: 2,
+    intent: undefined,
+    instructions: "Save each painting separately",
+    images: [
+      {
+        url: "https://example.org/a.jpg",
+        bytes: "/9j/",
+        mimeType: "image/jpeg",
+        alt: "First",
+        caption: "Artist A",
+      },
+      {
+        url: "https://example.org/b.jpg",
+        error: "Download unavailable",
+        alt: "Second",
+      },
+    ],
+    cookies: "secret",
+  });
+  assert.equal(capture.intent, "capture");
+  assert.equal(capture.instructions, "Save each painting separately");
+  assert.equal(capture.images?.length, 2);
+  assert.equal(capture.images?.[0].caption, "Artist A");
+  assert.equal(capture.images?.[1].error, "Download unavailable");
+  assert.equal("cookies" in capture, false);
+  assert.throws(
+    () =>
+      validateBrowserCapture({
+        ...capture,
+        images: Array(25).fill(capture.images![0]),
+      }),
+    /24/,
+  );
+});

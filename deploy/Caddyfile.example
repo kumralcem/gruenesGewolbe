@@ -1,0 +1,8 @@
+# Optional public HTTPS. Replace gg.example.com only after obtaining a domain,
+# pointing its DNS at Perkele, and configuring GG's matching public origin.
+gg.example.com {
+    request_body {
+        max_size 90MB
+    }
+    reverse_proxy 127.0.0.1:48123
+}

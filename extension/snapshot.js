@@ -107,27 +107,35 @@ function ggSnapshot() {
     .map((i) => ({
       url: i.currentSrc || i.src,
       alt: i.alt.slice(0, 300),
+      caption: (
+        i.closest("figure")?.querySelector("figcaption")?.innerText ??
+        i.closest("a")?.getAttribute("title") ??
+        ""
+      ).slice(0, 4000),
       width: i.naturalWidth,
       height: i.naturalHeight,
     }));
   const unique = Array.from(
     new Map(images.map((image) => [image.url, image])).values(),
   ).slice(0, 60);
-  if (text.length > 400000 || transcript.length > 400000)
-    throw Error(
-      "This page is too long for one capture. Select the relevant text first.",
-    );
   return {
-    version: 1,
+    version: 2,
     url,
     title: document.title.slice(0, 1000),
     capturedAt: new Date().toISOString(),
-    text,
+    text: text.slice(0, 350000),
+    warnings:
+      text.length > 350000 || transcript.length > 350000
+        ? ["Page content was truncated to fit the capture limit."]
+        : [],
     html:
       selected || excludedRegion
         ? undefined
         : clone.outerHTML.slice(0, 1500000),
-    transcript: transcript || undefined,
+    contextText: mainPost
+      ? visibleText(document.querySelector("main") ?? mainPost).slice(0, 40000)
+      : undefined,
+    transcript: transcript.slice(0, 350000) || undefined,
     images: unique,
     selection: Boolean(selected),
   };

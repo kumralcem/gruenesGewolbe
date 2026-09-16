@@ -15,9 +15,12 @@
     "format:check": "prettier --check src test scripts extension",
     "evaluate:live": "node --import tsx scripts/evaluate-live.ts",
     "evaluate:images": "node --import tsx scripts/evaluate-images.ts",
-    "test:extension": "node --import tsx --test test/extension.integration.ts"
+    "test:extension": "node --import tsx --test test/extension.integration.ts",
+    "test:worker": "node --import tsx --test test/worker.integration.ts",
+    "install:cli": "sh scripts/install-cli.sh"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
     "playwright": "1.63.0",
     "sharp": "^0.34.5",
@@ -29,5 +32,8 @@
     "prettier": "^3.9.6",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
+  },
+  "bin": {
+    "gg": "bin/gg"
   }
 }

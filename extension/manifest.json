@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "GG Capture",
   "version": "0.1.0",
-  "description": "Send the page or selected image you are viewing to your local GG archive.",
+  "description": "Send the page or selected image you are viewing to your GG archive.",
   "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://127.0.0.1/*"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],

@@ -1,3 +1,5 @@
+import { fileLock, defaultStateDir } from "./state.ts";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Duplex } from "node:stream";
@@ -9,7 +11,7 @@ export class JobCancelledError extends Error {}
 
 // Only the controller owns the vault, provider key and runtime. FD 3 connects
 // the worker to this job's gateway; it conveys no selectable host destination.
-export async function runJob(
+async function runWorker(
   options: GatewayOptions & {
     focus?: string;
     onEvent?: (event: any) => void;
@@ -58,45 +60,49 @@ export async function runJob(
   const channel = new Channel(child.stdio[3] as Duplex, gateway.socket);
   let stopping: Promise<void> | undefined;
   const stop = () =>
-    (stopping ??= new Promise<void>((resolve) => {
-      const cleanup = spawn("podman", ["rm", "--force", name], {
-        stdio: "ignore",
-        env: runtimeEnv,
-      });
-      const timer = setTimeout(() => {
-        cleanup.kill("SIGKILL");
-        child.kill("SIGKILL");
-      }, 10000);
-      const done = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      const failedRemoval = () => {
-        // Creation may have raced the first lookup. Retry after the launcher
-        // has stopped, rather than memoizing a failed "not found" removal.
-        const retryRemoval = () => {
-          const retry = spawn("podman", ["rm", "--force", name], {
+    child.pid === undefined
+      ? Promise.resolve()
+      : (stopping ??= new Promise<void>((resolve) => {
+          const cleanup = spawn("podman", ["rm", "--force", name], {
             stdio: "ignore",
             env: runtimeEnv,
           });
-          const retryTimer = setTimeout(() => retry.kill("SIGKILL"), 5000);
-          const finished = () => {
-            clearTimeout(retryTimer);
-            done();
+          const timer = setTimeout(() => {
+            cleanup.kill("SIGKILL");
+            child.kill("SIGKILL");
+          }, 10000);
+          const done = () => {
+            clearTimeout(timer);
+            resolve();
           };
-          retry.once("error", finished);
-          retry.once("exit", finished);
-        };
-        if (child.exitCode !== null || child.signalCode !== null)
-          retryRemoval();
-        else {
-          child.once("exit", retryRemoval);
-          child.kill("SIGKILL");
-        }
-      };
-      cleanup.once("error", failedRemoval);
-      cleanup.once("exit", (code) => (code === 0 ? done() : failedRemoval()));
-    }));
+          const failedRemoval = () => {
+            // Creation may have raced the first lookup. Retry after the launcher
+            // has stopped, rather than memoizing a failed "not found" removal.
+            const retryRemoval = () => {
+              const retry = spawn("podman", ["rm", "--force", name], {
+                stdio: "ignore",
+                env: runtimeEnv,
+              });
+              const retryTimer = setTimeout(() => retry.kill("SIGKILL"), 5000);
+              const finished = () => {
+                clearTimeout(retryTimer);
+                done();
+              };
+              retry.once("error", finished);
+              retry.once("exit", finished);
+            };
+            if (child.exitCode !== null || child.signalCode !== null)
+              retryRemoval();
+            else {
+              child.once("exit", retryRemoval);
+              child.kill("SIGKILL");
+            }
+          };
+          cleanup.once("error", failedRemoval);
+          cleanup.once("exit", (code) =>
+            code === 0 ? done() : failedRemoval(),
+          );
+        }));
   const onDeadline = () => {
     void stop();
   };
@@ -133,7 +139,24 @@ export async function runJob(
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-16000);
   });
-  const { apiKey: _secret, ...config } = options.config;
+  const {
+    provider,
+    model,
+    api,
+    vision,
+    maxOutputTokens,
+    maxSeconds,
+    maxRequests,
+  } = options.config;
+  const config = {
+    provider,
+    model,
+    api,
+    vision,
+    maxOutputTokens,
+    maxSeconds,
+    maxRequests,
+  };
   const job: Job = {
     intent: options.intent,
     input: options.input,
@@ -161,9 +184,48 @@ export async function runJob(
         ? "Job deadline exceeded"
         : (events.findLast((e) => e.type === "error")?.message ??
           `Worker exited without an outcome (${exitCode})`);
+    const omissions = [
+      ...(options.browserCapture?.warnings ?? []),
+      ...(options.browserCapture?.images ?? [])
+        .filter((i) => !i.bytes)
+        .map((i) => i.error ?? "Image unavailable"),
+    ];
+    const captureWarning =
+      omissions.length || gateway.outcomes.some((o) => o.status === "partial")
+        ? "Saved available content; some page content or images were unavailable. Open the original page and recapture to supply missing material."
+        : gateway.outcomes.some((o) => o.conflicts?.length)
+          ? "Saved update while preserving conflicting manual edits; review the dated record note."
+          : undefined;
     const outcome =
-      gateway.outcomes[0] ??
-      (options.intent === "ask" && events.some((e) => e.type === "results")
+      (options.intent === "capture"
+        ? {
+            status: gateway.paused
+              ? "paused"
+              : gateway.outcomes.some((o) => o.status === "skipped") &&
+                  exitCode === 0
+                ? "skipped"
+                : gateway.complete && exitCode === 0 && captureWarning
+                  ? "partial"
+                  : gateway.complete && exitCode === 0
+                    ? gateway.outcomes.some((o) => o.status === "updated")
+                      ? "updated"
+                      : "saved"
+                    : gateway.outcomes.length
+                      ? "partial"
+                      : "failed",
+            reason:
+              gateway.paused ??
+              captureWarning ??
+              gateway.outcomes.find((o) => o.status === "skipped")?.reason ??
+              (gateway.complete && exitCode === 0 ? undefined : reason),
+            sourceUrl: options.input,
+            path: gateway.outcomes[0]?.path,
+          }
+        : options.intent === "manage" && exitCode === 0
+          ? undefined
+          : gateway.outcomes[0]) ??
+      ((options.intent === "manage" && exitCode === 0) ||
+      (options.intent === "ask" && events.some((e) => e.type === "results"))
         ? undefined
         : options.intent === "probe" && exitCode === 0
           ? undefined
@@ -173,6 +235,11 @@ export async function runJob(
       exitCode,
       outcome,
       answers: gateway.answers,
+      outcomes: gateway.outcomes,
+      management: gateway.management,
+      batchId: gateway.batchId,
+      retryAt: gateway.retryAt,
+      answer: events.findLast((e) => e.type === "answer")?.text,
       events,
       modelRequests: gateway.requests,
       gatewayEvents: gateway.events,
@@ -191,4 +258,18 @@ export async function runJob(
     channel.close();
     await gateway.close();
   }
+}
+
+export async function runJob(options: Parameters<typeof runWorker>[0]) {
+  const stateDir =
+    options.config.stateDir ??
+    (options.mockModel
+      ? join(options.vault.root, ".fixture-controller")
+      : defaultStateDir());
+  return fileLock(
+    join(stateDir, "job.lock"),
+    () => runWorker({ ...options, config: { ...options.config, stateDir } }),
+    600000,
+    options.signal,
+  );
 }

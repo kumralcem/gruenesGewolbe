@@ -108,13 +108,13 @@ test(
         await (globalThis as any).startCapture(tab);
       }, tab);
       const ui = await capturePagePromise;
-      await ui.getByRole("button", { name: "Send to my vault" }).click();
+      await ui.getByRole("button", { name: "Capture", exact: true }).click();
       await ui
         .getByRole("status")
-        .filter({ hasText: "Capture accepted" })
+        .filter({ hasText: "Capture received" })
         .waitFor();
       await receiver.idle();
-      assert.equal(captures[0].intent, "idea");
+      assert.equal(captures[0].intent, "capture");
       assert.match(captures[0].text, /classify messages/);
       assert.doesNotMatch(
         JSON.stringify(captures[0]),
@@ -125,15 +125,23 @@ test(
         await (globalThis as any).startCapture(tab);
       }, tab);
       const second = await secondPromise;
-      await second.getByLabel("One image", { exact: true }).check();
-      await second.getByRole("button", { name: "Send to my vault" }).click();
+      await second
+        .getByLabel("Instructions (optional)")
+        .fill("Save each image separately with its surrounding context.");
+      await second
+        .getByRole("button", { name: "Capture", exact: true })
+        .click();
       await second
         .getByRole("status")
-        .filter({ hasText: "Capture accepted" })
+        .filter({ hasText: "Capture received" })
         .waitFor();
       await receiver.idle();
-      assert.equal(captures[1].intent, "art");
-      assert.deepEqual(Buffer.from(captures[1].image.bytes, "base64"), image);
+      assert.equal(captures[1].intent, "capture");
+      assert.match(captures[1].instructions, /each image separately/);
+      assert.deepEqual(
+        Buffer.from(captures[1].images[0].bytes, "base64"),
+        image,
+      );
       await mkdir(".runs/extension-evidence", { recursive: true });
       await second.screenshot({
         path: ".runs/extension-evidence/capture.png",

@@ -1,3 +1,4 @@
+import type { Devices } from "./devices.ts";
 import http from "node:http";
 import {
   randomBytes,
@@ -24,7 +25,15 @@ import {
 
 interface CaptureJob {
   id: string;
-  status: "pending" | "running" | "completed" | "failed" | "interrupted";
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "failed"
+    | "interrupted"
+    | "partial"
+    | "paused"
+    | "cancelled";
   url: string;
   title: string;
   createdAt: string;
@@ -35,6 +44,10 @@ interface CaptureJob {
 export interface ReceiverOptions {
   vault: Vault;
   port?: number;
+  devices?: Devices;
+  publicOrigin?: string;
+  usage?: () => Promise<unknown>;
+  command?: (input: any, signal: AbortSignal) => Promise<unknown>;
   processCapture: (
     capture: BrowserCapture,
     signal: AbortSignal,
@@ -47,6 +60,18 @@ async function plain(path: string, dir = false) {
     throw Error("Unsafe receiver state entry");
 }
 export async function createReceiver(options: ReceiverOptions) {
+  if (options.publicOrigin) {
+    const u = new URL(options.publicOrigin);
+    if (
+      u.protocol !== "https:" ||
+      u.username ||
+      u.password ||
+      u.pathname !== "/" ||
+      u.search ||
+      u.hash
+    )
+      throw Error("Public origin must be an HTTPS origin");
+  }
   const root = join(options.vault.root, ".gg-jobs");
   await mkdir(root, { recursive: true, mode: 0o700 });
   await plain(root, true);
@@ -58,11 +83,15 @@ export async function createReceiver(options: ReceiverOptions) {
       );
     },
   );
-  const token = randomBytes(32).toString("hex"),
+  const token = options.devices
+      ? await options.devices.pairing("capture")
+      : randomBytes(32).toString("hex"),
     jobs = new Map<string, CaptureJob>(),
     queue: string[] = [];
   let active: Promise<void> | undefined,
     stopping = false,
+    uploading = 0,
+    activeId: string | undefined,
     current: AbortController | undefined;
   const save = async (job: CaptureJob) => {
     const dir = join(root, job.id);
@@ -72,12 +101,23 @@ export async function createReceiver(options: ReceiverOptions) {
     await rename(temp, join(dir, "job.json"));
   };
   const problems: string[] = [];
+  let pausedUntil = 0;
+  const resumeTimer = setInterval(() => {
+    if (!stopping && Date.now() >= pausedUntil) {
+      for (const job of jobs.values())
+        if (job.status === "paused" && !queue.includes(job.id))
+          queue.push(job.id);
+      pump();
+    }
+  }, 30000);
+  resumeTimer.unref();
   const pump = () => {
-    if (active || stopping) return;
+    if (active || stopping || !queue.length || Date.now() < pausedUntil) return;
     active = (async () => {
       while (queue.length && !stopping) {
         const id = queue.shift()!,
           job = jobs.get(id)!;
+        activeId = id;
         current = new AbortController();
         try {
           job.status = "running";
@@ -88,23 +128,38 @@ export async function createReceiver(options: ReceiverOptions) {
             JSON.parse(await readFile(file, "utf8")),
           );
           const result = await options.processCapture(capture, current.signal);
+          if (job.status === ("cancelled" as string)) continue;
           job.result = result;
+          const state = result.outcome?.status;
           job.status =
-            result.outcome?.status === "failed" ? "failed" : "completed";
+            state === "failed"
+              ? "failed"
+              : state === "partial"
+                ? "partial"
+                : state === "paused"
+                  ? "paused"
+                  : "completed";
+          if (job.status === "paused") {
+            pausedUntil = Number(result.retryAt) || Date.now() + 60000;
+          }
+          delete job.error;
           await save(job);
           if (
-            ["saved", "existing", "upgraded", "skipped"].includes(
+            ["saved", "existing", "upgraded", "updated", "skipped"].includes(
               result.outcome?.status ?? "",
             )
           )
             await unlink(file);
         } catch (error) {
-          job.status = stopping ? "interrupted" : "failed";
+          if (job.status !== "cancelled")
+            job.status = stopping ? "interrupted" : "failed";
           job.error = error instanceof Error ? error.message : String(error);
           await save(job);
         } finally {
           current = undefined;
+          activeId = undefined;
         }
+        if (job.status === "paused") break;
       }
     })()
       .catch((error) => {
@@ -114,7 +169,7 @@ export async function createReceiver(options: ReceiverOptions) {
       })
       .finally(() => {
         active = undefined;
-        if (queue.length && !stopping) pump();
+        if (queue.length && !stopping && Date.now() >= pausedUntil) pump();
       });
   };
   try {
@@ -134,6 +189,9 @@ export async function createReceiver(options: ReceiverOptions) {
             "completed",
             "failed",
             "interrupted",
+            "cancelled",
+            "partial",
+            "paused",
           ].includes(job.status)
         )
           throw Error("Invalid stored job");
@@ -144,7 +202,7 @@ export async function createReceiver(options: ReceiverOptions) {
           await save(job);
         }
         jobs.set(id, job);
-        if (job.status === "pending") queue.push(id);
+        if (["pending", "paused"].includes(job.status)) queue.push(id);
       } catch (error) {
         problems.push(`Could not load capture ${id}: ${String(error)}`);
       }
@@ -162,9 +220,15 @@ export async function createReceiver(options: ReceiverOptions) {
     res.end(JSON.stringify(data));
   };
   const server = http.createServer(async (req, res) => {
+    let hasUploadSlot = false;
     try {
       const origin = req.headers.origin;
-      if (req.headers.host !== `127.0.0.1:${(server.address() as any).port}`) {
+      if (
+        ![
+          `127.0.0.1:${(server.address() as any).port}`,
+          ...(options.publicOrigin ? [new URL(options.publicOrigin).host] : []),
+        ].includes(req.headers.host ?? "")
+      ) {
         send(res, 403, { error: "Invalid receiver host" });
         return;
       }
@@ -188,13 +252,68 @@ export async function createReceiver(options: ReceiverOptions) {
         res.end();
         return;
       }
-      const supplied = Buffer.from(req.headers.authorization ?? "");
-      const expected = Buffer.from(`Bearer ${token}`);
+      const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+      if (req.method === "POST" && req.url === "/pair") {
+        let raw = "";
+        for await (const c of req) {
+          raw += c;
+          if (raw.length > 1000) throw Error("Pairing request too large");
+        }
+        if (options.devices) {
+          send(
+            res,
+            200,
+            await options.devices.exchange(bearer, JSON.parse(raw).name),
+          );
+          return;
+        }
+        if (bearer !== token) {
+          send(res, 401, { error: "Invalid pairing code" });
+          return;
+        }
+        send(res, 200, { token });
+        return;
+      }
+      const device = options.devices
+        ? await options.devices.authenticate(bearer)
+        : undefined;
+      const supplied = Buffer.from(bearer),
+        expected = Buffer.from(token);
       if (
-        supplied.length !== expected.length ||
-        !timingSafeEqual(supplied, expected)
+        options.devices
+          ? !device
+          : supplied.length !== expected.length ||
+            !timingSafeEqual(supplied, expected)
       ) {
-        send(res, 401, { error: "Pair the extension with the receiver token" });
+        send(res, 401, { error: "Pair this device with GG" });
+        return;
+      }
+      if (req.method === "GET" && req.url === "/usage") {
+        send(
+          res,
+          200,
+          options.usage
+            ? await options.usage()
+            : { windows: [], providers: {} },
+        );
+        return;
+      }
+      if (req.method === "POST" && req.url === "/commands") {
+        if (
+          !options.command ||
+          (options.devices && device?.scope !== "manage")
+        ) {
+          send(res, 403, { error: "A management device pairing is required" });
+          return;
+        }
+        let raw = "";
+        for await (const c of req) {
+          raw += c;
+          if (raw.length > 200000) throw Error("Command too large");
+        }
+        const signal = new AbortController();
+        res.once("close", () => signal.abort());
+        send(res, 200, await options.command(JSON.parse(raw), signal.signal));
         return;
       }
       if (req.method === "GET" && req.url === "/health") {
@@ -210,7 +329,7 @@ export async function createReceiver(options: ReceiverOptions) {
         return;
       }
       const selected = req.url?.match(
-        /^\/captures\/([a-f0-9-]{36})(\/retry)?$/,
+        /^\/captures\/([a-f0-9-]{36})(\/(?:retry|cancel))?$/,
       );
       if (selected && uuid.test(selected[1])) {
         const job = jobs.get(selected[1]);
@@ -222,17 +341,46 @@ export async function createReceiver(options: ReceiverOptions) {
           send(res, 200, job);
           return;
         }
+        if (req.method === "POST" && selected[2] === "/cancel") {
+          const cancellation = accepting.then(async () => {
+            if (job.status === "completed")
+              throw Error(
+                "Completed captures cannot be cancelled; use undo for saved records",
+              );
+            job.status = "cancelled";
+            for (let i = queue.length - 1; i >= 0; i--)
+              if (queue[i] === job.id) queue.splice(i, 1);
+            if (activeId === job.id) current?.abort();
+            await save(job);
+          });
+          accepting = cancellation.catch(() => {});
+          await cancellation;
+          send(res, 200, job);
+          return;
+        }
         if (
           req.method === "POST" &&
-          selected[2] &&
-          ["failed", "interrupted"].includes(job.status)
+          selected[2] === "/retry" &&
+          ["failed", "interrupted", "partial", "paused", "cancelled"].includes(
+            job.status,
+          )
         ) {
           const retry = accepting.then(async () => {
-            if (!["failed", "interrupted"].includes(job.status)) return;
+            if (
+              ![
+                "failed",
+                "interrupted",
+                "partial",
+                "paused",
+                "cancelled",
+              ].includes(job.status)
+            )
+              return;
             if (stopping || queue.length >= 20)
               throw Error("Receiver queue is full or stopping");
             await plain(join(root, job.id, "input.json"));
             job.status = "pending";
+            pausedUntil = 0;
             delete job.error;
             delete job.result;
             await save(job);
@@ -253,6 +401,14 @@ export async function createReceiver(options: ReceiverOptions) {
         throw Error("JSON capture required");
       if (stopping || queue.length >= 20)
         throw Error("Receiver queue is full or stopping");
+      if (uploading >= 2) {
+        send(res, 429, {
+          error: "Two uploads are already in progress; retry shortly",
+        });
+        return;
+      }
+      uploading++;
+      hasUploadSlot = true;
       let size = 0;
       const chunks: Buffer[] = [];
       for await (const chunk of req) {
@@ -329,6 +485,8 @@ export async function createReceiver(options: ReceiverOptions) {
           error: error instanceof Error ? error.message : "Capture rejected",
         });
       else res.destroy();
+    } finally {
+      if (hasUploadSlot) uploading--;
     }
   });
   server.requestTimeout = 30000;
@@ -353,6 +511,7 @@ export async function createReceiver(options: ReceiverOptions) {
     },
     async close() {
       stopping = true;
+      clearInterval(resumeTimer);
       current?.abort();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

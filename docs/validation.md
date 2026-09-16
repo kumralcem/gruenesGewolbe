@@ -1,3 +1,24 @@
+# Agent-led capture validation — 2026-09-16
+
+Review base: `1aeb3714ec396c93192f3a30436302de4f5f0b23`. Implementation spec: `.scratch/agent-led-capture/PRD.md`.
+
+- Typecheck passes. Unit suite: 36 tests pass, covering persistent budgets, retries, native model calls, pairing/revocation, remote CLI scopes, multi-record retries, manual edits, confirmation fingerprints and undo.
+- `pnpm test:worker`: two real Pi tests pass private snapshot split capture, management delete preview/confirmation, preservation of multiple byte-identical images, and partial success with undecodable media, using deterministic provider stubs. This runs as a fixture on the host and makes **no isolation claim**.
+- Chromium extension integration passes with optional instructions and automatic image collection from an authenticated fixture. Submitted bytes match the image, while cookie/form/script/hidden sentinels are excluded. Screenshot: `.runs/extension-evidence/capture.png`, visually inspected.
+- Browser prerequisites were downloaded without privileged changes: Playwright Chromium, and Ubuntu browser libraries extracted under ignored `.runs/chromium-libs/root`. Reproduce here with `LD_LIBRARY_PATH="$PWD/.runs/chromium-libs/root/usr/lib/x86_64-linux-gnu" pnpm test:extension`. Normal prepared hosts do not need this workaround.
+- `pnpm test:container`: all nine cases blocked by `spawn podman ENOENT`. `pnpm demo` is blocked by the same missing runtime. Previous-host container results below are historical, not evidence for this change on Perkele.
+- Formatting, `git diff --check`, shell script syntax and `systemd-analyze --user verify deploy/gg.service` pass. Independent Standards/Spec review found seven issues, all fixed and rechecked; see [review record](../.scratch/agent-led-capture/review.md).
+- Plain launcher installed at `/home/dev/.local/bin/gg`; `gg help` works. Service and optional Caddy template prepared; neither service nor public endpoint deployed. No domain is available. SSH-forwarding setup is documented.
+- No live provider login/request, real website regression sweep, public TLS test, complete host-hardening audit, or existing-vault migration was performed. Whatbox backup remains deferred.
+
+## Manual follow-up on the prepared host
+
+Install the host prerequisites, build the worker, run its probe/container suite, sign in to the selected provider, and try a small private-page capture. Verify limits/allowance reporting, repeat capture, multi-record instructions, management preview/confirmation and undo. Connect a second device through SSH forwarding and verify revocation. Public HTTPS requires a later domain and proxy/ingress validation.
+
+---
+
+## Historical validation from the previous host and implementation
+
 # Clean restart validation — 2026-09-11
 
 The current change removes the Rust/Tauri application, promotes the Pi package to the root, adds Chrome capture and a local durable receiver, and writes Obsidian-compatible records. The fixed review base is `745f00dc2d986817c895fe83d8ec25b0d8fab4a3`, the completed prototype before this change.

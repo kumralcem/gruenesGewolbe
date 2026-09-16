@@ -1,25 +1,27 @@
 # Grünes Gewölbe
 
-A file-based personal archive. Pi handles capture and natural-language retrieval; a trusted controller owns the vault. See [README](README.md) for current implementation and [decisions](docs/adr/) for agreed behavior.
+A file-based personal archive. Pi handles capture, retrieval and explicitly requested management; a trusted controller owns the vault. See [README](README.md) and [ADR-0047](docs/adr/0047-agent-led-capture-and-perkele-controller.md) for current behavior.
 
 ## Domain language
 
-- **Vault**: the portable directory containing saved items, records, and existing destinations. No database is required.
-- **Subvault**: a user-created destination such as Paintings, Photography, Sculptures, or Ideas. Agents may choose one but cannot create/delete destinations.
-- **Saved Item**: one thing worth keeping, stored in an **Item Folder** with its `record.md` (**Item Record**) and preserved content.
-- **Visual Capture**: one **Selected Image**, preserving that exact photograph/viewpoint/composition. It excludes discussion, replies, and alternate depictions.
-- **Primary File**: the chosen main image. **Preserved Files** include the initially obtained copy and any conservatively confirmed better version. Earlier copies are retained.
-- **Thumbnail Preview**: a bounded derivative for display. It never replaces a preserved original.
-- **Idea Source**: source text or an existing video transcript, its URL, and a useful **Summary**. The summary supports search by remembered problems; instructional material retains usable steps and conditions.
-- **Source Copy**: readable preserved source text, independent of the generated summary or focus.
-- **Capture Date**: when the item was saved. **Source Publication Date**: when the source was published, if known. Neither implies continuing accuracy.
-- **Browser Snapshot**: content collected by an explicit extension action from the current browser session. It contains page text, sanitized HTML, an available transcript, and optionally one image's bytes; no cookie store or browser credentials.
-- **Capture Job**: a persisted receiver input and its processing status. Pending jobs run sequentially; failed/interrupted jobs can be retried.
-- **Capture Queue**: unresolved user decisions, such as an unsuitable destination or ambiguous image. Distinct from background processing jobs.
-- **Vault Problem**: a malformed or unsafe entry reported locally without hiding valid items elsewhere.
-- **Tag**: an open-ended search label, written as an Obsidian-compatible tag in the Item Record.
-- **GG Index**: a generated Markdown list of relative links to item records, rebuilt from the files. It is not the source of truth.
+- **Vault**: the portable directory containing records, preserved media, source copies and local history. No database is required.
+- **Subvault**: an existing destination such as Paintings or Ideas. Capture chooses one; explicit management instructions may create or rename destinations.
+- **Inbox**: permanent searchable destination when classification is uncertain.
+- **Saved Item / Item Folder / Item Record**: a coherent thing worth keeping, its folder and editable `record.md`.
+- **Capture**: interprets one source plus optional user instructions. Normally one record with relevant images; instructions may request several.
+- **Capture Key**: stable identity of a record within a source, allowing individually matched updates after a split. Default `source`.
+- **Browser Snapshot**: bounded visible text, sanitized structure, optional discussion/transcript and candidate image bytes from an explicitly captured tab; no cookie store or authenticated browser profile.
+- **Source Copy**: preserved source text independent of generated summaries. **Summary** is a searchable interpretation, preserving actionable steps and conditions when relevant.
+- **Primary File / Preserved Files / Thumbnail Preview**: main image, retained originals, and bounded display derivative. Previews do not replace originals.
+- **Capture Date / Source Publication Date**: when GG saved an item / when the source was published if known. Neither implies ongoing accuracy.
+- **Capture Job**: durable receiver input with pending/running/completed/partial/paused/failed/interrupted/cancelled state. Distinct from the legacy **Capture Queue** of unresolved decisions.
+- **Operation / Batch / History**: one journaled change, a group of changes from one job, and retained file versions for conflict-aware undo.
+- **Confirmation Proposal**: concrete delete/merge preview bound to record fingerprints, executed only by an explicit controller command.
+- **Device Pairing**: a one-use short-lived code exchanged for a durable revocable capture or management token.
+- **Application Budget / Provider Allowance**: GG's durable rolling request/token limits / subscription use reported by the provider when available. They are not interchangeable.
+- **Vault Problem**: malformed or unsafe entry reported without hiding valid records elsewhere.
+- **Tag / GG Index**: open-ended search label / generated Markdown links to records; neither replaces the records as source of truth.
 
 ## Boundaries
 
-The browser uses its own session to obtain content. The worker receives that content, never the authenticated profile. The controller holds model keys and the writable vault. `ask` has only search/read access. Only explicit user setup creates destinations. Existing live-archive import and hosted deployment are separate future work.
+The controller on Perkele holds provider credentials and the authoritative vault. Clients submit content and commands, and may keep file mirrors through existing transfer tools. Workers have temporary storage and narrow controller capabilities; `ask` is read-only. Browser snapshots never require public re-fetching. Public HTTPS is optional and currently unconfigured; SSH forwarding works without a domain. Tailscale is not required. General-purpose sync, previous-application import and encrypted Whatbox backups are outside this implementation.
