@@ -59,3 +59,51 @@ export async function remote(connection: Connection, command: Command) {
   if (!response.ok) throw Error(result.error ?? "Remote command failed");
   return result;
 }
+
+/** Submit one image through the same durable queue as browser captures. */
+export async function importRemote(
+  connection: Connection,
+  capture: import("./browser-capture.ts").BrowserCapture,
+  id: string,
+  report: (status: string) => void = () => {},
+) {
+  const request = async (path: string, method = "GET", body?: unknown) => {
+    const response = await fetch(endpoint(connection.url) + path, {
+      method,
+      redirect: "error",
+      headers: {
+        authorization: `Bearer ${connection.token}`,
+        "content-type": "application/json",
+        "x-gg-capture-id": id,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(60000),
+    });
+    const value = (await response.json()) as any;
+    if (!response.ok)
+      throw Error(value.error ?? `Import failed (${response.status})`);
+    return value;
+  };
+  let job = await request("/captures", "POST", capture);
+  if (["failed", "partial", "interrupted", "cancelled"].includes(job.status))
+    job = await request(`/captures/${job.id}/retry`, "POST");
+  const deadline = Date.now() + 15 * 60 * 1000;
+  let last = "";
+  while (["pending", "running"].includes(job.status)) {
+    if (last !== job.status) {
+      report(job.status);
+      last = job.status;
+    }
+    if (Date.now() >= deadline)
+      throw Error(
+        `Import ${job.id} is still queued or running; rerun to reconnect`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    job = await request(`/captures/${job.id}`);
+  }
+  if (job.status !== "completed")
+    throw Error(
+      `Import ${job.id} ${job.status}: ${job.error ?? job.result?.outcome?.reason ?? "check recent captures"}. Rerun to resume.`,
+    );
+  return job.result;
+}

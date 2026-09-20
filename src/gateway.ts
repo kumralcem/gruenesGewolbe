@@ -1,3 +1,4 @@
+import { isLocalSource } from "./local-source.ts";
 import { ModelService, estimateInput } from "./model-service.ts";
 import { defaultStateDir, readJson, writeJson } from "./state.ts";
 import { UsagePaused } from "./usage.ts";
@@ -562,6 +563,19 @@ export async function createGateway(options: GatewayOptions) {
               "Text-only capture must be an idea with no image assets or media errors",
             );
           const snapshot = options.browserCapture;
+          if (
+            isLocalSource(options.input) &&
+            (!snapshot ||
+              !(input.assets ?? []).some(
+                (a: any) =>
+                  "gg-local:sha256:" +
+                    createHash("sha256")
+                      .update(Buffer.from(a.bytes, "base64"))
+                      .digest("hex") ===
+                  options.input,
+              ))
+          )
+            throw Error("Local imports must preserve the original image");
           if (snapshot) {
             const preservedText = [
               snapshot.text,

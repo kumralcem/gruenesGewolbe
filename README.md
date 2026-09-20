@@ -115,6 +115,7 @@ Moves, edits, and creating/renaming subvaults execute on your instruction. Delet
 | `pair --scope capture\|manage`, `devices`, `revoke ID` | Pair and revoke individual devices                                          |
 | `connect URL`                                          | Pair a remote management CLI; prompts for a code                            |
 | `capture URL... [--instructions TEXT] [--stdin]`       | Public URL capture; browser capture handles signed-in pages                 |
+| `import PATH... [--instructions TEXT]` | Import local JPEG, PNG and WebP files or directories, locally or to the paired server |
 | `capture-file FILE...`                                 | Process saved browser snapshots locally                                     |
 | `search QUERY`, `ask QUESTION`                         | File search or model-assisted read-only retrieval                           |
 | `do INSTRUCTIONS`, `chat`                              | Natural-language vault management                                           |
@@ -125,6 +126,23 @@ Moves, edits, and creating/renaming subvaults execute on your instruction. Delet
 | `index`, `probe`, `queue`                              | Rebuild Obsidian index, test isolation, inspect legacy decision queue       |
 
 A paired CLI routes archive commands to the server; `--local` selects local operations. Setup, sign-in, device management, `capture-file`, `index`, `probe` and legacy `art`/`painting`/`idea` operations run locally. Legacy commands retain the previous single-image/idea semantics; use `capture` for new behavior. `gg help` lists flags. Agent commands print concise answers, saved paths, undo commands, confirmation previews and warnings. Add `--verbose` or `--json` for the full diagnostic result. Interactive terminals show elapsed time while waiting; `--json` suppresses that indicator for scripts. Other administrative commands retain structured output. The daemon keeps the controller running but starts a fresh isolated worker for each agent job; model requests and worker startup still take time.
+
+## Importing local images
+
+On the machine containing your images, install the CLI and use `gg connect SERVER_URL` to pair it with your server. Then run:
+
+```sh
+gg import ~/Pictures/Collection --instructions "Organize these under Art"
+gg import photo.jpg scan.png --instructions "Create Ideas/References and save these there"
+```
+
+Directories are scanned recursively. JPEG, PNG and WebP files up to 20 MB each are supported; hidden directory entries, symbolic links and unrelated files inside directories are skipped. Explicitly supplied unsupported files produce an error. Originals stay on your machine and are copied unchanged into records; the server receives the filename, image bytes and instructions, not your full local path. Embedded image metadata remains part of the original file.
+
+Each image defaults to one record. The agent inspects it and chooses an existing destination, using `CAPTURE.md` plus your instructions. This consumes normal model usage. Images upload and process one at a time through the server's capture queue and shared limits. The command prints each filename and waits for its result before sending the next image. A failure or usage pause stops the batch.
+
+Run the same command again to resume: completed images are skipped by exact file contents, even after renaming. Unfinished uploads/jobs reconnect or retry. Changing instructions does not rewrite already imported images; use `gg do` to change those records. Ctrl+C stops the CLI; an already accepted server job can finish. If the CLI stops waiting after 15 minutes, rerun it to reconnect. Without a paired server, import uses the configured local vault and the same worker/usage safeguards (`--local` explicitly selects this mode).
+
+This does not import arbitrary documents, RAW/HEIC files, or reconcile files manually dropped into the vault. `capture-file` remains the browser-snapshot JSON command.
 
 ## Limits
 

@@ -1,3 +1,4 @@
+import { isLocalSource } from "./local-source.ts";
 import { readCaptureRules, validateCaptureRules } from "./capture-rules.ts";
 import { History } from "./history.ts";
 import {
@@ -45,7 +46,11 @@ const validDestinationPath = (s: string) =>
     );
 function validateUrl(value: string) {
   const u = new URL(value);
-  if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
+  if (
+    (!["http:", "https:"].includes(u.protocol) && !isLocalSource(value)) ||
+    u.username ||
+    u.password
+  )
     throw Error("Invalid source URL");
 }
 async function plain(path: string, directory = false) {

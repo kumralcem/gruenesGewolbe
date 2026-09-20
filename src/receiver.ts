@@ -1,3 +1,4 @@
+import { isLocalSource } from "./local-source.ts";
 import type { Devices } from "./devices.ts";
 import http from "node:http";
 import {
@@ -438,13 +439,38 @@ export async function createReceiver(options: ReceiverOptions) {
       const capture = validateBrowserCapture(
         JSON.parse(Buffer.concat(chunks).toString()),
       );
-      const id = String(req.headers["x-gg-capture-id"] ?? randomUUID());
+      let id = String(req.headers["x-gg-capture-id"] ?? randomUUID());
       if (!uuid.test(id)) throw Error("Invalid capture ID");
       const digest = createHash("sha256")
-        .update(JSON.stringify(capture))
+        .update(
+          JSON.stringify(
+            isLocalSource(capture.url)
+              ? { ...capture, capturedAt: undefined }
+              : capture,
+          ),
+        )
         .digest("hex");
       let accepted: CaptureJob | undefined;
       const write = accepting.then(async () => {
+        if (isLocalSource(capture.url)) {
+          const records = await options.vault.sourceRecords(capture.url);
+          if (records.length) {
+            accepted = {
+              id,
+              status: "completed",
+              url: capture.url,
+              title: capture.title,
+              createdAt: capture.capturedAt,
+              digest,
+              result: {
+                outcome: { status: "existing", path: records[0].path },
+              },
+            };
+            return;
+          }
+          // A previously imported record may have been deleted or undone.
+          if (jobs.get(id)?.status === "completed") id = randomUUID();
+        }
         const old = jobs.get(id);
         if (old) {
           if (old.digest !== digest)

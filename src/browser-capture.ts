@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { isLocalSource } from "./local-source.ts";
 export interface CaptureImage {
   url: string;
   bytes?: string;
@@ -47,7 +49,7 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
     throw Error("Invalid browser capture");
   const url = new URL(b.url);
   if (
-    !["https:", "http:"].includes(url.protocol) ||
+    (!["https:", "http:"].includes(url.protocol) && !isLocalSource(b.url)) ||
     url.username ||
     url.password
   )
@@ -66,7 +68,12 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
       )
         throw Error("Invalid image candidate");
       const u = new URL(image.url);
-      if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
+      if (
+        (!["http:", "https:"].includes(u.protocol) &&
+          !(isLocalSource(b.url) && image.url === b.url)) ||
+        u.username ||
+        u.password
+      )
         throw Error("Invalid image reference");
       if (
         image.bytes !== undefined &&
@@ -99,6 +106,20 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
         !b.warnings.every((w) => string(w, 1000)))
     )
       throw Error("Invalid capture warnings");
+    if (isLocalSource(b.url)) {
+      const image = images[0];
+      if (
+        images.length !== 1 ||
+        !image.bytes ||
+        image.url !== b.url ||
+        "gg-local:sha256:" +
+          createHash("sha256")
+            .update(Buffer.from(image.bytes, "base64"))
+            .digest("hex") !==
+          b.url
+      )
+        throw Error("Local import must contain its matching original image");
+    }
     return {
       version: 2,
       intent: "capture",
@@ -114,6 +135,8 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
       warnings: b.warnings,
     };
   }
+  if (isLocalSource(b.url))
+    throw Error("Local imports require capture version 2");
   if (b.intent === "art") {
     if (
       !b.image ||

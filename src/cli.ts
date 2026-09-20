@@ -1,3 +1,4 @@
+import { imageFiles, imageCapture, importId } from "./image-import.ts";
 import { formatResult, startProgress } from "./cli-output.ts";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -11,7 +12,7 @@ import { createReceiver } from "./receiver.ts";
 import { validateBrowserCapture } from "./browser-capture.ts";
 import { defaultStateDir, readJson, writeJson } from "./state.ts";
 import { providerRuntime, loginProvider } from "./model-service.ts";
-import { connect, connection, remote } from "./client.ts";
+import { connect, connection, remote, importRemote } from "./client.ts";
 import type { Config } from "./types.ts";
 
 const { values, positionals } = parseArgs({
@@ -52,6 +53,7 @@ const help = `GG — your personal archive
   gg pair [--scope capture|manage] | devices | revoke DEVICE_ID
   gg connect SERVER_URL                  (prompts for a management pairing code)
   gg capture URL... [--instructions TEXT] [--stdin]
+  gg import PATH... [--instructions TEXT] (JPEG, PNG, WebP; directories recursive)
   gg capture-file FILE...                (browser snapshots)
   gg ask QUESTION | search QUERY | do INSTRUCTIONS | chat
   gg list | history | undo [OPERATION_OR_BATCH] | confirm PROPOSAL
@@ -338,6 +340,55 @@ async function main() {
     } finally {
       rl.close();
     }
+    return;
+  }
+  if (command === "import") {
+    if (!positionals.length) throw Error("Provide image files or directories");
+    const seen = new Set<string>();
+    let count = 0;
+    for await (const path of imageFiles(positionals)) {
+      const capture = await imageCapture(path, values.instructions);
+      if (seen.has(capture.url)) continue;
+      seen.add(capture.url);
+      count++;
+      if (!values.json) console.error(`Import ${count}: ${path}`);
+      stopProgress = progress();
+      let result: any;
+      if (client) {
+        result = await importRemote(
+          client,
+          capture,
+          importId(capture),
+          (status) => {
+            if (!values.json) console.error(`  ${status}`);
+          },
+        );
+      } else {
+        const c = await local();
+        const existing = await c.vault.sourceRecords(capture.url);
+        if (existing.length)
+          result = { outcome: { status: "existing", path: existing[0].path } };
+        else
+          result = await c.run(
+            "capture",
+            capture.url,
+            undefined,
+            capture,
+            capture.instructions,
+          );
+      }
+      print(result);
+      if (
+        result?.exitCode ||
+        !["saved", "existing", "updated", "upgraded"].includes(
+          result?.outcome?.status,
+        )
+      )
+        throw Error(
+          "Import stopped before the next file. Resolve this result and rerun to resume.",
+        );
+    }
+    if (!count) throw Error("No JPEG, PNG or WebP images found");
     return;
   }
   if (command === "capture-file") {

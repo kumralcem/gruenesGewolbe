@@ -488,3 +488,85 @@ test(
     assert.equal((await vault.items())[0].item.subvault, "Ideas/SoloDev");
   },
 );
+
+test(
+  "local image import preserves originals in the isolated worker",
+  { timeout: 60000 },
+  async () => {
+    const { writeFile, rm } = await import("node:fs/promises");
+    const { imageCapture } = await import("../src/image-import.ts");
+    const root = await mkdtemp(join(tmpdir(), "gg-import-container-"));
+    try {
+      const image = await (
+        await fixtures()
+      ).fixtureFetch("https://fixtures.example/image.png");
+      const file = join(root, "painting.png");
+      await writeFile(file, image.bytes);
+      const capture = await imageCapture(file);
+      const vault = await setup();
+      let step = 0;
+      let assetId: string;
+      const call = (name: string, args: unknown) => ({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_" + step,
+            type: "function",
+            function: { name, arguments: JSON.stringify(args) },
+          },
+        ],
+      });
+      const result = await runJob({
+        vault,
+        config,
+        intent: "capture",
+        input: capture.url,
+        browserCapture: capture,
+        mockModel: async (body: any) => {
+          if (step++ === 0) return call("browse", { url: capture.url });
+          if (step === 2) {
+            const view = JSON.parse(
+              body.messages.filter((m: any) => m.role === "tool").at(-1)
+                .content,
+            );
+            assetId = view.previewAssets[0].assetId;
+            // Omission must fail; the model cannot discard the imported original.
+            return call("capture", {
+              kind: "idea",
+              includeImages: false,
+              title: "Painting",
+              summary: "A painting",
+              subvault: "Paintings",
+              tags: [],
+            });
+          }
+          if (step === 3) {
+            assert.match(
+              body.messages.filter((m: any) => m.role === "tool").at(-1)
+                .content,
+              /preserve the original/,
+            );
+            return call("capture", {
+              kind: "art",
+              title: "Painting",
+              summary: "A painting",
+              subvault: "Paintings",
+              tags: [],
+              assetIds: [assetId],
+            });
+          }
+          return { role: "assistant", content: "Saved." };
+        },
+      });
+      assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
+      const [record] = await vault.sourceRecords(capture.url);
+      assert.deepEqual(
+        await readFile(join(record.path, record.item.assets[0].file)),
+        image.bytes,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

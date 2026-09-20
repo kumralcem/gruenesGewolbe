@@ -1,3 +1,4 @@
+import { isLocalSource } from "./local-source.ts";
 import { parseDocument, stringify } from "yaml";
 import type { Item, StoredAsset } from "./types.ts";
 
@@ -67,7 +68,7 @@ function media(item: Item) {
   return `${mediaStart}\n${embeds ? embeds + "\n\n" : ""}${omissions}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" || item.captureKey ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
 }
 export function renderRecord(item: Item) {
-  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n[Original page](${encodeURI(item.sourceUrl)})\n`;
+  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n${isLocalSource(item.sourceUrl) ? `Imported local image. Content ID: \`${item.sourceUrl.slice(16)}\`. Original file preserved above.` : `[Original page](${encodeURI(item.sourceUrl)})`}\n`;
 }
 export function readRecord(source: string, assets?: StoredAsset[]): Item {
   const { props, body } = split(source);

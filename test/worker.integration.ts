@@ -431,3 +431,65 @@ test(
     }
   },
 );
+
+test(
+  "real Pi imports a local image through the gateway and preserves exact original bytes",
+  { timeout: 30000 },
+  async () => {
+    const sharp = (await import("sharp")).default;
+    const { writeFile, readFile, rm } = await import("node:fs/promises");
+    const { imageCapture } = await import("../src/image-import.ts");
+    const root = await mkdtemp(join(tmpdir(), "gg-local-worker-"));
+    try {
+      const file = join(root, "painting.png");
+      const bytes = await sharp({
+        create: { width: 20, height: 20, channels: 3, background: "green" },
+      })
+        .png()
+        .toBuffer();
+      await writeFile(file, bytes);
+      const capture = await imageCapture(file, "Save this in Paintings");
+      const vault = await Vault.create(join(root, "vault"), ["Paintings"]);
+      let step = 0;
+      const result = await worker({
+        vault,
+        config: {
+          provider: "openai",
+          model: "fixture",
+          maxSeconds: 25,
+          maxRequests: 6,
+        },
+        intent: "capture",
+        input: capture.url,
+        browserCapture: capture,
+        mockModel: async (body) => {
+          if (step++ === 0) return call("browse", { url: capture.url });
+          if (step === 2) {
+            const view = JSON.parse(
+              body.messages.filter((m: any) => m.role === "tool").at(-1)
+                .content,
+            );
+            assert.equal(view.previewAssets.length, 1);
+            return call("capture", {
+              kind: "art",
+              title: "Green painting",
+              summary: "A green painting",
+              subvault: "Paintings",
+              tags: [],
+              assetIds: [view.previewAssets[0].assetId],
+            });
+          }
+          return { role: "assistant", content: "Saved." };
+        },
+      });
+      assert.equal(result.outcomes[0]?.status, "saved");
+      const [record] = await vault.sourceRecords(capture.url);
+      assert.deepEqual(
+        await readFile(join(record.path, record.item.assets[0].file)),
+        bytes,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
