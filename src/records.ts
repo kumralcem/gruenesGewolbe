@@ -1,3 +1,4 @@
+import { originalTextFile } from "./text-import.ts";
 import { isLocalSource } from "./local-source.ts";
 import { parseDocument, stringify } from "yaml";
 import type { Item, StoredAsset } from "./types.ts";
@@ -43,6 +44,7 @@ function properties(item: Item) {
       tags: [...new Set(item.tags.map(tagName).filter(Boolean))],
       selectedImage: item.selectedImage || undefined,
       primary: item.primary,
+      originalFile: item.originalFile,
       files: item.assets.map((a) => a.file),
     }).filter(([, value]) => value !== undefined),
   );
@@ -66,7 +68,7 @@ function media(item: Item) {
         `- [${markdownLabel(a.file.split("/").at(-1)!)}](${encodeURI(a.file)})`,
     )
     .join("\n");
-  return `${mediaStart}\n${embeds ? embeds + "\n\n" : ""}${omissions}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" || item.captureKey ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
+  return `${mediaStart}\n${item.originalFile ? `[Original document](${encodeURI(item.originalFile)})\n\n` : ""}${embeds ? embeds + "\n\n" : ""}${omissions}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" || item.captureKey ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
 }
 function attributionNote(item: Item) {
   if (!item.attribution) return "";
@@ -82,7 +84,7 @@ function attributionNote(item: Item) {
   );
 }
 export function renderRecord(item: Item) {
-  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n${isLocalSource(item.sourceUrl) ? `Imported local image. Content ID: \`${item.sourceUrl.slice(16)}\`. Original file preserved above.` : `[Original page](${encodeURI(item.sourceUrl)})`}${attributionNote(item)}\n`;
+  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n${isLocalSource(item.sourceUrl) ? `Imported local ${item.originalFile ? "document" : "image"}. Content ID: \`${item.sourceUrl.slice(16)}\`. Original file preserved above.` : `[Original page](${encodeURI(item.sourceUrl)})`}${attributionNote(item)}\n`;
 }
 export function readRecord(source: string, assets?: StoredAsset[]): Item {
   const { props, body } = split(source);
@@ -115,6 +117,12 @@ export function readRecord(source: string, assets?: StoredAsset[]): Item {
     )
   )
     throw Error("Malformed item record");
+  if (
+    item.originalFile !== undefined &&
+    (typeof item.originalFile !== "string" ||
+      item.originalFile !== originalTextFile(item.originalFile.slice(9)))
+  )
+    throw Error("Malformed original document path");
   return item as Item;
 }
 export function updateRecord(source: string, item: Item) {
@@ -157,6 +165,7 @@ export function refreshRecord(
     "year",
     "tags",
     "selectedImage",
+    "originalFile",
     "captureKey",
     "instructions",
     "missingMedia",

@@ -13,7 +13,7 @@
 | `connect URL`                                            | Pair a remote management CLI; prompts for a code                                                                 |
 | `capture URL... [--instructions TEXT] [--stdin]`         | Public URL capture; browser capture handles signed-in pages                                                      |
 | `download RECORD_ID --to FILE.tar.gz [--originals-only]` | Download a portable record bundle locally or from the paired server; existing output files are never overwritten |
-| `import PATH... [--instructions TEXT]`                   | Import local JPEG, PNG and WebP files or directories, locally or to the paired server                            |
+| `import PATH... [--instructions TEXT]`                   | Import supported UTF-8 text and JPEG/PNG/WebP files or directories, locally or to the paired server              |
 | `capture-file FILE...`                                   | Process saved browser snapshots locally                                                                          |
 | `search QUERY`, `ask QUESTION`                           | File search or model-assisted read-only retrieval                                                                |
 | `do INSTRUCTIONS`, `chat`                                | Natural-language vault management                                                                                |
@@ -49,7 +49,7 @@ gg import ~/Imports/Collection --local --grant GRANT_ID \
 gg usage revoke GRANT_ID
 ```
 
-This allowance accepts only the exact image hashes scanned from that collection. It consumes its own bounded request/token pool instead of the normal hourly/weekly enforcement, while retaining ordinary accounting, provider pauses, deadlines and per-job limits. Successful requests settle against actual reported tokens; failed attempts keep their reservation. Maximum grant: 10,000 requests, 2B reserved tokens, 24 hours, 2,000 image hashes. Collection grants currently work with server-local imports; ordinary remote imports remain supported. Grants are never renewed automatically. `--continue-on-error` continues past unsuccessful model results but still stops on usage/provider pauses or input/transport errors. Check the log for unfinished images before deleting staging files.
+This allowance accepts only the exact file hashes scanned from that collection. It consumes its own bounded request/token pool instead of the normal hourly/weekly enforcement, while retaining ordinary accounting, provider pauses, deadlines and per-job limits. Successful requests settle against actual reported tokens; failed attempts keep their reservation. Maximum grant: 10,000 requests, 2B reserved tokens, 24 hours, 2,000 file hashes. Collection grants currently work with server-local imports; ordinary remote imports remain supported. Grants are never renewed automatically. `--continue-on-error` continues past unsuccessful model results but still stops on usage/provider pauses or input/transport errors. Check the log for unfinished files before deleting staging files.
 
 ## Limits
 

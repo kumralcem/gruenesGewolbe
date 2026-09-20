@@ -127,7 +127,7 @@ function formatUsage(value: any): string {
     );
   for (const [id, g] of Object.entries(u.grants ?? {}) as [string, any][])
     lines.push(
-      `Collection grant ${id}: ${g.requests} requests, ${g.tokens.toLocaleString()} tokens, ${g.sources.length} images; ${g.expires > Date.now() ? "expires" : "expired"} ${new Date(g.expires).toLocaleString()}`,
+      `Collection grant ${id}: ${g.requests} requests, ${g.tokens.toLocaleString()} tokens, ${g.sources.length} files; ${g.expires > Date.now() ? "expires" : "expired"} ${new Date(g.expires).toLocaleString()}`,
     );
   if (value.grantId)
     lines.push(`Use with: gg import PATH --local --grant ${value.grantId}`);

@@ -1,3 +1,4 @@
+import { originalTextFile, validateImportedText } from "./text-import.ts";
 import { validateAttribution } from "./attribution.ts";
 import { isLocalSource } from "./local-source.ts";
 import { readCaptureRules, validateCaptureRules } from "./capture-rules.ts";
@@ -411,6 +412,22 @@ export class Vault {
     )
       throw Error("Invalid capture record");
     validateUrl(d.sourceUrl);
+    if (d.originalFile !== undefined) {
+      if (
+        typeof d.originalFile !== "string" ||
+        d.originalFile !== originalTextFile(d.originalFile.slice(9)) ||
+        d.kind !== "idea" ||
+        (d.assets ?? []).length
+      )
+        throw Error("Invalid original document");
+      validateImportedText(d.sourceText!);
+      if (
+        d.sourceUrl !==
+        "gg-local:sha256:" +
+          createHash("sha256").update(d.sourceText!, "utf8").digest("hex")
+      )
+        throw Error("Original document hash mismatch");
+    }
     if (d.attribution) validateAttribution(d.attribution);
     if (d.publishedAt && !/^\d{4}-\d{2}-\d{2}$/.test(d.publishedAt))
       throw Error("Invalid publication date");
@@ -547,6 +564,7 @@ export class Vault {
         creator: d.creator,
         year: d.year,
         selectedImage: d.selectedImage,
+        originalFile: d.originalFile,
         assets: stored,
         primary: best?.file,
       };
@@ -560,6 +578,8 @@ export class Vault {
             Buffer.from(assets[0].preview, "base64"),
           );
       }
+      if (d.originalFile)
+        await writeFile(join(stage, d.originalFile), d.sourceText!);
       if (d.sourceText || modern)
         await writeFile(
           join(stage, "source.md"),
@@ -728,6 +748,8 @@ export class Vault {
               join(path, ".gg-assets.json"),
               JSON.stringify(proposal.assets),
             );
+            if (d.originalFile)
+              await this.atomic(join(path, d.originalFile), d.sourceText!);
             if (d.sourceText)
               await this.atomic(join(path, "source.md"), d.sourceText);
             await this.atomic(join(path, "record.md"), refresh.text);

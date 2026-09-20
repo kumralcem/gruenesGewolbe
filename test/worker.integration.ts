@@ -614,3 +614,63 @@ test("local research closes with space to save instead of overflowing on the nex
   assert.equal(result.complete, true);
   assert.equal(step, 3);
 });
+
+test("real Pi imports a text document without artwork research and preserves the controller's original", async () => {
+  const { writeFile, readFile, rm } = await import("node:fs/promises");
+  const { fileCapture } = await import("../src/image-import.ts");
+  const root = await mkdtemp(join(tmpdir(), "gg-document-worker-"));
+  try {
+    const text =
+      "\ufeff# Five tips\r\n\r\n1. Check onboarding.\r\n2. Measure retention.\r\n" +
+      "Useful reference detail. ".repeat(900) +
+      "FINAL_DOCUMENT_SENTINEL";
+    const file = join(root, "tips.md");
+    await writeFile(file, text);
+    const capture = await fileCapture(file, "Save under Notes");
+    const vault = await Vault.create(join(root, "vault"), ["Notes"]);
+    let step = 0;
+    const result = await worker({
+      vault,
+      intent: "capture",
+      input: capture.url,
+      browserCapture: capture,
+      config: { provider: "openai", model: "fixture", maxRequests: 6 },
+      mockModel: async (body) => {
+        assert.match(body.messages[0].content, /LOCAL DOCUMENT IMPORT/);
+        assert.doesNotMatch(body.messages[0].content, /LOCAL ARTWORK IMPORT/);
+        if (step++ === 0) return call("browse", { url: capture.url });
+        if (step === 2) {
+          assert.match(JSON.stringify(body.messages), /Measure retention/);
+          return call("read_snapshot", { section: "text", offset: 6000 });
+        }
+        if (step === 3)
+          return call("read_snapshot", { section: "text", offset: 18000 });
+        if (step === 4) {
+          assert.match(
+            JSON.stringify(body.messages),
+            /FINAL_DOCUMENT_SENTINEL/,
+          );
+          return call("capture_policy", { subvault: "Notes" });
+        }
+        return call("capture", {
+          kind: "idea",
+          title: "Practical tips",
+          summary: "1. Check onboarding.\n2. Measure retention.",
+          subvault: "Notes",
+          tags: [],
+          includeImages: false,
+        });
+      },
+    });
+    assert.equal(result.complete, true, result.output);
+    const [record] = await vault.items();
+    assert.equal(record.item.originalFile, "original.md");
+    assert.equal(record.item.attribution, undefined);
+    assert.equal(
+      await readFile(join(record.path, "original.md"), "utf8"),
+      text,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

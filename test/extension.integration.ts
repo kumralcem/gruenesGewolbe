@@ -58,6 +58,23 @@ test(
       port: 0,
       processCapture: async (c) => {
         captures.push(c);
+        if (c.document)
+          return {
+            outcome: await vault.capture(
+              {
+                kind: "idea",
+                title: c.title,
+                summary: "Uploaded document",
+                subvault: "Ideas",
+                sourceUrl: c.url,
+                sourceText: c.text,
+                originalFile: `original.${c.document.extension}`,
+                tags: [],
+              },
+              "upload",
+              "upload",
+            ),
+          };
         if (c.url.startsWith("gg-local:"))
           return {
             outcome: await vault.capture(
@@ -197,7 +214,7 @@ test(
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.5.0");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.6.0");
       assert.equal(await popup.locator("#source").isVisible(), false);
       await popup.setViewportSize({ width: 400, height: 440 });
       const dashboard = await context.newPage();
@@ -271,6 +288,26 @@ test(
       assert.deepEqual(
         Buffer.from(captures.at(-1).images[0].bytes, "base64"),
         image,
+      );
+      const textOriginal = Buffer.from(
+        "\ufeff# Tips\r\n\r\n1. Keep the original.\r\n",
+      );
+      await dashboard.locator("#import-files").setInputFiles({
+        name: "notes.md",
+        mimeType: "text/markdown",
+        buffer: textOriginal,
+      });
+      await dashboard.locator("#import-start").click();
+      await dashboard
+        .locator("#import-status")
+        .filter({ hasText: "Import finished." })
+        .waitFor();
+      assert.equal(captures.at(-1).document.extension, "md");
+      assert.deepEqual(Buffer.from(captures.at(-1).text), textOriginal);
+      const [documentRecord] = await vault.sourceRecords(captures.at(-1).url);
+      assert.deepEqual(
+        await readFile(join(documentRecord.path, "original.md")),
+        textOriginal,
       );
       await dashboard.locator("#archive-query").fill("original.png");
       await dashboard.locator("#archive-search button").click();

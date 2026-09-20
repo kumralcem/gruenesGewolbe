@@ -267,7 +267,7 @@ export class UsageGuard {
       sources.some((s) => !/^gg-local:sha256:[a-f0-9]{64}$/.test(s))
     )
       throw Error(
-        "Collection grant requires 1–10000 requests, 1–2B tokens, 1–1440 minutes and up to 2000 image hashes",
+        "Collection grant requires 1–10000 requests, 1–2B tokens, 1–1440 minutes and up to 2000 file hashes",
       );
     const id = randomUUID();
     await this.state((s) => {

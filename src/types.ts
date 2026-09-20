@@ -18,6 +18,7 @@ export interface Draft {
   summary: string;
   tags: string[];
   sourceText?: string;
+  originalFile?: string;
   publishedAt?: string;
   creator?: string;
   year?: string;

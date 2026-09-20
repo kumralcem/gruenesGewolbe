@@ -2,7 +2,7 @@
 
 # Grünes Gewölbe — GG
 
-A personal archive you can capture into, search and organize with an agent. Save a page from your browser, optionally add instructions, and GG keeps the useful content in ordinary Markdown files alongside original images.
+A personal archive you can capture into, search and organize with an agent. Save a page from your browser, optionally add instructions, and GG keeps the useful content in ordinary Markdown files alongside original files.
 
 - **Capture what you’re reading**, including pages available through your browser login.
 - **Organize in folders**, with shared and per-folder `CAPTURE.md` instructions.
@@ -11,7 +11,7 @@ A personal archive you can capture into, search and organize with an agent. Save
 
 GG uses Pi for its agent runtime. A controller holds your archive and provider credentials; isolated workers process jobs. The browser extension and CLI connect to that controller.
 
-**Prototype:** Linux controller, Chromium-based extension. Local file import currently supports JPEG, PNG and WebP—not arbitrary documents. See [supported inputs and limitations](docs/files.md#supported-inputs).
+**Prototype:** Linux controller, Chromium-based extension. Local imports support common UTF-8 text formats and JPEG, PNG or WebP images. See [supported inputs and limitations](docs/files.md#supported-inputs).
 
 ## Get started
 

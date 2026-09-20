@@ -1,3 +1,4 @@
+import { originalTextFile } from "./text-import.ts";
 import { normalizeLocalAttribution } from "./attribution.ts";
 import { isLocalSource } from "./local-source.ts";
 import { ModelService, estimateInput } from "./model-service.ts";
@@ -621,10 +622,11 @@ export async function createGateway(options: GatewayOptions) {
               "Text-only capture must be an idea with no image assets or media errors",
             );
           const snapshot = options.browserCapture;
-          if (isLocalSource(options.input))
+          if (isLocalSource(options.input) && !snapshot?.document)
             normalizeLocalAttribution(input, attributionEvidence);
           if (
             isLocalSource(options.input) &&
+            !snapshot?.document &&
             (!snapshot ||
               !(input.assets ?? []).some(
                 (a: any) =>
@@ -636,6 +638,14 @@ export async function createGateway(options: GatewayOptions) {
               ))
           )
             throw Error("Local imports must preserve the original image");
+          delete input.originalFile;
+          if (snapshot?.document) {
+            if (input.kind !== "idea" || (input.assets ?? []).length)
+              throw Error(
+                "Text documents must be saved as ideas without image assets",
+              );
+            input.originalFile = originalTextFile(snapshot.document.extension);
+          }
           if (snapshot) {
             const preservedText = [
               snapshot.text,

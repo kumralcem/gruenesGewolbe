@@ -30,7 +30,7 @@ test("image import scans recursively, excludes links, validates provenance and r
       .toBuffer();
     await writeFile(join(input, "one.png"), bytes);
     await writeFile(join(input, "nested", "copy.png"), bytes);
-    await writeFile(join(input, "notes.txt"), "not an image");
+    await writeFile(join(input, "notes.pdf"), "not an image");
     await symlink(input, join(input, "loop"));
     const files = [];
     for await (const file of imageFiles([input])) files.push(file);

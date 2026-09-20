@@ -78,7 +78,7 @@ export function setupArchive(request, connection) {
   };
   $("import-start").onclick = async () => {
     if (!files.length) {
-      $("import-status").textContent = "Choose images first.";
+      $("import-status").textContent = "Choose files first.";
       return;
     }
     stopping = false;
@@ -94,15 +94,42 @@ export function setupArchive(request, connection) {
             `${index + 1}/${files.length}: ${file.name} — ${text}`;
         };
         report("preparing");
+        const extension = file.name.split(".").at(-1).toLowerCase();
+        const isText = [
+          "md",
+          "markdown",
+          "txt",
+          "rst",
+          "csv",
+          "tsv",
+          "json",
+          "yaml",
+          "yml",
+          "toml",
+          "log",
+        ].includes(extension);
         if (
           !file.size ||
-          file.size > 64000000 ||
-          !/\.(jpe?g|png|webp)$/i.test(file.name)
+          file.size > (isText ? 64000 : 64000000) ||
+          (!isText && !/\.(jpe?g|png|webp)$/i.test(file.name))
         )
           throw Error(
-            `${file.name}: expected JPEG, PNG or WebP, at most 64 MB`,
+            `${file.name}: expected a supported text file (64 KB) or JPEG, PNG or WebP (64 MB)`,
           );
         const bytes = new Uint8Array(await file.arrayBuffer());
+        const text = isText
+          ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+              bytes,
+            )
+          : undefined;
+        if (
+          isText &&
+          (!text.trim() ||
+            /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text))
+        )
+          throw Error(
+            `${file.name}: expected nonempty UTF-8 text without binary control characters`,
+          );
         const hash = Array.from(
           new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
           (b) => b.toString(16).padStart(2, "0"),
@@ -124,9 +151,14 @@ export function setupArchive(request, connection) {
           url,
           title: file.name,
           capturedAt: new Date().toISOString(),
-          text: `Local image: ${file.name}. Preserve the supplied original image. The filename is context, not verified attribution.`,
+          document: isText ? { extension } : undefined,
+          text: isText
+            ? text
+            : `Local image: ${file.name}. Preserve the supplied original image. The filename is context, not verified attribution.`,
           instructions,
-          images: [{ url, mimeType, bytes: btoa(binary), alt: file.name }],
+          images: isText
+            ? []
+            : [{ url, mimeType, bytes: btoa(binary), alt: file.name }],
         };
         const digest = Array.from(
           new Uint8Array(
@@ -153,7 +185,7 @@ export function setupArchive(request, connection) {
         )
           job = await request(`/captures/${job.id}/retry`, { method: "POST" });
         while (["pending", "running"].includes(job.status)) {
-          report(job.status + "; keep this page open to send remaining images");
+          report(job.status + "; keep this page open to send remaining files");
           await new Promise((resolve) => setTimeout(resolve, 2000));
           job = await request(`/captures/${job.id}`);
         }

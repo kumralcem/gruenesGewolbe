@@ -1,7 +1,7 @@
 import { recordDownload } from "./archive-download.ts";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { imageFiles, imageCapture, importId } from "./image-import.ts";
+import { importFiles, fileCapture, importId } from "./image-import.ts";
 import { formatResult, startProgress } from "./cli-output.ts";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
@@ -74,7 +74,7 @@ const help = `GG — your personal archive
   gg connect SERVER_URL                  (prompts for a management pairing code)
   gg capture URL... [--instructions TEXT] [--stdin]
   gg download RECORD_ID --to FILE.tar.gz [--originals-only]
-  gg import PATH... [--instructions TEXT] (JPEG, PNG, WebP; directories recursive)
+  gg import PATH... [--instructions TEXT] (text/images; directories recursive)
   gg capture-file FILE...                (browser snapshots)
   gg ask QUESTION | search QUERY | do INSTRUCTIONS | chat
   gg list | history | undo [OPERATION_OR_BATCH] | confirm PROPOSAL
@@ -312,9 +312,9 @@ async function main() {
     const sources: string[] = [];
     if (values.collection) {
       if (action !== "grant") throw Error("--collection requires usage grant");
-      for await (const path of imageFiles([values.collection]))
-        sources.push((await imageCapture(path)).url);
-      if (!sources.length) throw Error("No supported images in collection");
+      for await (const path of importFiles([values.collection]))
+        sources.push((await fileCapture(path)).url);
+      if (!sources.length) throw Error("No supported files in collection");
     }
     do {
       const result = await execute({
@@ -454,11 +454,12 @@ async function main() {
     return;
   }
   if (command === "import") {
-    if (!positionals.length) throw Error("Provide image files or directories");
+    if (!positionals.length)
+      throw Error("Provide text/image files or directories");
     const seen = new Set<string>();
     let count = 0;
-    for await (const path of imageFiles(positionals)) {
-      const capture = await imageCapture(path, values.instructions);
+    for await (const path of importFiles(positionals)) {
+      const capture = await fileCapture(path, values.instructions);
       if (seen.has(capture.url)) continue;
       seen.add(capture.url);
       count++;
@@ -501,7 +502,7 @@ async function main() {
         ) {
           process.exitCode = 1;
           console.error(
-            "Image unfinished; continuing. Rerun later to retry missing records.",
+            "File unfinished; continuing. Rerun later to retry missing records.",
           );
         } else
           throw Error(
@@ -509,7 +510,7 @@ async function main() {
           );
       }
     }
-    if (!count) throw Error("No JPEG, PNG or WebP images found");
+    if (!count) throw Error("No supported text or image files found");
     return;
   }
   if (command === "capture-file") {

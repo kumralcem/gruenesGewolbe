@@ -64,18 +64,19 @@
         <p id="archive-status" role="status"></p>
       </section>
       <section class="panel" id="import-panel">
-        <h2>Import images</h2>
+        <h2>Import files</h2>
         <div id="import-drop">
           <input
             id="import-files"
             type="file"
             multiple
-            accept="image/jpeg,image/png,image/webp"
-            aria-label="Choose images"
+            accept=".jpg,.jpeg,.png,.webp,.md,.markdown,.txt,.rst,.csv,.tsv,.json,.yaml,.yml,.toml,.log"
+            aria-label="Choose files"
           />
           <p>
-            Choose images or drop them here. JPEG, PNG or WebP; up to 64 MB
-            each.
+            Choose files or drop them here. JPEG, PNG or WebP: up to 64 MB.
+            UTF-8 Markdown, TXT, RST, CSV, TSV, JSON, YAML, TOML or LOG: up to
+            64 KB.
           </p>
         </div>
         <textarea
@@ -87,7 +88,7 @@
         ></textarea>
         <button id="import-start">Import</button
         ><button class="secondary" id="import-stop" disabled>
-          Stop after this image
+          Stop after this file
         </button>
         <p id="import-status" role="status"></p>
       </section>

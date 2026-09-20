@@ -1,3 +1,4 @@
+import { originalTextFile, validateImportedText } from "./text-import.ts";
 import { createHash } from "node:crypto";
 import { isLocalSource } from "./local-source.ts";
 export interface CaptureImage {
@@ -11,6 +12,7 @@ export interface CaptureImage {
   error?: string;
 }
 export interface BrowserCapture {
+  document?: { extension: string };
   version: 1 | 2;
   intent: "art" | "idea" | "capture";
   instructions?: string;
@@ -106,7 +108,26 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
         !b.warnings.every((w) => string(w, 1000)))
     )
       throw Error("Invalid capture warnings");
-    if (isLocalSource(b.url)) {
+    if (b.document !== undefined) {
+      if (
+        !isLocalSource(b.url) ||
+        !b.document ||
+        typeof b.document.extension !== "string" ||
+        images.length ||
+        b.html ||
+        b.transcript ||
+        b.contextText
+      )
+        throw Error("Invalid local document capture");
+      originalTextFile(b.document.extension);
+      validateImportedText(b.text);
+      if (
+        "gg-local:sha256:" +
+          createHash("sha256").update(b.text, "utf8").digest("hex") !==
+        b.url
+      )
+        throw Error("Local document must match its content hash");
+    } else if (isLocalSource(b.url)) {
       const image = images[0];
       if (
         images.length !== 1 ||
@@ -121,6 +142,7 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
         throw Error("Local import must contain its matching original image");
     }
     return {
+      document: b.document ? { extension: b.document.extension } : undefined,
       version: 2,
       intent: "capture",
       url: b.url,

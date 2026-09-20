@@ -1,3 +1,4 @@
+import { originalTextFile } from "./text-import.ts";
 import { constants } from "node:fs";
 import { open, lstat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
@@ -63,6 +64,12 @@ export async function recordDownload(
   const record = (await vault.items()).find((r) => r.item.id === id);
   if (!record) throw Error("Unknown record ID");
   const names = new Set<string>(originalsOnly ? [] : ["record.md"]);
+  if (record.item.originalFile) {
+    const file = record.item.originalFile;
+    if (file !== originalTextFile(file.slice(9)))
+      throw Error("Unsafe original document path");
+    names.add(file);
+  }
   for (const asset of record.item.assets) {
     if (!/^files\/[a-f0-9]{64}\.(jpg|png|webp)$/.test(asset.file))
       throw Error("Unsafe preserved asset path");

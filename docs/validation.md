@@ -2,7 +2,7 @@
 
 ## Latest checks
 
-At `fd489b6`: 62 unit tests, 7 Pi worker tests (one optional private replay skipped), 12 rootless container tests and Chromium extension integration passed, along with typecheck. These exercise inherited policies/retries, export authorization and file integrity, context bounds, CONNECT broken-pipe recovery and completion after the final save. Deterministic provider fixtures are not live attribution benchmarks.
+With text import: 64 unit tests, 8 Pi worker tests (one optional private replay skipped), 13 rootless container tests and Chromium extension integration passed, along with typecheck. These exercise inherited policies/retries, export authorization and file integrity, context bounds, CONNECT broken-pipe recovery and completion after the final save, text import/resume and exact-original document downloads. Deterministic provider fixtures are not live attribution benchmarks.
 
 Run checks from the checkout:
 

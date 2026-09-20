@@ -18,7 +18,7 @@ Implemented in this iteration:
 
 Regression tests cover proxy EPIPE handling and closing research before the model-input bound. Live local-image imports still exceed the 64,000-token input bound in some cases despite the early research cutoff. Larger runs need checking for per-image failures; a running batch is not proof that every earlier image saved. Use `gg usage` and `gg usage history`, inspect the run's own output, and compare input content hashes against preserved records. Respect existing grant expiry and provider pauses. Re-running an import skips saved source hashes and retries missing records.
 
-Remaining product issue: local-image interpretation still has hardcoded artwork research and routing preferences, even for non-art images. Move domain-specific preferences into destination policies while retaining general evidence/uncertainty checks. See [supported formats and specialization](files.md). Non-image file import is a separate feature, not a prompt change.
+Remaining product issue: local-image interpretation still has hardcoded artwork research and routing preferences, even for non-art images. Move domain-specific preferences into destination policies while retaining general evidence/uncertainty checks. See [supported formats and specialization](files.md). UTF-8 text imports now use a separate document path with exact originals; PDF/office formats remain unsupported.
 
 Keep deployment-specific paths, service names, grant IDs, collection inventories and review operation IDs out of public project docs.
 

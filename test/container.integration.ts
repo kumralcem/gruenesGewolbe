@@ -570,3 +570,59 @@ test(
     }
   },
 );
+
+test(
+  "text documents preserve exact originals through the isolated worker",
+  { timeout: 60000 },
+  async () => {
+    const { writeFile, rm } = await import("node:fs/promises");
+    const { fileCapture } = await import("../src/image-import.ts");
+    const root = await mkdtemp(join(tmpdir(), "gg-text-container-"));
+    try {
+      const text = "\ufeff# Notes\r\n\r\nKeep practical steps.\r\n";
+      const file = join(root, "notes.md");
+      await writeFile(file, text);
+      const capture = await fileCapture(file);
+      const vault = await setup();
+      let step = 0;
+      const call = (name: string, args: unknown) => ({
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_" + step,
+            type: "function",
+            function: { name, arguments: JSON.stringify(args) },
+          },
+        ],
+      });
+      const result = await runJob({
+        vault,
+        config,
+        intent: "capture",
+        input: capture.url,
+        browserCapture: capture,
+        mockModel: async (body: any) => {
+          assert.match(body.messages[0].content, /LOCAL DOCUMENT IMPORT/);
+          if (step++ === 0) return call("browse", { url: capture.url });
+          return call("capture", {
+            kind: "idea",
+            includeImages: false,
+            title: "Notes",
+            summary: "Keep practical steps.",
+            subvault: "Ideas",
+            tags: [],
+          });
+        },
+      });
+      assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
+      const [record] = await vault.sourceRecords(capture.url);
+      assert.equal(
+        await readFile(join(record.path, "original.md"), "utf8"),
+        text,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
