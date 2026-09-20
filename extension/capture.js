@@ -255,6 +255,57 @@ $("allow").onclick = async () => {
     status(e.message);
   }
 };
+let rulesRevision;
+let rulesDirty = false;
+async function loadRules() {
+  try {
+    const rules = await request("/capture-rules");
+    $("capture-rules").value = rules.text;
+    rulesRevision = rules.revision;
+    rulesDirty = false;
+    $("capture-rules").disabled = false;
+    $("save-rules").disabled = false;
+    $("rules-status").textContent = "Stored as CAPTURE.md in your vault.";
+  } catch (error) {
+    $("rules-status").textContent = error.message;
+  }
+}
+$("capture-rules").oninput = () => {
+  rulesDirty = true;
+};
+$("reload-rules").onclick = () => {
+  if (
+    !rulesDirty ||
+    confirm("Discard your unsaved capture instructions and reload?")
+  )
+    void loadRules();
+};
+$("save-rules").onclick = async () => {
+  $("save-rules").disabled = true;
+  const draft = $("capture-rules").value;
+  try {
+    const saved = await request("/capture-rules", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: draft, revision: rulesRevision }),
+    });
+    rulesRevision = saved.revision;
+    rulesDirty = $("capture-rules").value !== draft;
+    $("rules-status").textContent = rulesDirty
+      ? "Saved. You have additional unsaved changes."
+      : "Saved. These instructions apply to future captures and recaptures.";
+  } catch (error) {
+    $("rules-status").textContent = error.message;
+  } finally {
+    $("save-rules").disabled = false;
+  }
+};
+window.addEventListener("beforeunload", (event) => {
+  if (rulesDirty) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 $("connect").onclick = async () => {
   try {
     const receiver = connection();
@@ -273,6 +324,7 @@ $("connect").onclick = async () => {
     $("settings").open = false;
     $("connection").textContent = "Connected to GG.";
     await refresh();
+    await loadRules();
   } catch (e) {
     $("connection").textContent = e.message;
   }
@@ -289,4 +341,7 @@ if (popup && !settings.token) {
   $("capture").disabled = true;
   status("Connect to GG first using Settings & recent captures below.");
 }
-if (settings.token && !popup) await refresh();
+if (settings.token && !popup) {
+  await refresh();
+  await loadRules();
+}

@@ -288,6 +288,25 @@ export async function createReceiver(options: ReceiverOptions) {
         send(res, 401, { error: "Pair this device with GG" });
         return;
       }
+      if (req.url === "/capture-rules" && req.method === "GET") {
+        send(res, 200, await options.vault.captureRules());
+        return;
+      }
+      if (req.url === "/capture-rules" && req.method === "POST") {
+        let raw = "";
+        for await (const chunk of req) {
+          raw += chunk;
+          if (Buffer.byteLength(raw) > 100000)
+            throw Error("Capture instructions request too large");
+        }
+        const input = JSON.parse(raw);
+        send(
+          res,
+          200,
+          await options.vault.setCaptureRules(input.text, input.revision),
+        );
+        return;
+      }
       if (req.method === "GET" && req.url === "/usage") {
         send(
           res,

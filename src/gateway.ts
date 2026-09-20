@@ -45,6 +45,8 @@ export async function createGateway(options: GatewayOptions) {
   const { vault, config, intent } = options;
   validateConfig(config, intent);
   await vault.destinations();
+  const captureRules =
+    intent === "capture" ? await vault.captureRules() : undefined;
   let batchId = options.batchId ?? randomUUID();
   const revision = createHash("sha256")
     .update(
@@ -229,6 +231,7 @@ export async function createGateway(options: GatewayOptions) {
       if (route === "/capture-context" && intent === "capture") {
         const records = await vault.sourceRecords(options.input);
         send(res, 200, {
+          captureRules: captureRules?.text,
           records: records.map((v) => ({
             id: v.item.id,
             key: v.item.captureKey ?? "source",

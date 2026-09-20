@@ -257,6 +257,11 @@ test(
       await mkdtemp(join(tmpdir(), "gg-text-instructions-")),
       ["Ideas"],
     );
+    const rules = await vault.captureRules();
+    await vault.setCaptureRules(
+      "CUSTOM_DEFAULT: Explain all five tips and give actionable examples.",
+      rules.revision,
+    );
     const url = "https://example.com/five-tips";
     const steps = [
       call("browse", { url }),
@@ -289,7 +294,13 @@ test(
           "Save as an instruction set; create SoloDev under Ideas. Images are irrelevant.",
         images: [{ url: url + "/banner", error: "Failed to fetch" }],
       },
-      mockModel: async () => steps[step++],
+      mockModel: async (body) => {
+        const prompt = body.messages[0].content;
+        assert.match(prompt, /CUSTOM_DEFAULT: Explain all five tips/);
+        assert.match(prompt, /individual capture take precedence/);
+        assert.match(prompt, /Save as an instruction set/);
+        return steps[step++];
+      },
     });
     assert.equal(result.outcomes[0].status, "saved", result.output);
     const item = (await vault.items())[0].item;

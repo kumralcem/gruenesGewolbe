@@ -1,3 +1,4 @@
+import { readCaptureRules, validateCaptureRules } from "./capture-rules.ts";
 import { History } from "./history.ts";
 import {
   lstat,
@@ -113,6 +114,7 @@ export class Vault {
     await mkdir(join(canonical, ".staging"));
     const vault = new Vault(canonical, areas);
     await vault.index();
+    await vault.captureRules();
     return vault;
   }
   static async open(root: string) {
@@ -137,6 +139,25 @@ export class Vault {
     const vault = new Vault(await realpath(root), data.areas);
     await vault.reloadAreas();
     return vault;
+  }
+  async captureRules() {
+    return readCaptureRules(this.root);
+  }
+  async setCaptureRules(value: unknown, revision: unknown) {
+    validateCaptureRules(value);
+    return this.serialize(async () => {
+      const current = await this.captureRules();
+      if (typeof revision !== "string" || revision !== current.revision)
+        throw Error(
+          "CAPTURE.md changed since you loaded it. Reload the instructions before saving; your draft has not been saved.",
+        );
+      await new History(this.root).run(
+        "Edit capture instructions",
+        ["CAPTURE.md"],
+        () => this.atomic(join(this.root, "CAPTURE.md"), value),
+      );
+      return this.captureRules();
+    });
   }
   private async reloadAreas() {
     const root = join(this.root, "subvaults");

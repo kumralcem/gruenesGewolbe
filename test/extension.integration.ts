@@ -167,7 +167,7 @@ test(
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.3.0");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.4.0");
       assert.equal(await popup.locator("#source").isVisible(), false);
       await popup.setViewportSize({ width: 400, height: 440 });
       const dashboard = await context.newPage();
@@ -181,6 +181,35 @@ test(
       assert.equal(
         await popup.locator("html").getAttribute("data-theme"),
         "dark",
+      );
+      await dashboard.locator("#capture-rules:not([disabled])").waitFor();
+      assert.match(
+        await dashboard.locator("#capture-rules").inputValue(),
+        /include every substantive item/,
+      );
+      await dashboard
+        .locator("#capture-rules")
+        .fill("List all five tips with practical examples.");
+      await dashboard
+        .getByRole("button", { name: "Save instructions", exact: true })
+        .click();
+      await dashboard
+        .locator("#rules-status")
+        .filter({ hasText: "Saved." })
+        .waitFor();
+      assert.equal(
+        (await vault.captureRules()).text,
+        "List all five tips with practical examples.",
+      );
+      await dashboard.reload();
+      await dashboard.locator("#capture-rules:not([disabled])").waitFor();
+      assert.equal(
+        await dashboard.locator("#capture-rules").inputValue(),
+        "List all five tips with practical examples.",
+      );
+      assert.equal(
+        await popup.locator("#capture-rules-panel").isVisible(),
+        false,
       );
       await dashboard.locator("#theme").selectOption("light");
       await popup.waitForFunction(

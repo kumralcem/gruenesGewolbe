@@ -321,3 +321,12 @@ select {
 :root[data-theme="dark"].popup-root {
   background: transparent;
 }
+
+.popup #capture-rules-panel {
+  display: none;
+}
+#capture-rules {
+  font-family: ui-monospace, monospace;
+  font-size: 14px;
+  margin: 12px 0;
+}

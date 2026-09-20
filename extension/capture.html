@@ -50,6 +50,26 @@
           limits while GG is open</label
         >
       </section>
+      <section class="panel" id="capture-rules-panel">
+        <h2>Capture instructions</h2>
+        <p>
+          Shared across your devices. Individual capture instructions take
+          priority. Changes apply to future captures and recaptures.
+        </p>
+        <textarea
+          id="capture-rules"
+          aria-label="Default capture instructions"
+          rows="12"
+          maxlength="16000"
+          spellcheck="false"
+          disabled
+        ></textarea>
+        <button id="save-rules" disabled>Save instructions</button>
+        <button class="secondary" id="reload-rules">Reload</button>
+        <p id="rules-status" role="status" aria-live="polite">
+          Connect to GG to edit your capture instructions.
+        </p>
+      </section>
       <section class="panel" id="appearance">
         <label for="theme">Appearance</label>
         <select id="theme">

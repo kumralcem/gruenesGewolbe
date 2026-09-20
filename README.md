@@ -67,6 +67,14 @@ The extension sends visible text, sanitized HTML, captions, an already-visible t
 
 Cross-origin restrictions or network failures can prevent image downloads. GG records missing images when they are relevant to the saved record; available content is still saved. To supply previously missing bytes, make a new capture from the original page. **Retry unfinished work** reuses the already-received snapshot and cannot fetch missing browser images. After acceptance you can close the popup. The settings page shows recent captures, retry and cancellation. Usage notifications are optional while that page is open.
 
+## Shared capture instructions
+
+`CAPTURE.md` in the vault root controls the default level of detail and writing style for new captures and recaptures. GG creates it with useful defaults if it is missing, without replacing an existing file. For lists, those defaults ask for every substantive tip, an explanation of each, and concrete actions or examples. Tutorials retain steps, prerequisites and caveats; essays retain their argument and supporting points.
+
+Edit the file directly, or open the extension's **Settings & recent captures → Capture instructions**, edit, and click **Save instructions**. Both edit the same server-side file, shared by all your devices. No service restart is needed. The editor detects stale copies rather than overwriting someone else's changes; reload explicitly after a conflict. Settings edits appear in GG history and can be undone. The limit is 16,000 UTF-8 bytes; an empty file disables the shared defaults.
+
+Instructions for an individual capture override these defaults. Saved source instructions still carry forward on recapture when no new instructions are supplied. Changes do not rewrite existing records automatically, and recapture continues to preserve human edits. Source pages cannot edit `CAPTURE.md`; the worker only receives a read-only snapshot for its job. Paired browser devices may edit these capture preferences, without gaining general management permissions. The file expresses content/style preferences, not additional tool permissions or authorization to rearrange the vault.
+
 ## Nested folders and automatic routing
 
 GG discovers existing folders under your vault's `subvaults/` directory on each operation. For example:
@@ -154,4 +162,4 @@ The coral vault mark combines phthalo green, coral and warm gold. See the [three
 
 ### Updating the unpacked extension
 
-After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.3.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
+After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.4.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
