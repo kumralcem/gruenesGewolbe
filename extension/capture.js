@@ -237,6 +237,18 @@ async function poll(jobId) {
   }
 }
 $("capture").onclick = send;
+$("focus").addEventListener("keydown", (event) => {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.isComposing ||
+    event.keyCode === 229
+  )
+    return;
+  event.preventDefault();
+  if (!event.repeat && !$("capture").disabled && !$("focus").disabled)
+    void send();
+});
 $("refresh").onclick = refresh;
 $("allow").onclick = async () => {
   try {

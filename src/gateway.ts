@@ -1,4 +1,4 @@
-import { ModelService } from "./model-service.ts";
+import { ModelService, estimateInput } from "./model-service.ts";
 import { defaultStateDir, readJson, writeJson } from "./state.ts";
 import { UsagePaused } from "./usage.ts";
 import { fixtureCompletion } from "./model-bridge.ts";
@@ -201,6 +201,8 @@ export async function createGateway(options: GatewayOptions) {
           });
         };
         if (options.mockModel) {
+          if (estimateInput(input.context) > (config.maxInputTokens ?? 64000))
+            throw Error("Model input exceeds configured bound");
           attempt();
           send(
             res,

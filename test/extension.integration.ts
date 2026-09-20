@@ -155,19 +155,26 @@ test(
       await popup
         .getByLabel("Instructions (optional)")
         .fill("Keep the popup capture.");
-      await popup.getByRole("button", { name: "Capture", exact: true }).click();
+      const beforeEnter = captures.length;
+      await popup.getByLabel("Instructions (optional)").press("Shift+Enter");
+      assert.equal(captures.length, beforeEnter);
+      assert.match(
+        await popup.getByLabel("Instructions (optional)").inputValue(),
+        /\n/,
+      );
+      await popup.getByLabel("Instructions (optional)").press("Enter");
       await popup
         .locator("#status")
         .filter({ hasText: "Capture received" })
         .waitFor();
       await receiver.idle();
-      assert.equal(captures[2].instructions, "Keep the popup capture.");
+      assert.equal(captures[2].instructions.trim(), "Keep the popup capture.");
       assert.deepEqual(
         Buffer.from(captures[2].images[0].bytes, "base64"),
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.4.0");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.4.1");
       assert.equal(await popup.locator("#source").isVisible(), false);
       await popup.setViewportSize({ width: 400, height: 440 });
       const dashboard = await context.newPage();

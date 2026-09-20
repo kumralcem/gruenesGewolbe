@@ -53,7 +53,7 @@ Credentials are in the controller's private state directory (`~/.config/gg`, ove
 1. Load this repository's `extension` directory through `chrome://extensions` → Developer mode → Load unpacked.
 2. Click GG on a page, or press **Alt+Shift+G**.
 3. On first use, open **Settings & recent captures**, then **Connect to GG**. Enter the GG address and a code from `gg pair` on the controller. Pairing survives server restarts. Codes expire after ten minutes and are single-use.
-4. Optionally enter instructions, then **Capture**. No type, destination or image selection is required.
+4. Optionally enter instructions, then press **Enter** or click **Capture**. **Shift+Enter** inserts a new line. No type, destination or image selection is required.
 
 For a remote controller without a public HTTPS endpoint, keep an SSH tunnel open as shown in the [connection guide](docs/deployment.md#connect-without-buying-a-domain); the extension uses `http://127.0.0.1:48123`.
 
@@ -66,6 +66,8 @@ Appearance defaults to **Dark**. Choose **Dark**, **Light** or **System** on the
 The extension sends visible text, sanitized HTML, captions, an already-visible transcript, and up to 24 image candidates with bytes when obtainable. It excludes form/editor contents, hidden content, scripts, browser storage and cookie stores. Page content itself can contain private information and is sent to your configured model provider. Extraction is best effort. Instructions can ask for captured discussion context; GG does not crawl unloaded replies. For YouTube, open **Show transcript** first; GG does not transcribe audio.
 
 Cross-origin restrictions or network failures can prevent image downloads. GG records missing images when they are relevant to the saved record; available content is still saved. To supply previously missing bytes, make a new capture from the original page. **Retry unfinished work** reuses the already-received snapshot and cannot fetch missing browser images. After acceptance you can close the popup. The settings page shows recent captures, retry and cancellation. Usage notifications are optional while that page is open.
+
+Browser source URL aliases (YouTube video links and X/Twitter post links) reuse the submitted snapshot. Model-facing page/HTML reads are bounded and paginated; complete supplied source text remains preserved. Transcript captures do not automatically attach thumbnail previews. The configured model input limit still applies to unusually large or repeated reads.
 
 ## Shared capture instructions
 
@@ -162,4 +164,4 @@ The coral vault mark combines phthalo green, coral and warm gold. See the [three
 
 ### Updating the unpacked extension
 
-After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.4.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
+After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.4.1** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.

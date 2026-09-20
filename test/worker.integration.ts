@@ -309,3 +309,125 @@ test(
     assert.equal(item.missingMedia?.length ?? 0, 0);
   },
 );
+
+test(
+  "long browser transcripts fit the normal model bound and normalized post URLs stay on the snapshot",
+  { timeout: 60000 },
+  async () => {
+    const sharp = (await import("sharp")).default;
+    const bytes = (
+      await sharp({
+        create: { width: 200, height: 200, channels: 3, background: "#abcdef" },
+      })
+        .png()
+        .toBuffer()
+    ).toString("base64");
+    for (const video of [true, false]) {
+      const vault = await Vault.create(
+        await mkdtemp(join(tmpdir(), "gg-context-size-")),
+        ["Ideas"],
+      );
+      const url = video
+        ? "https://www.youtube.com/watch?v=abcdefghijk"
+        : "https://x.com/example/status/12345?s=20";
+      const requested = video ? url : "https://x.com/example/status/12345";
+      const steps = [
+        call("browse", { url: requested }),
+        video
+          ? call("read_snapshot", { section: "transcript", offset: 12000 })
+          : call("fetch_text", { url: requested }),
+        call("capture", {
+          kind: "idea",
+          title: "Instructions",
+          summary: "Detailed instructions",
+          subvault: "Ideas",
+          includeImages: false,
+          tags: [],
+        }),
+        { role: "assistant", content: "Saved" },
+      ];
+      let step = 0;
+      const result = await worker({
+        vault,
+        config: { provider: "openai", model: "fixture", maxSeconds: 20 },
+        intent: "capture",
+        input: url,
+        browserCapture: {
+          version: 2,
+          intent: "capture",
+          url,
+          title: "Source",
+          text: "page text ".repeat(900),
+          html: "<div>page structure</div>".repeat(13000),
+          transcript: video ? "transcript sentence. ".repeat(1250) : undefined,
+          capturedAt: "2026-09-20T00:00:00Z",
+          instructions: "Save the instructions without images.",
+          images: [
+            { url: url + "#image1", bytes, mimeType: "image/png" },
+            { url: url + "#image2", bytes, mimeType: "image/png" },
+          ],
+        },
+        fixturePage: () => {
+          throw Error("The supplied source must not be re-fetched");
+        },
+        mockModel: async (body) => {
+          if (step === 1)
+            assert.match(body.messages.at(-1).content, /"fromBrowser":true/);
+          return steps[step++];
+        },
+      });
+      assert.equal(result.outcomes[0].status, "saved", result.output);
+    }
+  },
+);
+
+// Opt-in local replay keeps private browser snapshots out of the repository.
+test(
+  "stored browser snapshots replay within the model bound",
+  { skip: !process.env.GG_REPLAY_INPUTS, timeout: 60000 },
+  async () => {
+    const { readFile } = await import("node:fs/promises");
+    for (const path of JSON.parse(process.env.GG_REPLAY_INPUTS ?? "[]")) {
+      const snapshot = JSON.parse(await readFile(path, "utf8"));
+      const vault = await Vault.create(
+        await mkdtemp(join(tmpdir(), "gg-private-replay-")),
+        ["Ideas"],
+      );
+      const url = snapshot.url.includes("x.com/")
+        ? snapshot.url.split("?")[0]
+        : snapshot.url;
+      const steps = [call("browse", { url })];
+      for (
+        let offset = 12000;
+        offset < (snapshot.transcript?.length ?? 0);
+        offset += 12000
+      )
+        steps.push(call("read_snapshot", { section: "transcript", offset }));
+      if (!snapshot.transcript) steps.push(call("fetch_text", { url }));
+      steps.push(
+        call("capture", {
+          kind: "idea",
+          title: "Replay",
+          summary: "Fixture replay only",
+          subvault: "Ideas",
+          tags: [],
+          includeImages: false,
+        }),
+      );
+      let step = 0;
+      const result = await worker({
+        vault,
+        intent: "capture",
+        input: snapshot.url,
+        browserCapture: snapshot,
+        config: { provider: "openai", model: "fixture", maxSeconds: 20 },
+        fixturePage: () => {
+          throw Error("Unexpected public refetch");
+        },
+        mockModel: async () =>
+          steps[step++] ?? { role: "assistant", content: "Saved" },
+      });
+      assert.equal(result.outcomes[0].status, "saved", result.output);
+    }
+  },
+);
