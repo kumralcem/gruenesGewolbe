@@ -1,6 +1,6 @@
 # Agent-led capture and hosted GG
 
-Status: ready-for-human — implementation complete; host prerequisites and live provider setup remain
+Status: ready-for-human — implementation complete; live provider and service setup remain
 
 ## Outcome
 
@@ -32,7 +32,7 @@ Use boundary tests for capture validation, version history/manual edits, managem
 
 ## Operational follow-up (environmental blockers)
 
-- [ ] Administrator installs rootless Podman/crun/uidmap on Perkele; build worker and pass isolation probe/container suite/demo.
+- [x] Administrator installs rootless Podman/crun/uidmap on Perkele; build worker and pass isolation probe/container suite/demo (validated 2026-09-20).
 - [ ] User signs into selected provider; verify a live capture and allowance reporting.
 - [ ] Enable the prepared service and pair client devices through SSH forwarding.
 - Public HTTPS intentionally remains unconfigured: no domain available. Whatbox encrypted backups remain deferred TODO.

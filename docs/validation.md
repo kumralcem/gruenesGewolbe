@@ -1,3 +1,18 @@
+# Perkele worker validation — 2026-09-20
+
+Rootless Podman is now installed. The first run exposed image files copied from this checkout with owner-only permissions: root-owned `/app/package.json` and worker source were unreadable to the mapped worker UID. The Containerfile now explicitly makes the copied application files readable inside the image; host permissions and isolation flags remain unchanged.
+
+- Reproduced `EACCES` with a direct mapped-UID file read and a new regression test before the fix.
+- Rebuilt `localhost/gg-pi-prototype` on Perkele.
+- All nine original container integration tests pass, including the browser/isolation probe, cancellation, retrieval and private browser snapshots.
+- The new permission regression passes. Its initial 15-second timeout expired during the rebuilt image's first Podman startup (about 43 seconds); it now allows 90 seconds and passed on rerun. The full initial run therefore reported 9/10, followed by a passing focused regression run.
+- `pnpm demo` passes: skip, queue, save, duplicate detection and retrieval through real Pi with fixture responses. Evidence: `.runs/demo-1789868459062/demo-results.json`.
+- Typecheck passes. No provider sign-in, paid model calls, service deployment or host sudo changes were performed for this fix.
+
+The earlier missing-Podman blocker below is resolved. Provider sign-in, live capture and service setup remain the next steps.
+
+---
+
 # Agent-led capture validation — 2026-09-16
 
 Review base: `1aeb3714ec396c93192f3a30436302de4f5f0b23`. Implementation spec: `.scratch/agent-led-capture/PRD.md`.

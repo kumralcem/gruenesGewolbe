@@ -6,7 +6,7 @@ Perkele holds the working vault and model credentials. The extension submits bro
 
 Perkele's 4 vCPUs / 8 GB RAM / 80 GB disk are suitable for one bounded worker and the expected sub-10-GB vault. Initial inspection found about 63 GiB free and 4.5 GiB available RAM. History, originals and worker images also consume disk. UFW, unattended-upgrades and Tailscale were active, but effective firewall and SSH settings could not be inspected with available privileges. This is not a completed hardening audit.
 
-Rootless Podman and its user-namespace helpers are missing on the current host. An administrator must install the distribution's Podman, crun and uidmap packages; validate subordinate UID/GID mappings and rootless operation. GG deliberately has no production fallback to running the worker on the host. The controller runs as an unprivileged user. Keep future website processes under a separate Unix account or move them to another host; a worker container does not isolate the trusted controller from other processes running as its user.
+Rootless Podman, crun and user-namespace helpers are now installed on Perkele; the worker isolation checks passed on 2026-09-20. On a fresh host, an administrator must install these distribution packages and validate subordinate UID/GID mappings and rootless operation. GG deliberately has no production fallback to running the worker on the host. The controller runs as an unprivileged user. Keep future website processes under a separate Unix account or move them to another host; a worker container does not isolate the trusted controller from other processes running as its user.
 
 ```sh
 # From the installed checkout, under the controller user:

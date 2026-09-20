@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile } from "node:fs/promises";
@@ -20,6 +21,32 @@ async function setup() {
     "Ideas",
   ]);
 }
+
+test("image application files are readable by the mapped worker UID", () => {
+  const result = spawnSync(
+    "podman",
+    [
+      "run",
+      "--rm",
+      "--network=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--userns=keep-id",
+      `--user=${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`,
+      "--entrypoint",
+      "node",
+      "localhost/gg-pi-prototype",
+      "-e",
+      `const fs = require("node:fs");
+     for (const path of ["/app/package.json", "/app/src/worker.ts"])
+       fs.readFileSync(path);
+     console.log("Worker code is readable");`,
+    ],
+    { encoding: "utf8", timeout: 90000 },
+  );
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+  assert.match(result.stdout, /Worker code is readable/);
+});
 
 test(
   "worker has a working broker/browser, but no host files, real credentials or direct network",
