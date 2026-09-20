@@ -24,4 +24,4 @@ A file-based personal archive. Pi handles capture, retrieval and explicitly requ
 
 ## Boundaries
 
-The controller on Perkele holds provider credentials and the authoritative vault. Clients submit content and commands, and may keep file mirrors through existing transfer tools. Workers have temporary storage and narrow controller capabilities; `ask` is read-only. Browser snapshots never require public re-fetching. Public HTTPS is optional and currently unconfigured; SSH forwarding works without a domain. Tailscale is not required. General-purpose sync, previous-application import and encrypted Whatbox backups are outside this implementation.
+The controller holds provider credentials and the authoritative vault. Clients submit content and commands and can download record bundles. Workers have temporary storage and narrow controller capabilities; `ask` is read-only. Browser snapshots do not require public re-fetching. Remote clients can use SSH forwarding or an HTTPS reverse proxy. General-purpose sync, previous-application import and built-in encrypted backups are outside this implementation.

@@ -1,31 +1,25 @@
-# GG on Perkele
+# Deployment
 
-Perkele holds the working vault and model credentials. The extension submits browser snapshots; clients need neither a container runtime nor Tailscale. No domain is configured. Start with SSH forwarding, using the same address in the extension and remote CLI.
+[Home](../README.md) · [Installation](getting-started.md) · [CLI reference](cli.md)
 
-## Host preparation
+Run one controller as the authoritative writer for your vault. Browser clients need only the extension; remote CLI clients need Node.js and the installed CLI. Clients do not need a container runtime.
 
-Perkele's 4 vCPUs / 8 GB RAM / 80 GB disk are suitable for one bounded worker and the expected sub-10-GB vault. History, originals and worker images also consume disk. UFW, unattended-upgrades and Tailscale were active, but effective firewall and SSH settings could not be inspected with available privileges. This is not a completed hardening audit.
+## Prepare the controller
 
-Rootless Podman, crun and user-namespace helpers are now installed on Perkele; the worker isolation checks passed on 2026-09-20. On a fresh host, an administrator must install these distribution packages and validate subordinate UID/GID mappings and rootless operation. GG deliberately has no production fallback to running the worker on the host. The controller runs as an unprivileged user. Keep future website processes under a separate Unix account or move them to another host; a worker container does not isolate the trusted controller from other processes running as its user.
+Follow [Getting started](getting-started.md) on a Linux host. An administrator may need to install Podman, crun and user-namespace helpers and configure subordinate UID/GID mappings. Confirm rootless operation with `podman info`, then run:
 
 ```sh
-# From the installed checkout, under the controller user:
-pnpm install --frozen-lockfile
-./scripts/install-cli.sh
-pnpm build:worker
-gg init --vault "$HOME/Gewolbe"
-gg login openai-codex
-gg configure --provider openai-codex --model gpt-5.6-luna
 gg probe
 pnpm test:container
-pnpm demo
 ```
 
-Use an empty new vault for initial validation. Do not migrate the existing archive implicitly. API alternatives are documented in the README. Sign-in belongs on this host; provider credentials must not be copied to browser clients or vault mirrors.
+Each worker is limited to 2 CPUs and 2 GiB RAM. Leave additional capacity for the controller, operating system and concurrent services. Account for originals, record history and worker images when sizing storage. GG has no production fallback to running the worker directly on the host.
+
+The controller runs as an unprivileged user and holds provider credentials outside the vault. Keep unrelated services under separate accounts. Worker isolation is not a substitute for securing the controller host.
 
 ## Run as a service
 
-After the commands above pass:
+From the installed checkout, under the controller user:
 
 ```sh
 ./scripts/install-service.sh
@@ -33,60 +27,61 @@ systemctl --user status gg
 journalctl --user -u gg -n 100
 ```
 
-The installer checks the worker image and isolation probe before starting the [user unit](../deploy/gg.service). It uses `~/.config/gg` and `~/.local/bin/gg`; adjust a copy for a different location. Node must be available on the unit's PATH. Ensure the controller user has lingering enabled if it should survive logout (`loginctl enable-linger USER`, administered on the host). The service has a 3-GiB memory ceiling, 512-task ceiling, restrictive umask and cgroup delegation for rootless Podman. No host firewall changes are made by the installer.
+The installer checks the worker image and isolation probe before starting the [user unit](../deploy/gg.service). It uses `~/.config/gg` and `~/.local/bin/gg`; adjust a copy for different locations. Node must be available on the unit's PATH. To keep the service running after logout, an administrator can enable lingering with `loginctl enable-linger USER`.
 
-`gg pair` issues a short-lived capture code; `gg pair --scope manage` issues a management code. Avoid sharing the receiver's log because startup prints a short-lived code. `gg devices` and `gg revoke ID` work on the controller host. Device tokens are hashed server-side and individually revocable.
+The unit sets a 3-GiB memory ceiling, a 512-task ceiling, a restrictive umask and cgroup delegation for rootless Podman. The installer does not change firewall settings. Schedule service updates between jobs; [update instructions](getting-started.md#update) include rebuilding the worker.
 
-## Connect without buying a domain
+Use `gg pair` for capture access or `gg pair --scope manage` for management and archive downloads. Codes expire after ten minutes; device connections remain valid until revoked with `gg revoke DEVICE_ID`. `gg devices` lists paired devices. Startup logs may contain a short-lived pairing code.
 
-On the laptop or desktop, with your existing SSH configuration:
+## Remote connections
+
+The receiver binds to IPv4 loopback by default. Choose SSH forwarding or an HTTPS reverse proxy. No particular private-network service is required.
+
+### SSH forwarding
+
+On the client, replace `USER@SERVER` with your SSH destination:
 
 ```sh
-ssh -N -L 127.0.0.1:48123:127.0.0.1:48123 perkele
+ssh -N -L 127.0.0.1:48123:127.0.0.1:48123 USER@SERVER
 ```
 
-Use `http://127.0.0.1:48123` in the extension, then paste a code from `gg pair` on Perkele. The network hop is protected by SSH. Keep the forwarding session open while submitting captures or checking status; accepted jobs continue when disconnected. SSH may use the public address or your existing Tailscale route. Tailscale is optional.
+Use `http://127.0.0.1:48123` in the extension. Keep the tunnel open while submitting captures or checking status; accepted jobs continue on the server after disconnection.
 
-For the CLI, install the checkout/dependencies/launcher on the client (no worker image needed), issue `gg pair --scope manage` on Perkele, then on the client:
+For a remote CLI, obtain a management pairing code on the controller, then run on the client:
 
 ```sh
 gg connect http://127.0.0.1:48123
 gg list
-gg do 'Move the note about architecture into Inbox'
 ```
 
-Do not expose port 48123 directly. The receiver binds only IPv4 loopback, checks Host/Origin and authenticates every request.
+### Public HTTPS
 
-## Optional public HTTPS later
-
-Once you choose a domain, point its DNS at Perkele, install a trusted HTTPS reverse proxy and allow the required HTTPS/certificate-validation ingress. Configure GG's exact public origin and restart the service:
+Configure DNS and a trusted HTTPS reverse proxy for your chosen hostname. Keep the GG receiver on loopback and set its exact public origin:
 
 ```sh
 gg configure --public-origin https://gg.example.com
 systemctl --user restart gg
 ```
 
-[deploy/Caddyfile.example](../deploy/Caddyfile.example) is a template, not installed configuration. It uses Caddy's [reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy) and [request body limit](https://caddyserver.com/docs/caddyfile/directives/request_body). The proxy forwards to loopback and preserves the original Host. Validate proxy/TLS, firewall, pairing, revocation and a capture from another machine before considering public deployment complete. A browser can request access to the chosen HTTPS host during pairing. No Tailscale, client certificate or local daemon is required for that path.
+The [Caddy example](../deploy/Caddyfile.example) is a starting template. Validate TLS, proxy body limits, Host/Origin handling, pairing, revocation and a capture from another machine. The extension requests access to the chosen HTTPS host during pairing. Do not expose the raw HTTP receiver port publicly.
 
-## Laptop and desktop vault copies
+## Archive copies and backups
 
-Keep Perkele as the authoritative writer. Use existing file-transfer tools for one-way mirrors; GG does not implement general-purpose synchronization or automatic conflict merging. A consistent copy can be made while the service is stopped and no separate CLI writer is running:
+Use [record downloads](files.md#browser-import-and-archive-downloads) for portable copies of selected records. GG does not implement general synchronization or automatic conflict merging.
+
+For a consistent full-vault copy, stop the service and any separate CLI writers, then copy the vault with your preferred backup tool. For example:
 
 ```sh
-# On Perkele:
+# On the controller:
 systemctl --user stop gg
 
-# On a client; replace USER and its home path:
-rsync -a perkele:/home/USER/Gewolbe/ "$HOME/Gewolbe/"
+# On the client; substitute the server account and vault path:
+rsync -a USER@SERVER:/path/to/vault/ "$HOME/Gewolbe-copy/"
 
-# On Perkele after copying:
+# On the controller after copying:
 systemctl --user start gg
 ```
 
-The example intentionally omits `--delete` so a mistaken deletion is not propagated automatically. It may leave old moved/deleted records in the destination; for an exact snapshot, copy to a fresh dated folder. Do not sync `~/.config/gg`, which contains provider/device credentials. Local notes may be edited, but edits must be explicitly reconciled on the authoritative vault before replacing a mirror. Perform routine archive edits through `gg do`/`gg chat` from any connected machine.
+This example omits `--delete`; old moved/deleted records can remain in an existing copy. Copy into a fresh dated directory for an exact snapshot. The private controller state directory contains credentials and needs separate protection; do not distribute it with vault copies. Reconcile edits on the authoritative vault before refreshing another copy. Built-in encrypted, versioned backups remain a TODO.
 
-## Deferred
-
-- TODO: encrypted, versioned Whatbox backups; no backup service, key or job installed now.
-- Public domain/TLS setup, pending an actual hostname.
-- Complete host hardening audit; worker isolation tests have passed, while live transport reliability remains an open issue (see [validation](validation.md)).
+See [known limits](validation.md) for crash recovery and validation boundaries.

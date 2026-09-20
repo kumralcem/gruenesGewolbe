@@ -1,6 +1,6 @@
 # Grünes Gewölbe identity
 
-The default mark is **Coral vault** (`logo.svg`): a branching coral form beneath a warm gold arch, on a phthalo-green background. It draws on the user's coral ornament reference without reproducing the utensils or photograph.
+The default mark is **Coral vault** (`logo.svg`): a branching coral form beneath a warm gold arch, on a phthalo-green background. The branching form evokes coral ornamentation.
 
 ## Options
 
