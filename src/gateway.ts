@@ -737,6 +737,9 @@ export async function createGateway(options: GatewayOptions) {
     s.on("close", () => connections.delete(s));
   });
   server.on("connect", async (req, client, head) => {
+    // CONNECT detaches HTTP's parser/error handling. Own the socket before
+    // validation or DNS: even writing a rejection can fail asynchronously.
+    client.on("error", () => client.destroy());
     try {
       if (intent === "ask" || abort.signal.aborted || connections.size > 24)
         throw Error("Network capability denied");
@@ -751,6 +754,8 @@ export async function createGateway(options: GatewayOptions) {
       remote.setTimeout(30000, () => remote.destroy());
       remote.on("error", () => client.destroy());
       client.on("error", () => remote.destroy());
+      client.on("close", () => remote.destroy());
+      remote.on("close", () => client.destroy());
       remote.on("connect", () => {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length) remote.write(head);
@@ -763,7 +768,8 @@ export async function createGateway(options: GatewayOptions) {
           abort.abort(Error("Network budget exceeded"));
       });
     } catch {
-      client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      if (!client.destroyed && client.writable)
+        client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
     }
   });
   abort.signal.addEventListener("abort", () => {
