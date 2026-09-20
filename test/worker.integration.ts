@@ -563,3 +563,54 @@ test("a completed capture needs no additional model request to announce success"
   assert.equal(requests, 1);
   assert.equal(result.complete, true);
 });
+
+test("local research closes with space to save instead of overflowing on the next lookup", async () => {
+  const sharp = (await import("sharp")).default;
+  const { writeFile } = await import("node:fs/promises");
+  const { imageCapture } = await import("../src/image-import.ts");
+  const root = await mkdtemp(join(tmpdir(), "gg-research-budget-"));
+  const file = join(root, "painting.png");
+  await writeFile(
+    file,
+    await sharp({
+      create: { width: 100, height: 100, channels: 3, background: "green" },
+    })
+      .png()
+      .toBuffer(),
+  );
+  const capture = await imageCapture(file);
+  const vault = await Vault.create(join(root, "vault"), ["Art"]);
+  let step = 0,
+    assetId = "";
+  const result = await worker({
+    vault,
+    intent: "capture",
+    input: capture.url,
+    browserCapture: capture,
+    config: { provider: "openai", model: "fixture", maxRequests: 3 },
+    fixturePage: () => ({
+      text: "Research evidence. ".repeat(1550),
+      images: [],
+    }),
+    mockModel: async (body) => {
+      if (step++ === 0) return call("browse", { url: capture.url });
+      if (step === 2) {
+        assetId = JSON.parse(
+          body.messages.filter((m: any) => m.role === "tool").at(-1).content,
+        ).previewAssets[0].assetId;
+        return call("browse", { url: "https://example.com/research" });
+      }
+      assert.match(body.messages[0].content, /research budget is now closed/);
+      return call("capture", {
+        kind: "art",
+        title: "Unidentified painting",
+        subvault: "Art",
+        summary: "Green image",
+        tags: [],
+        assetIds: [assetId],
+      });
+    },
+  });
+  assert.equal(result.complete, true);
+  assert.equal(step, 3);
+});

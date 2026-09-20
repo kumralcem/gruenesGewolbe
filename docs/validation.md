@@ -2,7 +2,7 @@
 
 ## Latest checks
 
-Before this iteration, commit `84d94c6` passed typecheck, **54 unit tests**, **5 real Pi worker tests** (optional private replay skipped), and **12 rootless container tests**. The current iteration passed 61 unit tests plus the added attribution-tag regression, 6 Pi worker tests (one optional private replay skipped), 12 rootless container tests and the Chromium extension integration (run inside the Playwright image). Typecheck also passed. Current changes exercise inherited policies/retries, portable export authorization and bytes, duplicate-image context reduction, CONNECT broken-pipe recovery and no completion after final save. These use deterministic provider fixtures; they are not live attribution benchmarks. Earlier reviews and run transcripts remain in Git history.
+Before this iteration, commit `84d94c6` passed typecheck, **54 unit tests**, **5 real Pi worker tests** (optional private replay skipped), and **12 rootless container tests**. The current iteration passed 62 unit tests, 7 Pi worker tests (one optional private replay skipped), 12 rootless container tests and the Chromium extension integration (run inside the Playwright image). Typecheck also passed. Current changes exercise inherited policies/retries, portable export authorization and bytes, duplicate-image context reduction, CONNECT broken-pipe recovery and no completion after final save. These use deterministic provider fixtures; they are not live attribution benchmarks. Earlier reviews and run transcripts remain in Git history.
 
 Run checks from the checkout:
 

@@ -45,3 +45,37 @@ export function boundedCandidates<T extends { url: string }>(
   }
   return result;
 }
+
+export function estimateInput(context: Context) {
+  let imageTokens = 0;
+  const text = JSON.stringify(context, (key, value) => {
+    if (value && typeof value === "object" && value.type === "image") {
+      imageTokens += 8192;
+      return { type: "image" };
+    }
+    return value;
+  });
+  // UTF-8 bytes conservatively bound ordinary text tokens. Image accounting is
+  // an explicit estimate; reported provider usage replaces reservations.
+  return Buffer.byteLength(text) + imageTokens;
+}
+
+/** Close local-artwork research before there is no room left to save. Retain all
+ * evidence and tool history; only narrow the next request's available tools. */
+export function finalizationContext(context: Context): Context {
+  return {
+    ...context,
+    tools: context.tools?.filter((tool) =>
+      [
+        "capture",
+        "capture_policy",
+        "create_destination",
+        "plan_capture",
+        "skip_capture",
+      ].includes(tool.name),
+    ),
+    systemPrompt:
+      (context.systemPrompt ?? "") +
+      "\nThe research budget is now closed. Save the original image now using existing asset IDs and the evidence already available. Mark unresolved attribution uncertain. If needed, read the destination policy first. Do not request more research or repeat inspection.",
+  };
+}

@@ -31,19 +31,8 @@ export async function loginProvider(
     interaction,
   );
 }
-export function estimateInput(context: Context) {
-  let imageTokens = 0;
-  const text = JSON.stringify(context, (key, value) => {
-    if (value && typeof value === "object" && value.type === "image") {
-      imageTokens += 8192;
-      return { type: "image" };
-    }
-    return value;
-  });
-  // UTF-8 bytes conservatively bound ordinary text tokens. Image accounting is
-  // an explicit estimate; reported provider usage replaces reservations.
-  return Buffer.byteLength(text) + imageTokens;
-}
+export { estimateInput } from "./context-budget.ts";
+import { estimateInput } from "./context-budget.ts";
 export class ModelService {
   readonly usage: UsageGuard;
   private runtime?: Promise<ModelRuntime>;
@@ -76,7 +65,9 @@ export class ModelService {
       throw Error("Invalid model context");
     const inputTokens = estimateInput(context);
     if (inputTokens > (this.config.maxInputTokens ?? 64000))
-      throw Error("Model input exceeds configured bound");
+      throw Error(
+        `Model input exceeds configured bound (${inputTokens} estimated tokens; limit ${this.config.maxInputTokens ?? 64000})`,
+      );
     const runtime = await (this.runtime ??= providerRuntime(this.dir));
     if (this.config.apiKey)
       await runtime.setRuntimeApiKey(this.config.provider, this.config.apiKey);

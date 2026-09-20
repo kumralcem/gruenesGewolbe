@@ -807,7 +807,11 @@ export async function createGateway(options: GatewayOptions) {
       remote.on("error", () => client.destroy());
       client.on("error", () => remote.destroy());
       client.on("close", () => remote.destroy());
-      remote.on("close", () => client.destroy());
+      remote.on("close", () => {
+        // Flush any bytes already piped to a slow client on normal EOF.
+        // The error handler above still destroys failed tunnels immediately.
+        if (!client.destroyed && !client.writableEnded) client.end();
+      });
       remote.on("connect", () => {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length) remote.write(head);

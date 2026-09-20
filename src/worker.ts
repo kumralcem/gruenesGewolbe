@@ -1,6 +1,8 @@
 import {
   boundedCandidates,
   deduplicateContextImages,
+  estimateInput,
+  finalizationContext,
 } from "./context-budget.ts";
 import { isLocalSource } from "./local-source.ts";
 import { sameCapturedSource } from "./source-url.ts";
@@ -183,8 +185,9 @@ async function inspectImage(url: string) {
 
 let captureFinished = false;
 let localResearchReads = 0;
+let researchClosed = false;
 function researchRead() {
-  if (isLocalSource(job.input) && ++localResearchReads > 4)
+  if (isLocalSource(job.input) && (researchClosed || ++localResearchReads > 4))
     throw Error(
       "Research limit reached. Save the supplied original now with honest uncertain attribution where verification is incomplete.",
     );
@@ -829,6 +832,17 @@ try {
         const stream = createAssistantMessageEventStream();
         void (async () => {
           try {
+            let bounded = deduplicateContextImages(context);
+            if (
+              isLocalSource(job.input) &&
+              (researchClosed ||
+                localResearchReads >= 4 ||
+                estimateInput(bounded) >
+                  (job.config.maxInputTokens ?? 64000) * 0.7)
+            ) {
+              researchClosed = true;
+              bounded = finalizationContext(bounded);
+            }
             const message: AssistantMessage = captureFinished
               ? {
                   role: "assistant",
@@ -841,7 +855,7 @@ try {
                   timestamp: Date.now(),
                 }
               : await rpc("/model/pi", {
-                  context: deduplicateContextImages(context),
+                  context: bounded,
                 });
             stream.push({ type: "start", partial: message });
             stream.push({
