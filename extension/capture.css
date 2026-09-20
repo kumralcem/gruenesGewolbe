@@ -23,15 +23,11 @@ header {
   margin-bottom: 30px;
 }
 .brand {
-  display: grid;
-  place-items: center;
-  background: #245846;
-  color: white;
   width: 64px;
   height: 64px;
-  border-radius: 20px;
-  font: bold 25px Georgia;
+  flex-shrink: 0;
 }
+
 h1 {
   font:
     32px/1.2 Georgia,
@@ -74,7 +70,7 @@ input:not([type="radio"]) {
   font: inherit;
 }
 button {
-  background: #245846;
+  background: #123d32;
   color: white;
   border: 0;
   border-radius: 7px;
@@ -111,7 +107,7 @@ input:focus-visible {
   cursor: pointer;
 }
 .image-option:has(input:checked) {
-  border-color: #245846;
+  border-color: #123d32;
   background: #eaf1e9;
 }
 .image-option img {

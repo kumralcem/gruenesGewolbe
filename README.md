@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/logo.svg" width="112" alt="Grünes Gewölbe coral vault logo" /></p>
+
 # Grünes Gewölbe — GG
 
 GG is a personal archive of ordinary Markdown and image files. Open the browser extension, optionally type instructions, and click **Capture**. Pi interprets the page, chooses a subvault, and preserves the useful content. Use `gg do` or `gg chat` to manage the archive.
@@ -132,3 +134,7 @@ pnpm demo                           # deterministic container demo, no provider 
 ```
 
 See [validation](docs/validation.md) for results and environmental blockers. Live provider sign-in, arbitrary website behavior and public deployment require separate checks; fixture success does not establish them.
+
+## Project identity
+
+The coral vault mark combines phthalo green, coral and warm gold. See the [three logo options](assets/brand/options.svg) and [editable SVG sources](assets/brand/README.md). Extension icons are included; no local build is needed to load the extension.
