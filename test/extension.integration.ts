@@ -147,6 +147,28 @@ test(
         path: ".runs/extension-evidence/capture.png",
         fullPage: true,
       });
+      // Load the action popup document while the source remains the active tab.
+      const popup = await context.newPage();
+      await page.bringToFront();
+      const extensionOrigin = ui.url().split("/capture.html")[0];
+      await popup.goto(extensionOrigin + "/capture.html?popup=1");
+      await popup
+        .getByLabel("Instructions (optional)")
+        .fill("Keep the popup capture.");
+      await popup.getByRole("button", { name: "Capture", exact: true }).click();
+      await popup
+        .locator("#status")
+        .filter({ hasText: "Capture received" })
+        .waitFor();
+      await receiver.idle();
+      assert.equal(captures[2].instructions, "Keep the popup capture.");
+      assert.deepEqual(
+        Buffer.from(captures[2].images[0].bytes, "base64"),
+        image,
+      );
+      assert.equal(await popup.locator("#settings").isVisible(), false);
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.2.0");
+      await popup.screenshot({ path: ".runs/extension-evidence/popup.png" });
       for (const path of ["/editor", "/form", "/selection"]) {
         await page.goto(origin + path);
         if (path === "/selection")
@@ -182,6 +204,8 @@ test(
       const manifest = JSON.parse(
         await readFile("extension/manifest.json", "utf8"),
       );
+      assert.equal(manifest.action.default_popup, "capture.html?popup=1");
+      assert.ok(manifest.commands._execute_action);
       assert.ok(!manifest.permissions.includes("cookies"));
       assert.deepEqual(manifest.host_permissions, ["http://127.0.0.1/*"]);
     } finally {

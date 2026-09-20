@@ -1,5 +1,11 @@
+import { prepareCapture } from "./capture-media.js";
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const popup = params.has("popup");
+if (popup) document.body.classList.add("popup");
+$("version").textContent = "GG " + chrome.runtime.getManifest().version;
+$("dashboard").onclick = () =>
+  chrome.tabs.create({ url: chrome.runtime.getURL("capture.html") });
 let id = params.get("id"),
   snapshot,
   tabId,
@@ -44,6 +50,22 @@ async function request(path, options = {}) {
 function status(message) {
   $("status").textContent = message;
 }
+if (popup) {
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    const result = await chrome.runtime.sendMessage({
+      type: "prepare-popup",
+      tabId: tab?.id,
+    });
+    if (result.error) throw Error(result.error);
+    id = result.id;
+  } catch (error) {
+    params.set("error", error.message);
+  }
+}
 if (params.has("error")) {
   status(params.get("error"));
   $("capture").disabled = true;
@@ -67,144 +89,26 @@ if (params.has("error")) {
 $("focus").oninput = () => {
   prepared = undefined;
 };
-async function readImage(url) {
-  if (
-    /^https?:/.test(url) &&
-    (await chrome.permissions.contains({
-      origins: [new URL(url).origin + "/*"],
-    }))
-  ) {
-    const response = await fetch(url, {
-      credentials: "include",
-      signal: AbortSignal.timeout(15000),
-      cache: "force-cache",
-    });
-    return await encodeResponse(response);
-  }
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: async (url) => {
-      if (
-        !Array.from(document.images).some(
-          (i) => (i.currentSrc || i.src) === url,
-        )
-      )
-        return {
-          error:
-            "The selected image is no longer on the source page. Capture it again.",
-        };
-      try {
-        const response = await fetch(url, {
-          credentials: "include",
-          signal: AbortSignal.timeout(15000),
-          cache: "force-cache",
-        });
-        if (!response.ok) throw Error("Image returned HTTP " + response.status);
-        const reader = response.body.getReader(),
-          chunks = [];
-        let size = 0;
-        while (true) {
-          const part = await reader.read();
-          if (part.done) break;
-          size += part.value.length;
-          if (size > 64000000) {
-            await reader.cancel();
-            throw Error("Image exceeds 64 MB");
-          }
-          chunks.push(part.value);
-        }
-        const blob = new Blob(chunks, {
-          type: response.headers.get("content-type")?.split(";")[0] ?? "",
-        });
-        const bytes = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        return { bytes, mimeType: blob.type };
-      } catch (e) {
-        return { error: e.message };
-      }
-    },
-    args: [url],
-  });
-  if (result.error) throw Error(result.error);
-  return result;
-}
-async function encodeResponse(response) {
-  if (!response.ok) throw Error("Image returned HTTP " + response.status);
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  while (true) {
-    const part = await reader.read();
-    if (part.done) break;
-    size += part.value.length;
-    if (size > 64000000) {
-      await reader.cancel();
-      throw Error("Image exceeds 64 MB");
-    }
-    chunks.push(part.value);
-  }
-  const blob = new Blob(chunks, {
-    type: response.headers.get("content-type") ?? "",
-  });
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () =>
-      resolve({
-        bytes: String(r.result).split(",")[1],
-        mimeType: blob.type.split(";")[0],
-      });
-    r.onerror = reject;
-    r.readAsDataURL(blob);
-  });
-}
 async function send() {
   $("capture").disabled = true;
   try {
     status("Collecting the page and images…");
+    if (popup) {
+      const result = await chrome.runtime.sendMessage({
+        type: "submit-popup",
+        id,
+        instructions: $("focus").value,
+      });
+      if (result.error) throw Error(result.error);
+      status(
+        `Capture received. You can close this popup.${result.missingImages ? ` ${result.missingImages} image(s) unavailable; available content was sent.` : ""}`,
+      );
+      $("focus").disabled = true;
+      $("allow").disabled = true;
+      return;
+    }
     if (!prepared) {
-      const images = [];
-      const warnings = [...(snapshot.warnings ?? [])];
-      let bytes = 0;
-      for (const image of snapshot.images.slice(0, 24)) {
-        let file;
-        try {
-          file = await readImage(image.url);
-          if (
-            !["image/jpeg", "image/png", "image/webp"].includes(file.mimeType)
-          )
-            throw Error("Unsupported image format");
-          if (bytes + file.bytes.length > 80000000)
-            throw Error("Capture image size limit reached");
-          bytes += file.bytes.length;
-        } catch (e) {
-          file = { error: e.message };
-        }
-        let url = image.url;
-        if (!/^https?:/.test(url))
-          url = snapshot.url.split("#")[0] + "#gg-image-" + images.length;
-        images.push({ url, alt: image.alt, caption: image.caption, ...file });
-      }
-      if (snapshot.images.length > 24)
-        warnings.push(
-          "Only the first 24 relevant image candidates were collected.",
-        );
-      prepared = {
-        version: 2,
-        url: snapshot.url,
-        title: snapshot.title,
-        capturedAt: snapshot.capturedAt,
-        text: snapshot.text,
-        html: snapshot.html,
-        transcript: snapshot.transcript,
-        contextText: snapshot.contextText,
-        instructions: $("focus").value || undefined,
-        images,
-        warnings,
-      };
+      prepared = await prepareCapture(snapshot, tabId, $("focus").value);
     }
     const job = await request("/captures", {
       method: "POST",
@@ -370,4 +274,8 @@ $("notifications").onchange = async () => {
     $("notifications").checked = false;
   await chrome.storage.local.set({ notifications: $("notifications").checked });
 };
-if (settings.token) await refresh();
+if (popup && !settings.token) {
+  $("capture").disabled = true;
+  status("Connect to GG first using Settings & recent captures below.");
+}
+if (settings.token && !popup) await refresh();

@@ -138,3 +138,7 @@ See [validation](docs/validation.md) for results and environmental blockers. Liv
 ## Project identity
 
 The coral vault mark combines phthalo green, coral and warm gold. See the [three logo options](assets/brand/options.svg) and [editable SVG sources](assets/brand/README.md). Extension icons are included; no local build is needed to load the extension.
+
+### Updating the unpacked extension
+
+After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.2.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.

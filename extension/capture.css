@@ -166,3 +166,77 @@ input[type="checkbox"] {
   margin: 0 0.4rem 0 0;
   vertical-align: middle;
 }
+nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+#version {
+  color: #56665d;
+}
+body.popup {
+  width: 380px;
+}
+.popup main {
+  margin: 0;
+  padding: 18px;
+}
+.popup header {
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.popup .brand {
+  width: 40px;
+  height: 40px;
+}
+.popup h1 {
+  font-size: 20px;
+}
+.popup #source {
+  font-size: 12px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.popup .panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  margin: 12px 0;
+}
+.popup .panel h2,
+.popup #summary,
+.popup .panel:has(#jobs),
+.popup #settings,
+.popup #allow {
+  display: none;
+}
+.popup .field {
+  margin: 10px 0;
+  font-size: 14px;
+}
+.popup #capture {
+  width: 100%;
+}
+.popup #status {
+  font-size: 13px;
+}
+.popup nav {
+  border-top: 1px solid #dbdfd4;
+  padding-top: 12px;
+}
+.popup #dashboard {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+}
+.popup #version {
+  margin-left: auto;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.popup footer {
+  font-size: 11px;
+  margin: 12px 0 0;
+}
