@@ -4,7 +4,7 @@ Perkele holds the working vault and model credentials. The extension submits bro
 
 ## Host preparation
 
-Perkele's 4 vCPUs / 8 GB RAM / 80 GB disk are suitable for one bounded worker and the expected sub-10-GB vault. Initial inspection found about 63 GiB free and 4.5 GiB available RAM. History, originals and worker images also consume disk. UFW, unattended-upgrades and Tailscale were active, but effective firewall and SSH settings could not be inspected with available privileges. This is not a completed hardening audit.
+Perkele's 4 vCPUs / 8 GB RAM / 80 GB disk are suitable for one bounded worker and the expected sub-10-GB vault. History, originals and worker images also consume disk. UFW, unattended-upgrades and Tailscale were active, but effective firewall and SSH settings could not be inspected with available privileges. This is not a completed hardening audit.
 
 Rootless Podman, crun and user-namespace helpers are now installed on Perkele; the worker isolation checks passed on 2026-09-20. On a fresh host, an administrator must install these distribution packages and validate subordinate UID/GID mappings and rootless operation. GG deliberately has no production fallback to running the worker on the host. The controller runs as an unprivileged user. Keep future website processes under a separate Unix account or move them to another host; a worker container does not isolate the trusted controller from other processes running as its user.
 
@@ -21,7 +21,7 @@ pnpm test:container
 pnpm demo
 ```
 
-Use an empty new vault for initial validation. Do not migrate the existing archive implicitly. API alternatives are documented in the README. Sign-in belongs on this host; provider credentials must not be copied to browser clients or vault mirrors. No live login has been performed by this implementation task.
+Use an empty new vault for initial validation. Do not migrate the existing archive implicitly. API alternatives are documented in the README. Sign-in belongs on this host; provider credentials must not be copied to browser clients or vault mirrors.
 
 ## Run as a service
 
@@ -89,4 +89,4 @@ The example intentionally omits `--delete` so a mistaken deletion is not propaga
 
 - TODO: encrypted, versioned Whatbox backups; no backup service, key or job installed now.
 - Public domain/TLS setup, pending an actual hostname.
-- Complete host hardening verification and isolation tests once host prerequisites are installed.
+- Complete host hardening audit; worker isolation tests have passed, while live transport reliability remains an open issue (see [validation](validation.md)).

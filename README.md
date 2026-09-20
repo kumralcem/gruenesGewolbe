@@ -174,7 +174,7 @@ pnpm test:extension                  # Chromium + cookie-protected fixture
 pnpm demo                           # deterministic container demo, no provider key
 ```
 
-See [validation](docs/validation.md) for results and environmental blockers. Live provider sign-in, arbitrary website behavior and public deployment require separate checks; fixture success does not establish them.
+See [validation](docs/validation.md) for test evidence and current live reliability blockers. Live provider sign-in, arbitrary website behavior and public deployment require separate checks; fixture success does not establish them.
 
 ## Project identity
 
@@ -215,3 +215,12 @@ This allowance accepts only the exact image hashes scanned from that collection.
 Local-image imports distinguish each title, artist and year as filename-derived, uncertain, or source-supported. A source-supported value requires a source URL and an excerpt actually fetched during the job, containing the claimed value. Artist/year fields remain empty when only filename hints are available; hints remain in the attribution properties and readable record. Source-supported means cited evidence, not guaranteed authentication: matching that evidence to the pictured work remains the agent's responsibility.
 
 The agent makes a bounded attempt to check a museum, artist foundation or other primary source, preferring an honest unresolved attribution over a guessed fact. It preserves the image even when research is inconclusive. Artwork creation dates are distinct from download or exhibition dates. Import routing prefers a suitable existing child folder (for example Art/Paintings) over its parent. Existing imports are not automatically reprocessed.
+
+## Project documentation
+
+- [Architecture and decisions](docs/adr/0051-current-architecture.md)
+- [Deployment](docs/deployment.md) and [validation / known limits](docs/validation.md)
+- [Next-session handoff and design options](docs/handoff.md)
+- [Domain vocabulary](CONTEXT.md)
+
+Completed interviews, superseded designs and old run reports remain in Git history rather than alongside current instructions.

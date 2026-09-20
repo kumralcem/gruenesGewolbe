@@ -1,11 +1,11 @@
 # Grünes Gewölbe
 
-A file-based personal archive. Pi handles capture, retrieval and explicitly requested management; a trusted controller owns the vault. See [README](README.md) and [ADR-0047](docs/adr/0047-agent-led-capture-and-perkele-controller.md) for current behavior.
+A file-based personal archive. Pi handles capture, retrieval and explicitly requested management; a trusted controller owns the vault. See [README](README.md) and [architecture](docs/adr/0051-current-architecture.md) for current behavior.
 
 ## Domain language
 
 - **Vault**: the portable directory containing records, preserved media, source copies and local history. No database is required.
-- **Subvault**: an existing destination folder under `subvaults/`, including nested paths such as `Photography/Historic`. Discovered from disk, not limited to a registered flat list. Capture chooses one; explicit management may create or rename destinations. See [ADR-0048](docs/adr/0048-discover-nested-destination-folders.md).
+- **Subvault**: an existing destination folder under `subvaults/`, including nested paths such as `Photography/Historic`. Discovered from disk, not limited to a registered flat list. Capture chooses one; explicit management may create or rename destinations. See [destination rules](docs/adr/0051-current-architecture.md#files-and-destinations).
 - **Inbox**: permanent searchable destination when classification is uncertain.
 - **Saved Item / Item Folder / Item Record**: a coherent thing worth keeping, its folder and editable `record.md`.
 - **Capture**: interprets one source plus optional user instructions. Normally one record with relevant images; instructions may request several.
