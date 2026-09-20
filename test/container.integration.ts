@@ -434,3 +434,57 @@ test(
     assert.match(record, /!\[/);
   },
 );
+
+test(
+  "text-only capture into a requested nested folder is complete despite failed decorative images",
+  { timeout: 60000 },
+  async () => {
+    const vault = await setup();
+    const url = "https://fixtures.example/tips";
+    const tool = (name: string, args: unknown) => ({
+      role: "assistant",
+      tool_calls: [
+        {
+          id: "call_" + name,
+          type: "function",
+          function: { name, arguments: JSON.stringify(args) },
+        },
+      ],
+    });
+    const replies = [
+      tool("browse", { url }),
+      tool("create_destination", { subvault: "Ideas/SoloDev" }),
+      tool("capture", {
+        kind: "idea",
+        title: "Five tips",
+        summary: "Five actionable instructions",
+        subvault: "Ideas/SoloDev",
+        tags: [],
+        includeImages: false,
+      }),
+      { role: "assistant", content: "Saved." },
+    ];
+    let step = 0;
+    const result = await runJob({
+      vault,
+      config,
+      intent: "capture",
+      input: url,
+      browserCapture: {
+        version: 2,
+        intent: "capture",
+        url,
+        title: "Tips",
+        text: "Five actionable instructions",
+        capturedAt: "2026-09-20T00:00:00Z",
+        instructions:
+          "Save instructions without images and create SoloDev under Ideas.",
+        images: [{ url: url + "/banner.png", error: "Failed to fetch" }],
+      },
+      mockModel: async () => replies[step++],
+    });
+    assert.equal(result.exitCode, 0, JSON.stringify(result));
+    assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
+    assert.equal((await vault.items())[0].item.subvault, "Ideas/SoloDev");
+  },
+);

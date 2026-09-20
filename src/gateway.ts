@@ -284,6 +284,29 @@ export async function createGateway(options: GatewayOptions) {
         });
         return;
       }
+      if (route === "/create-destination" && intent === "capture") {
+        const instructions =
+          options.instructions ??
+          options.browserCapture?.instructions ??
+          (await vault.sourceRecords(options.input))[0]?.item.instructions;
+        if (!instructions?.trim())
+          throw Error(
+            "Destination creation requires user capture instructions",
+          );
+        if (typeof input.subvault !== "string")
+          throw Error("Provide a destination path");
+        if ((await vault.destinations()).includes(input.subvault)) {
+          send(res, 200, { existing: true, subvault: input.subvault });
+          return;
+        }
+        const result = await vault.manage(
+          { action: "create-subvault", subvault: input.subvault },
+          batchId,
+        );
+        management.push(result);
+        send(res, 200, { ...result, subvault: input.subvault });
+        return;
+      }
       if (route === "/manage" && intent === "manage") {
         const result = await vault.manage(input, batchId);
         management.push(result);
@@ -519,6 +542,20 @@ export async function createGateway(options: GatewayOptions) {
           if (savedKeys.has(key))
             throw Error("Record already saved in this job");
           await persistPlan(planned);
+          if (
+            input.includeImages !== undefined &&
+            typeof input.includeImages !== "boolean"
+          )
+            throw Error("Invalid image policy");
+          if (
+            input.includeImages === false &&
+            (input.kind !== "idea" ||
+              (input.assets ?? []).length ||
+              (input.missingMedia ?? []).length)
+          )
+            throw Error(
+              "Text-only capture must be an idea with no image assets or media errors",
+            );
           const snapshot = options.browserCapture;
           if (snapshot) {
             const preservedText = [
@@ -542,8 +579,13 @@ export async function createGateway(options: GatewayOptions) {
               ...(preservedText.length > 400000
                 ? ["Preserved source was truncated at 400,000 characters."]
                 : []),
-              ...(snapshot.warnings ?? []),
-              ...(snapshot.images ?? [])
+              ...(snapshot.warnings ?? []).filter(
+                (warning) =>
+                  input.includeImages !== false ||
+                  warning !==
+                    "Only the first 24 relevant image candidates were collected.",
+              ),
+              ...(input.includeImages === false ? [] : (snapshot.images ?? []))
                 .filter((i) => !i.bytes)
                 .map((i) => `${i.url}: ${i.error ?? "unavailable"}`),
             ];

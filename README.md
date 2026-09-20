@@ -8,9 +8,15 @@ The extension and CLI share one controller. The controller owns the vault and pr
 
 ## Install
 
+GG is a working prototype for a personal archive, with an MIT license. It currently targets a Linux controller and Chromium-based browsers (including Brave); there is no browser-store package or Firefox release. The controller can run on your own Linux machine or server. “Perkele” in the deployment guide is the current author's host, not a service you need access to.
+
+For an **extension-only client**, clone the repository and load `extension/` as described below. No Node.js, pnpm, or Podman is needed on that client. You need access to a configured GG controller and a pairing code.
+
 The controller requires Linux, Node.js 22+, pnpm and rootless Podman/crun. Browser and remote CLI clients do not need Podman. See [Perkele deployment](docs/deployment.md) for the service and connecting without a domain.
 
 ```sh
+git clone https://github.com/kumralcem/gruenesGewolbe.git
+cd gruenesGewolbe
 pnpm install --frozen-lockfile
 ./scripts/install-cli.sh             # ~/.local/bin/gg; keep this checkout installed
 pnpm build:worker
@@ -31,7 +37,8 @@ gg configure --provider openai-codex --model gpt-5.6-luna
 # Or choose a paid API explicitly:
 gg login openai                     # prompts for the API key without echoing it
 # gg login openrouter
-gg configure --provider openai --model gpt-5.6-luna
+gg models openai                    # choose a model available to your API account
+gg configure --provider openai --model YOUR_MODEL_ID
 
 gg models openai-codex              # inspect Pi's available model catalog
 gg serve
@@ -45,14 +52,20 @@ Credentials are in the controller's private state directory (`~/.config/gg`, ove
 
 1. Load this repository's `extension` directory through `chrome://extensions` → Developer mode → Load unpacked.
 2. Click GG on a page, or press **Alt+Shift+G**.
-3. On first use, enter the GG address and a code from `gg pair`. Pairing survives server restarts. Codes expire after ten minutes and are single-use.
+3. On first use, open **Settings & recent captures**, then **Connect to GG**. Enter the GG address and a code from `gg pair` on the controller. Pairing survives server restarts. Codes expire after ten minutes and are single-use.
 4. Optionally enter instructions, then **Capture**. No type, destination or image selection is required.
+
+For a remote controller without a public HTTPS endpoint, keep an SSH tunnel open as shown in the [connection guide](docs/deployment.md#connect-without-buying-a-domain); the extension uses `http://127.0.0.1:48123`.
 
 For example: “Save each painting as a separate record, including its attribution.” Without instructions, one page normally produces one coherent record with several relevant images. Unsure classifications go to searchable **Inbox**. Existing source instructions carry forward on recapture unless replaced.
 
+For a text instruction set, try: “Save the five tips as actionable instructions, without images. Create SoloDev under Ideas and save it there.” Capture can create explicitly requested destinations for new records; it cannot rename, move or delete existing records. Recapture keeps an existing record in its current folder; move it with `gg do` if needed. Use `gg do` for those actions. When the agent chooses a text-only idea record, irrelevant image failures do not make it partial. Missing relevant images and truncated source content still produce a partial result. The browser may still collect candidate images before the agent decides what is relevant.
+
+Appearance defaults to **Dark**. Choose **Dark**, **Light** or **System** on the settings page; the choice applies to both settings and the popup, and System follows your OS/browser preference.
+
 The extension sends visible text, sanitized HTML, captions, an already-visible transcript, and up to 24 image candidates with bytes when obtainable. It excludes form/editor contents, hidden content, scripts, browser storage and cookie stores. Page content itself can contain private information and is sent to your configured model provider. Extraction is best effort. Instructions can ask for captured discussion context; GG does not crawl unloaded replies. For YouTube, open **Show transcript** first; GG does not transcribe audio.
 
-Some cross-origin images need **Allow image hosts (if needed)**. Missing or unsupported images are recorded visibly; available content is still saved. To supply previously missing bytes, grant access and make a new capture from the original page. **Retry unfinished work** reuses the already-received snapshot. After acceptance you can close the tab. Recent captures show progress, retry and cancellation. Usage notifications are optional while the capture screen is open.
+Cross-origin restrictions or network failures can prevent image downloads. GG records missing images when they are relevant to the saved record; available content is still saved. To supply previously missing bytes, make a new capture from the original page. **Retry unfinished work** reuses the already-received snapshot and cannot fetch missing browser images. After acceptance you can close the popup. The settings page shows recent captures, retry and cancellation. Usage notifications are optional while that page is open.
 
 ## Nested folders and automatic routing
 
@@ -119,7 +132,7 @@ Receiver uploads are capped at 90 MB, two concurrent uploads, 20 queued jobs and
 
 Open the vault directory in Obsidian and start with `GG Index.md`. Records contain native YAML properties, editable summaries, relative image embeds and preserved source links. `.gg-assets.json` tracks originals, `.gg-history` holds restoration data, `.gg-jobs` holds receiver state and `.gg-proposals` holds confirmation previews. `.gg-plans` preserves multi-record plans and per-snapshot completion across retries. Copy the whole vault to retain content and history. Keep credential state separate.
 
-Perkele is the authoritative writer; laptop/desktop copies can be refreshed using existing file-transfer tools. Arbitrary offline edits are not automatically merged. See [deployment and mirror procedure](docs/deployment.md). Encrypted Whatbox backups are a deferred TODO.
+Your controller is the authoritative writer; laptop/desktop copies can be refreshed using existing file-transfer tools. Arbitrary offline edits are not automatically merged. See [deployment and mirror procedure](docs/deployment.md). Encrypted Whatbox backups are a deferred TODO.
 
 ## Validation
 
@@ -141,4 +154,4 @@ The coral vault mark combines phthalo green, coral and warm gold. See the [three
 
 ### Updating the unpacked extension
 
-After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.2.1** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
+After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.3.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.

@@ -436,3 +436,97 @@ test("browser multi-record plans retain partial saves and retries do not duplica
     await retry.close();
   }
 });
+
+test("capture can create a requested destination and ignore irrelevant images without enabling general management", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-capture-folder-")),
+    ["Ideas"],
+  );
+  const url = "https://example.com/tips";
+  const options = {
+    vault,
+    intent: "capture" as const,
+    input: url,
+    config: { provider: "openai" as const, model: "fixture" },
+    browserCapture: {
+      version: 2 as const,
+      intent: "capture" as const,
+      url,
+      title: "Tips",
+      text: "Five actionable steps",
+      capturedAt: "2026-09-20T00:00:00Z",
+      images: [{ url: url + "/decoration.png", error: "Failed to fetch" }],
+    },
+  };
+  const denied = await createGateway(options);
+  try {
+    assert.notEqual(
+      (
+        await request(denied.socket, denied.token, "/create-destination", {
+          subvault: "Ideas/SoloDev",
+        })
+      ).status,
+      200,
+    );
+  } finally {
+    await denied.close();
+  }
+  const gateway = await createGateway({
+    ...options,
+    instructions:
+      "Save as instructions without images; create SoloDev under Ideas.",
+  });
+  try {
+    assert.equal(
+      (
+        await request(gateway.socket, gateway.token, "/create-destination", {
+          subvault: "Ideas/SoloDev",
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (
+        await request(gateway.socket, gateway.token, "/create-destination", {
+          subvault: "Ideas/SoloDev",
+        })
+      ).data.existing,
+      true,
+    );
+    assert.notEqual(
+      (
+        await request(gateway.socket, gateway.token, "/manage", {
+          action: "rename-subvault",
+          from: "Ideas",
+          subvault: "Other",
+        })
+      ).status,
+      200,
+    );
+    const draft = {
+      kind: "idea",
+      title: "Five tips",
+      sourceUrl: url,
+      summary: "Five actionable steps",
+      subvault: "Ideas/SoloDev",
+      tags: [],
+      includeImages: false,
+    };
+    assert.notEqual(
+      (
+        await request(gateway.socket, gateway.token, "/save", {
+          ...draft,
+          kind: "art",
+        })
+      ).status,
+      200,
+    );
+    const saved = await request(gateway.socket, gateway.token, "/save", draft);
+    assert.equal(saved.status, 200, JSON.stringify(saved.data));
+    assert.equal(saved.data.status, "saved");
+    assert.equal((await vault.items())[0].item.subvault, "Ideas/SoloDev");
+    assert.equal((await vault.items())[0].item.missingMedia?.length ?? 0, 0);
+  } finally {
+    await gateway.close();
+  }
+});

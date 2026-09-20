@@ -248,3 +248,53 @@ test(
     assert.match(record, /Capture notes/);
   },
 );
+
+test(
+  "Pi saves text instructions into a requested new nested destination despite irrelevant failed images",
+  { timeout: 30000 },
+  async () => {
+    const vault = await Vault.create(
+      await mkdtemp(join(tmpdir(), "gg-text-instructions-")),
+      ["Ideas"],
+    );
+    const url = "https://example.com/five-tips";
+    const steps = [
+      call("browse", { url }),
+      call("create_destination", { subvault: "Ideas/SoloDev" }),
+      call("capture", {
+        kind: "idea",
+        title: "Five tips",
+        summary:
+          "1. Research users. 2. Improve onboarding. 3. Measure retention. 4. Test acquisition. 5. Iterate.",
+        subvault: "Ideas/SoloDev",
+        includeImages: false,
+        tags: [],
+      }),
+      { role: "assistant", content: "Saved the instruction set." },
+    ];
+    let step = 0;
+    const result = await worker({
+      vault,
+      intent: "capture",
+      input: url,
+      config: { provider: "openai", model: "fixture", maxSeconds: 20 },
+      browserCapture: {
+        version: 2,
+        intent: "capture",
+        url,
+        title: "Five tips",
+        text: "Five actionable tips",
+        capturedAt: "2026-09-20T00:00:00Z",
+        instructions:
+          "Save as an instruction set; create SoloDev under Ideas. Images are irrelevant.",
+        images: [{ url: url + "/banner", error: "Failed to fetch" }],
+      },
+      mockModel: async () => steps[step++],
+    });
+    assert.equal(result.outcomes[0].status, "saved", result.output);
+    const item = (await vault.items())[0].item;
+    assert.equal(item.subvault, "Ideas/SoloDev");
+    assert.equal(item.assets.length, 0);
+    assert.equal(item.missingMedia?.length ?? 0, 0);
+  },
+);

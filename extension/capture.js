@@ -112,7 +112,7 @@ async function send() {
       });
       if (result.error) throw Error(result.error);
       status(
-        `Capture received. You can close this popup.${result.missingImages ? ` ${result.missingImages} image(s) unavailable; available content was sent.` : ""}`,
+        `Capture received. You can close this popup.${result.missingImages ? ` ${result.missingImages} image candidate(s) unavailable; GG will assess whether they matter.` : ""}`,
       );
       $("focus").disabled = true;
       $("allow").disabled = true;

@@ -184,18 +184,11 @@ async function runWorker(
         ? "Job deadline exceeded"
         : (events.findLast((e) => e.type === "error")?.message ??
           `Worker exited without an outcome (${exitCode})`);
-    const omissions = [
-      ...(options.browserCapture?.warnings ?? []),
-      ...(options.browserCapture?.images ?? [])
-        .filter((i) => !i.bytes)
-        .map((i) => i.error ?? "Image unavailable"),
-    ];
-    const captureWarning =
-      omissions.length || gateway.outcomes.some((o) => o.status === "partial")
-        ? "Saved available content; some page content or images were unavailable. Open the original page and recapture to supply missing material."
-        : gateway.outcomes.some((o) => o.conflicts?.length)
-          ? "Saved update while preserving conflicting manual edits; review the dated record note."
-          : undefined;
+    const captureWarning = gateway.outcomes.some((o) => o.status === "partial")
+      ? "Saved available content; some page content or images were unavailable. Open the original page and recapture to supply missing material."
+      : gateway.outcomes.some((o) => o.conflicts?.length)
+        ? "Saved update while preserving conflicting manual edits; review the dated record note."
+        : undefined;
     const outcome =
       (options.intent === "capture"
         ? {

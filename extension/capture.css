@@ -263,3 +263,61 @@ header h1 {
   font-size: 11px;
   margin: 12px 0 0;
 }
+
+:root {
+  color-scheme: light;
+}
+select {
+  font: inherit;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-left: 14px;
+}
+.popup #appearance {
+  display: none;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #e8ede7;
+  background: #101b17;
+}
+[data-theme="dark"] .panel,
+[data-theme="dark"] .popup main {
+  background: #172720;
+  border-color: #35493e;
+}
+[data-theme="dark"] input,
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  background: #102019;
+  color: #e8ede7;
+  border-color: #52675a;
+}
+[data-theme="dark"] textarea::placeholder,
+[data-theme="dark"] input::placeholder {
+  color: #a8bbb0;
+}
+[data-theme="dark"] button {
+  background: #bbd9c4;
+  color: #132e22;
+}
+[data-theme="dark"] button.secondary {
+  background: #293f33;
+  color: #dce8df;
+}
+[data-theme="dark"] #source,
+[data-theme="dark"] #version,
+[data-theme="dark"] #jobs small,
+[data-theme="dark"] footer {
+  color: #acbfb2;
+}
+[data-theme="dark"] .popup #dashboard {
+  background: transparent;
+  color: #dce8df;
+}
+[data-theme="dark"] .popup nav {
+  border-color: #35493e;
+}
+:root[data-theme="dark"].popup-root {
+  background: transparent;
+}

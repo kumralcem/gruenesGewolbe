@@ -167,7 +167,7 @@ test(
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.2.1");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.3.0");
       assert.equal(await popup.locator("#source").isVisible(), false);
       await popup.setViewportSize({ width: 400, height: 440 });
       const dashboard = await context.newPage();
@@ -178,6 +178,27 @@ test(
       );
       assert.equal(await dashboard.locator("#dashboard").isVisible(), false);
       assert.equal(await dashboard.locator("#settings").isVisible(), true);
+      assert.equal(
+        await popup.locator("html").getAttribute("data-theme"),
+        "dark",
+      );
+      await dashboard.locator("#theme").selectOption("light");
+      await popup.waitForFunction(
+        () => document.documentElement.dataset.theme === "light",
+      );
+      await popup.emulateMedia({ colorScheme: "dark" });
+      await dashboard.locator("#theme").selectOption("system");
+      await popup.waitForFunction(
+        () => document.documentElement.dataset.theme === "dark",
+      );
+      await popup.emulateMedia({ colorScheme: "light" });
+      await popup.waitForFunction(
+        () => document.documentElement.dataset.theme === "light",
+      );
+      await dashboard.locator("#theme").selectOption("dark");
+      await popup.waitForFunction(
+        () => document.documentElement.dataset.theme === "dark",
+      );
       await popup.screenshot({ path: ".runs/extension-evidence/popup.png" });
       for (const path of ["/editor", "/form", "/selection"]) {
         await page.goto(origin + path);
