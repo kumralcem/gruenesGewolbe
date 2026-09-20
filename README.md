@@ -99,7 +99,7 @@ Moves, edits, and creating/renaming subvaults execute on your instruction. Delet
 | `provider PROVIDER MODEL`                              | Explicitly switch provider and model                                        |
 | `index`, `probe`, `queue`                              | Rebuild Obsidian index, test isolation, inspect legacy decision queue       |
 
-A paired CLI routes archive commands to the server; `--local` selects local operations. Setup, sign-in, device management, `capture-file`, `index`, `probe` and legacy `art`/`painting`/`idea` operations run locally. Legacy commands retain the previous single-image/idea semantics; use `capture` for new behavior. `gg help` lists flags. Commands currently print structured JSON results, including paths, operation IDs and previews.
+A paired CLI routes archive commands to the server; `--local` selects local operations. Setup, sign-in, device management, `capture-file`, `index`, `probe` and legacy `art`/`painting`/`idea` operations run locally. Legacy commands retain the previous single-image/idea semantics; use `capture` for new behavior. `gg help` lists flags. Agent commands print concise answers, saved paths, undo commands, confirmation previews and warnings. Add `--verbose` or `--json` for the full diagnostic result. Interactive terminals show elapsed time while waiting; `--json` suppresses that indicator for scripts. Other administrative commands retain structured output. The daemon keeps the controller running but starts a fresh isolated worker for each agent job; model requests and worker startup still take time.
 
 ## Limits
 

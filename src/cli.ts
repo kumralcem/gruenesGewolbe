@@ -1,3 +1,4 @@
+import { formatResult, startProgress } from "./cli-output.ts";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -29,6 +30,7 @@ const { values, positionals } = parseArgs({
     "max-requests": { type: "string" },
     "fixture-image": { type: "string" },
     json: { type: "boolean" },
+    verbose: { type: "boolean" },
     port: { type: "string" },
     "state-dir": { type: "string" },
     "public-origin": { type: "string" },
@@ -57,7 +59,8 @@ const help = `GG — your personal archive
   gg provider PROVIDER MODEL             (explicit switch; never automatic)
   gg index | queue | probe
 
---vault PATH --config FILE --state-dir PATH --local --json
+--vault PATH --config FILE --state-dir PATH --local --json --verbose
+--json / --verbose show full diagnostic results.
 Legacy art|painting|idea URL commands remain available.
 A connected CLI uses the server for archive commands. --local uses local settings.
 `;
@@ -102,11 +105,16 @@ async function secret(message: string): Promise<string> {
     stdin.on("data", onData);
   });
 }
+let stopProgress = () => {};
 function print(result: unknown) {
-  console.log(
-    typeof result === "string" ? result : JSON.stringify(result, null, 2),
-  );
+  stopProgress();
+  stopProgress = () => {};
+  console.log(formatResult(result, values.json || values.verbose));
 }
+function progress() {
+  return startProgress(Boolean(process.stderr.isTTY && !values.json));
+}
+
 async function main() {
   if (command === "help") {
     print(help);
@@ -312,6 +320,7 @@ async function main() {
                   : text,
               };
         try {
+          stopProgress = progress();
           const result = await execute(input);
           print(result);
           conversation.push(
@@ -321,6 +330,8 @@ async function main() {
           while (conversation.join("\n").length > 12000)
             conversation.splice(0, 2);
         } catch (e) {
+          stopProgress();
+          stopProgress = () => {};
           console.error(String(e));
         }
       }
@@ -336,6 +347,8 @@ async function main() {
         "Send browser snapshots through the extension; capture-file is a local administrative command",
       );
     for (const file of positionals) {
+      stopProgress();
+      stopProgress = progress();
       const capture = validateBrowserCapture(
         JSON.parse(await readFile(file, "utf8")),
       );
@@ -371,6 +384,8 @@ async function main() {
     }
     if (!urls.length) throw Error("Provide a URL");
     for (const url of urls) {
+      stopProgress();
+      stopProgress = progress();
       try {
         const result: any =
           command === "capture"
@@ -442,7 +457,22 @@ async function main() {
   )
     process.exitCode = 1;
 }
-main().catch((e) => {
-  console.error(e instanceof Error ? e.message : String(e));
-  process.exitCode = 1;
-});
+if (
+  [
+    "do",
+    "ask",
+    "capture",
+    "capture-file",
+    "art",
+    "painting",
+    "idea",
+    "probe",
+  ].includes(command)
+)
+  stopProgress = progress();
+main()
+  .finally(() => stopProgress())
+  .catch((e) => {
+    console.error(e instanceof Error ? e.message : String(e));
+    process.exitCode = 1;
+  });
