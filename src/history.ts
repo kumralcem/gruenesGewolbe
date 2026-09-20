@@ -59,6 +59,7 @@ export class History {
       });
       if (!stat) return;
       if (stat.isDirectory()) {
+        result[path] = "directory";
         for (const child of await readdir(full))
           await visit(path + "/" + child);
       } else if (stat.isFile()) {
@@ -178,6 +179,23 @@ export class History {
           "Interrupted history operation needs manual recovery before undo",
         );
       if (c.undone) throw Error("Operation already undone");
+      if (
+        /^(create-subvault|rename-subvault)( \(interrupted\))?$/.test(
+          c.label,
+        ) &&
+        ![...Object.values(c.before), ...Object.values(c.after)].includes(
+          "directory",
+        )
+      )
+        throw Error(
+          "Older folder history lacks directory information; manual recovery required",
+        );
+      for (const [path, kind] of Object.entries(c.after)) {
+        if (kind !== "directory" || c.before[path]) continue;
+        for (const entry of Object.keys(state))
+          if (entry.startsWith(path + "/") && !(entry in c.after))
+            throw Error(`Undo conflicts with later additions: ${entry}`);
+      }
       for (const p of new Set([
         ...Object.keys(c.before),
         ...Object.keys(c.after),
@@ -193,6 +211,7 @@ export class History {
     for (const digest of new Set(
       selected.flatMap((c) => Object.values(c.before)),
     )) {
+      if (digest === "directory") continue;
       if (
         !/^[a-f0-9]{64}$/.test(digest) ||
         hash(await readFile(await this.safe(".gg-history/blobs/" + digest))) !==
@@ -201,12 +220,21 @@ export class History {
         throw Error("History blob integrity check failed");
     }
     for (const c of selected) {
-      for (const p of new Set([
-        ...Object.keys(c.before),
-        ...Object.keys(c.after),
-      ])) {
+      for (const p of [
+        ...new Set([...Object.keys(c.before), ...Object.keys(c.after)]),
+      ].sort((a, b) => b.split("/").length - a.split("/").length)) {
         if (c.before[p] === c.after[p]) continue;
         const full = await this.safe(p);
+        if (c.before[p] === "directory") {
+          await mkdir(full, { recursive: true });
+          continue;
+        }
+        if (!c.before[p] && c.after[p] === "directory") {
+          await rmdir(full).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "ENOENT") throw e;
+          });
+          continue;
+        }
         if (c.before[p]) {
           const bytes = await readFile(
             await this.safe(".gg-history/blobs/" + c.before[p]),
@@ -225,6 +253,7 @@ export class History {
             .sort((a, b) => b.length - a.length)[0];
           const stop = dirname(join(this.root, scope));
           while (dir !== this.root && dir !== stop) {
+            if (c.before[relative(this.root, dir)] === "directory") break;
             try {
               await rmdir(dir);
             } catch {

@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Duplex } from "node:stream";
@@ -81,6 +81,7 @@ test(
       await mkdtemp(join(tmpdir(), "gg-pi-fixture-")),
       ["Ideas"],
     );
+    await mkdir(join(vault.root, "subvaults", "Ideas", "Historic"));
     const sourceUrl = "https://private.example/post";
     const config = {
       provider: "openai" as const,
@@ -96,7 +97,7 @@ test(
         kind: "idea",
         title: "First idea",
         summary: "First usable idea",
-        subvault: "Ideas",
+        subvault: "Ideas/Historic",
         tags: [],
       }),
       call("capture", {
@@ -125,10 +126,18 @@ test(
         instructions: "Create two records",
         images: [],
       },
-      mockModel: async () => steps[at++],
+      mockModel: async (body) => {
+        assert.match(body.messages[0].content, /Ideas\/Historic/);
+        return steps[at++];
+      },
     });
     assert.equal(result.complete, true, result.output);
     assert.equal((await vault.items()).length, 2);
+    assert.equal(
+      (await vault.items()).find((v) => v.item.title === "First idea")?.item
+        .subvault,
+      "Ideas/Historic",
+    );
     const id = (await vault.items())[0].item.id;
     const manageSteps = [
       call("vault_catalog", {}),

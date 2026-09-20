@@ -28,7 +28,20 @@ export const sha = (data: string | Buffer) =>
 const marker = ".gg-vault.json";
 const text = (s: unknown, max = 20000): s is string =>
   typeof s === "string" && s.length <= max;
-const name = (s: string) => /^[a-zA-Z][a-zA-Z0-9 _-]{0,60}$/.test(s);
+const validDestinationPath = (s: string) =>
+  typeof s === "string" &&
+  s.length <= 500 &&
+  s.split("/").length <= 16 &&
+  s
+    .split("/")
+    .every(
+      (part) =>
+        part.length > 0 &&
+        part.length <= 100 &&
+        !part.startsWith(".") &&
+        part !== "items" &&
+        !/[\\\x00-\x1f\x7f]/.test(part),
+    );
 function validateUrl(value: string) {
   const u = new URL(value);
   if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
@@ -77,7 +90,7 @@ export class Vault {
   static async create(root: string, areas: string[]) {
     if (
       !areas.length ||
-      !areas.every(name) ||
+      !areas.every(validDestinationPath) ||
       new Set(areas).size !== areas.length
     )
       throw Error("Invalid subvault names");
@@ -116,32 +129,81 @@ export class Vault {
     if (
       (data.format !== 2 && data.prototype !== true) ||
       !Array.isArray(data.areas) ||
-      !data.areas.every((a: unknown) => typeof a === "string" && name(a))
+      !data.areas.every(
+        (a: unknown) => typeof a === "string" && validDestinationPath(a),
+      )
     )
       throw Error("Not a GG vault");
-    return new Vault(await realpath(root), data.areas);
+    const vault = new Vault(await realpath(root), data.areas);
+    await vault.reloadAreas();
+    return vault;
   }
   private async reloadAreas() {
-    const fresh = await Vault.open(this.root);
-    this.areas.splice(0, this.areas.length, ...fresh.areas);
+    const root = join(this.root, "subvaults");
+    await plain(root, true);
+    const discovered: string[] = [];
+    const visit = async (parent: string) => {
+      for (const entry of await readdir(join(root, parent), {
+        withFileTypes: true,
+      })) {
+        const area = parent ? `${parent}/${entry.name}` : entry.name;
+        if (entry.name.startsWith(".") || entry.name === "items") continue;
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+        if (!validDestinationPath(area)) {
+          this.problems.set(
+            join(root, area),
+            "Unsupported destination path (maximum 16 levels, 500 characters)",
+          );
+          continue;
+        }
+        await plain(join(root, area), true);
+        discovered.push(area);
+        await visit(area);
+      }
+    };
+    await visit("");
+    // Preserve existing display order while discovering every on-disk folder.
+    const available = new Set(discovered);
+    this.areas.splice(
+      0,
+      this.areas.length,
+      ...this.areas.filter((a) => available.has(a)),
+      ...discovered.filter((a) => !this.areas.includes(a)).sort(),
+    );
   }
-  private async areaPath(area: string) {
-    if (!this.areas.includes(area))
+  async destinations() {
+    await this.reloadAreas();
+    return [...this.areas];
+  }
+  private async areaPath(area: string, createItems = false) {
+    if (!validDestinationPath(area) || !this.areas.includes(area))
       throw Error("Destination is not an existing allowed subvault");
-    for (const p of [
-      "subvaults",
-      `subvaults/${area}`,
-      `subvaults/${area}/items`,
-    ])
-      await plain(join(this.root, p), true);
-    return join(this.root, "subvaults", area, "items");
+    let folder = join(this.root, "subvaults");
+    await plain(folder, true);
+    for (const part of area.split("/")) {
+      folder = join(folder, part);
+      await plain(folder, true);
+    }
+    const items = join(folder, "items");
+    if (createItems) await mkdir(items, { recursive: true });
+    try {
+      await plain(items, true);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    return items;
   }
   async items(): Promise<{ item: Item; path: string }[]> {
     await this.reloadAreas();
     const results: { item: Item; path: string }[] = [];
     for (const area of this.areas) {
       const folder = await this.areaPath(area);
-      for (const dir of await readdir(folder)) {
+      for (const dir of await readdir(folder).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        },
+      )) {
         if (!/^[a-f0-9-]{36}$/.test(dir)) continue;
         const path = join(folder, dir);
         try {
@@ -292,7 +354,7 @@ export class Vault {
       throw Error("Invalid publication date");
     if (d.kind === "idea" && (!d.sourceText?.trim() || !d.summary.trim()))
       throw Error("Ideas need source text and a summary");
-    const parent = await this.areaPath(d.subvault);
+    const parent = await this.areaPath(d.subvault, true);
     const assets = Array.isArray(d.assets)
       ? d.assets.filter(
           (a, i, all) => all.findIndex((b) => b.bytes === a.bytes) === i,
@@ -468,9 +530,13 @@ export class Vault {
     return (await this.items()).filter((v) => v.item.sourceUrl === url);
   }
   private async ensureArea(area: string) {
-    if (!name(area)) throw Error("Invalid subvault name");
+    if (!validDestinationPath(area)) throw Error("Invalid subvault name");
     if (this.areas.includes(area)) return;
     await plain(join(this.root, "subvaults"), true);
+    const parentArea = area.includes("/")
+      ? area.slice(0, area.lastIndexOf("/"))
+      : undefined;
+    if (parentArea) await this.areaPath(parentArea);
     const folder = join(this.root, "subvaults", area);
     await mkdir(folder).catch((e: NodeJS.ErrnoException) => {
       if (e.code !== "EEXIST") throw e;
@@ -675,7 +741,7 @@ export class Vault {
       throw Error("Choose distinct records to merge into the target");
     if (
       ["move", "create-subvault", "rename-subvault"].includes(action.action) &&
-      (!action.subvault || !name(action.subvault))
+      (!action.subvault || !validDestinationPath(action.subvault))
     )
       throw Error("Invalid destination name");
     if (
@@ -683,14 +749,35 @@ export class Vault {
       (!action.from ||
         !this.areas.includes(action.from) ||
         action.from === "Inbox" ||
-        this.areas.includes(action.subvault!))
+        this.areas.includes(action.subvault!) ||
+        action.subvault!.startsWith(action.from + "/"))
     )
       throw Error("Invalid subvault rename (Inbox is permanent)");
+    if (
+      action.action === "rename-subvault" &&
+      this.areas.some(
+        (area) =>
+          area.startsWith(action.from + "/") &&
+          !validDestinationPath(
+            action.subvault! + area.slice(action.from!.length),
+          ),
+      )
+    )
+      throw Error(
+        "Rename would exceed destination path limits for a descendant",
+      );
     if (
       action.action === "create-subvault" &&
       this.areas.includes(action.subvault!)
     )
       throw Error("Subvault already exists");
+    if (
+      ["create-subvault", "rename-subvault"].includes(action.action) &&
+      action.subvault!.includes("/")
+    )
+      await this.areaPath(
+        action.subvault!.slice(0, action.subvault!.lastIndexOf("/")),
+      );
     if (action.action === "move") await this.areaPath(action.subvault!);
     if (
       action.action === "edit" &&
@@ -762,28 +849,29 @@ export class Vault {
             join(this.root, "subvaults", action.from!),
             join(this.root, "subvaults", action.subvault!),
           );
-          this.areas.splice(
-            this.areas.indexOf(action.from!),
-            1,
-            action.subvault!,
-          );
+          const relocated = (area: string) =>
+            area === action.from || area.startsWith(action.from + "/")
+              ? action.subvault! + area.slice(action.from!.length)
+              : area;
+          this.areas.splice(0, this.areas.length, ...this.areas.map(relocated));
           await this.writeAreas();
           for (const entry of all.filter(
-            (v) => v.item.subvault === action.from,
+            (v) =>
+              v.item.subvault === action.from ||
+              v.item.subvault.startsWith(action.from + "/"),
           )) {
+            const area = relocated(entry.item.subvault);
             const file = join(
               this.root,
               "subvaults",
-              action.subvault!,
+              area,
               "items",
               entry.item.id,
               "record.md",
             );
             await this.atomic(
               file,
-              editRecord(await readFile(file, "utf8"), {
-                subvault: action.subvault,
-              }),
+              editRecord(await readFile(file, "utf8"), { subvault: area }),
             );
           }
         }
@@ -791,7 +879,7 @@ export class Vault {
           if (selected!.item.subvault === action.subvault)
             throw Error("Record is already in that subvault");
           const destination = join(
-            await this.areaPath(action.subvault!),
+            await this.areaPath(action.subvault!, true),
             selected!.item.id,
           );
           await rename(selected!.path, destination);
@@ -930,7 +1018,15 @@ export class Vault {
       for (const { item } of entries.filter((e) => e.item.subvault === area)) {
         const label = markdownLabel(item.title);
         lines.push(
-          `- [${label}](subvaults/${encodeURIComponent(area)}/items/${item.id}/record.md)`,
+          `- [${label}](subvaults/${area
+            .split("/")
+            .map((part) =>
+              encodeURIComponent(part).replace(
+                /[()]/g,
+                (char) => `%${char.charCodeAt(0).toString(16)}`,
+              ),
+            )
+            .join("/")}/items/${item.id}/record.md)`,
         );
       }
       lines.push("");

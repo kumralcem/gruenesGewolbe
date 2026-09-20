@@ -52,6 +52,20 @@ The extension sends visible text, sanitized HTML, captions, an already-visible t
 
 Some cross-origin images need **Allow image hosts (if needed)**. Missing or unsupported images are recorded visibly; available content is still saved. To supply previously missing bytes, grant access and make a new capture from the original page. **Retry unfinished work** reuses the already-received snapshot. After acceptance you can close the tab. Recent captures show progress, retry and cancellation. Usage notifications are optional while the capture screen is open.
 
+## Nested folders and automatic routing
+
+GG discovers existing folders under your vault's `subvaults/` directory on each operation. For example:
+
+```sh
+mkdir -p "$HOME/Gewolbe/subvaults/Photography/Historic"
+```
+
+The next capture can automatically choose `Photography/Historic`. No registration or restart is needed. You can also use `gg do 'Create Historic inside Photography'`; the agent uses the full relative path. Parent folders may still receive captures themselves. GG creates `items/` inside a manually created destination when it first saves a record there.
+
+Hidden folders, symlinks and the reserved `items/` trees are excluded from discovery. Paths support up to 16 levels, 100 characters per folder name and 500 characters overall. Existing vaults keep their layout; no reinitialization is needed. After updating this checkout, rebuild the worker image and restart a running controller once to load the new code. Undo of folder creation/renaming recorded before this update requires manual recovery because the old history omitted directories; other file history remains usable.
+
+GG can inspect existing GG records to help route captures. Loose files are not automatically imported, and manually moving records or individual assets is not reconciled yet. Use `gg do` for those operations so metadata and history stay consistent.
+
 ## Updates, management and undo
 
 Recapture updates records matched by source URL and stable capture key. Each update includes a dated note. Human-edited fields and summaries win on conflict; proposed generated values remain in `.gg-baseline.json`. Earlier media remains preserved. Clearly matched split records update individually; ambiguous matches are rejected without overwriting originals. Successful records survive later failures in a multi-record job.

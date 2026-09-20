@@ -44,6 +44,7 @@ async function body(req: http.IncomingMessage, max: number) {
 export async function createGateway(options: GatewayOptions) {
   const { vault, config, intent } = options;
   validateConfig(config, intent);
+  await vault.destinations();
   let batchId = options.batchId ?? randomUUID();
   const revision = createHash("sha256")
     .update(

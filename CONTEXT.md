@@ -5,7 +5,7 @@ A file-based personal archive. Pi handles capture, retrieval and explicitly requ
 ## Domain language
 
 - **Vault**: the portable directory containing records, preserved media, source copies and local history. No database is required.
-- **Subvault**: an existing destination such as Paintings or Ideas. Capture chooses one; explicit management instructions may create or rename destinations.
+- **Subvault**: an existing destination folder under `subvaults/`, including nested paths such as `Photography/Historic`. Discovered from disk, not limited to a registered flat list. Capture chooses one; explicit management may create or rename destinations. See [ADR-0048](docs/adr/0048-discover-nested-destination-folders.md).
 - **Inbox**: permanent searchable destination when classification is uncertain.
 - **Saved Item / Item Folder / Item Record**: a coherent thing worth keeping, its folder and editable `record.md`.
 - **Capture**: interprets one source plus optional user instructions. Normally one record with relevant images; instructions may request several.
