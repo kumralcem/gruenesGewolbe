@@ -136,7 +136,7 @@ gg import ~/Pictures/Collection --instructions "Organize these under Art"
 gg import photo.jpg scan.png --instructions "Create Ideas/References and save these there"
 ```
 
-Directories are scanned recursively. JPEG, PNG and WebP files up to 20 MB each are supported; hidden directory entries, symbolic links and unrelated files inside directories are skipped. Explicitly supplied unsupported files produce an error. Originals stay on your machine and are copied unchanged into records; the server receives the filename, image bytes and instructions, not your full local path. Embedded image metadata remains part of the original file.
+Directories are scanned recursively. JPEG, PNG and WebP files up to 64 MB each are supported; hidden directory entries, symbolic links and unrelated files inside directories are skipped. Explicitly supplied unsupported files produce an error. Originals stay on your machine and are copied unchanged into records; the server receives the filename, image bytes and instructions, not your full local path. Embedded image metadata remains part of the original file.
 
 Each image defaults to one record. The agent inspects it and chooses an existing destination, using `CAPTURE.md` plus your instructions. This consumes normal model usage. Images upload and process one at a time through the server's capture queue and shared limits. The command prints each filename and waits for its result before sending the next image. A failure or usage pause stops the batch.
 

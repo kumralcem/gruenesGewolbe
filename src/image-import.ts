@@ -43,8 +43,8 @@ export async function imageCapture(
   );
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.size > 20_000_000 || !stat.size)
-      throw Error(`Image must be a regular file of at most 20 MB: ${path}`);
+    if (!stat.isFile() || stat.size > 64_000_000 || !stat.size)
+      throw Error(`Image must be a regular file of at most 64 MB: ${path}`);
     const bytes = Buffer.alloc(stat.size + 1);
     let length = 0;
     while (length < bytes.length) {

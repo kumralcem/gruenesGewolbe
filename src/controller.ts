@@ -1,3 +1,5 @@
+import { isLocalSource } from "./local-source.ts";
+import { validateBrowserCapture } from "./browser-capture.ts";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Vault } from "./vault.ts";
@@ -39,9 +41,12 @@ export class Controller {
   ) {
     validateConfig(this.config, intent);
     if (["capture", "art", "idea"].includes(intent)) {
+      const localImage =
+        intent === "capture" && isLocalSource(input) && capture?.url === input;
+      if (localImage) capture = validateBrowserCapture(capture);
       const url = new URL(input);
       if (
-        !["http:", "https:"].includes(url.protocol) ||
+        (!localImage && !["http:", "https:"].includes(url.protocol)) ||
         url.username ||
         url.password
       )

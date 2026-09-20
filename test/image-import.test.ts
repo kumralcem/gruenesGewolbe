@@ -159,3 +159,41 @@ test("image import scans recursively, excludes links, validates provenance and r
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("controller accepts validated local images while retaining usage pauses and rejecting bare local URLs", async () => {
+  const { Controller } = await import("../src/controller.ts");
+  const root = await mkdtemp(join(tmpdir(), "gg-import-controller-"));
+  try {
+    const file = join(root, "large.png");
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: "green" },
+    })
+      .png()
+      .toBuffer();
+    await writeFile(file, Buffer.concat([png, Buffer.alloc(31_000_000)]));
+    const capture = await imageCapture(file);
+    assert.ok(
+      Buffer.from(capture.images![0].bytes!, "base64").length > 30_000_000,
+    );
+    const c = new Controller(
+      await Vault.create(join(root, "vault"), ["Art"]),
+      { provider: "openai", model: "fixture" },
+      join(root, "state"),
+    );
+    await c.usage.failure("openai", "test pause", true);
+    assert.equal(
+      (await c.run("capture", capture.url, undefined, capture)).outcome?.status,
+      "paused",
+    );
+    await assert.rejects(c.run("capture", capture.url), /HTTP/);
+    await assert.rejects(
+      c.run("capture", capture.url, undefined, { ...capture, images: [] }),
+      /original image/,
+    );
+    const { truncate } = await import("node:fs/promises");
+    await truncate(file, 64_000_001);
+    await assert.rejects(imageCapture(file), /64 MB/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
