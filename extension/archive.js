@@ -156,6 +156,10 @@ export function setupArchive(request, connection) {
             ? text
             : `Local image: ${file.name}. Preserve the supplied original image. The filename is context, not verified attribution.`,
           instructions,
+          createDestinations: $("import-destinations")
+            .value.split(/\r?\n/)
+            .map((p) => p.trim())
+            .filter(Boolean),
           images: isText
             ? []
             : [{ url, mimeType, bytes: btoa(binary), alt: file.name }],

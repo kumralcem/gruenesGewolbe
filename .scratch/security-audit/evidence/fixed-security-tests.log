@@ -1,0 +1,11 @@
+✔ network capability applies to both transports and closes existing tunnels before private policy (147.046408ms)
+✔ private policy aborts an in-flight public fetch without returning its response (22.559925ms)
+✔ receiver and worker security boundaries reject the audited attack sequences (256.887772ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2035.292269

@@ -1,0 +1,21 @@
+
+> gruenes-gewolbe@0.1.0 test:worker /home/dev/projects/gruenesGewolbe
+> node --import tsx --test test/worker.integration.ts
+
+✔ real Pi captures private snapshots with split records, then manages the vault with confirmation outside the model (4908.9757ms)
+✔ real Pi preserves several supplied images and flags undecodable media without losing content (2789.371222ms)
+✔ Pi saves text instructions into a requested new nested destination despite irrelevant failed images (2376.29321ms)
+✔ long browser transcripts fit the normal model bound and normalized post URLs stay on the snapshot (5244.811363ms)
+﹣ stored browser snapshots replay within the model bound (0.325921ms) # SKIP
+✔ real Pi imports a local image through the gateway and preserves exact original bytes (2655.360087ms)
+✔ a completed capture needs no additional model request to announce success (2461.184371ms)
+✔ local research closes with space to save instead of overflowing on the next lookup (2508.323019ms)
+✔ real Pi imports a text document without artwork research and preserves the controller's original (2567.755519ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 27188.581673

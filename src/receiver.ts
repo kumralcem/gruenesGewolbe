@@ -28,6 +28,7 @@ import {
 
 interface CaptureJob {
   id: string;
+  deviceId?: string;
   status:
     | "pending"
     | "running"
@@ -291,6 +292,30 @@ export async function createReceiver(options: ReceiverOptions) {
         send(res, 401, { error: "Pair this device with GG" });
         return;
       }
+      const canAccess = (job: CaptureJob) =>
+        !options.devices ||
+        device?.scope === "manage" ||
+        job.deviceId === device?.id;
+      const present = (job: CaptureJob) => {
+        if (!options.devices || device?.scope === "manage") return job;
+        return {
+          id: job.id,
+          status: job.status,
+          url: job.url,
+          title: job.title,
+          createdAt: job.createdAt,
+          error: job.error
+            ? "Capture failed; ask a management device to inspect diagnostics."
+            : undefined,
+          result: job.result
+            ? {
+                outcome: {
+                  status: job.status === "completed" ? "saved" : job.status,
+                },
+              }
+            : undefined,
+        };
+      };
       const requestUrl = new URL(req.url ?? "/", "http://localhost");
       if (
         req.method === "GET" &&
@@ -357,6 +382,13 @@ export async function createReceiver(options: ReceiverOptions) {
         return;
       }
       if (req.url === "/capture-rules" && req.method === "POST") {
+        if (options.devices && device?.scope !== "manage") {
+          send(res, 403, {
+            error:
+              "Editing capture instructions requires management pairing. Run gg pair --scope manage and reconnect.",
+          });
+          return;
+        }
         let raw = "";
         for await (const chunk of req) {
           raw += chunk;
@@ -412,7 +444,15 @@ export async function createReceiver(options: ReceiverOptions) {
         return;
       }
       if (req.method === "GET" && req.url === "/captures") {
-        send(res, 200, Array.from(jobs.values()).slice(-50).reverse());
+        send(
+          res,
+          200,
+          Array.from(jobs.values())
+            .filter(canAccess)
+            .slice(-50)
+            .reverse()
+            .map(present),
+        );
         return;
       }
       const selected = req.url?.match(
@@ -420,12 +460,12 @@ export async function createReceiver(options: ReceiverOptions) {
       );
       if (selected && uuid.test(selected[1])) {
         const job = jobs.get(selected[1]);
-        if (!job) {
+        if (!job || !canAccess(job)) {
           send(res, 404, { error: "Unknown capture" });
           return;
         }
         if (req.method === "GET" && !selected[2]) {
-          send(res, 200, job);
+          send(res, 200, present(job));
           return;
         }
         if (req.method === "POST" && selected[2] === "/cancel") {
@@ -442,7 +482,7 @@ export async function createReceiver(options: ReceiverOptions) {
           });
           accepting = cancellation.catch(() => {});
           await cancellation;
-          send(res, 200, job);
+          send(res, 200, present(job));
           return;
         }
         if (
@@ -476,7 +516,7 @@ export async function createReceiver(options: ReceiverOptions) {
           accepting = retry.catch(() => {});
           await retry;
           pump();
-          send(res, 202, job);
+          send(res, 202, present(job));
           return;
         }
       }
@@ -508,6 +548,13 @@ export async function createReceiver(options: ReceiverOptions) {
       );
       let id = String(req.headers["x-gg-capture-id"] ?? randomUUID());
       if (!uuid.test(id)) throw Error("Invalid capture ID");
+      if (device) {
+        // The same client idempotency key belongs to a separate namespace per device.
+        const hash = createHash("sha256")
+          .update(device.id + ":" + id)
+          .digest("hex");
+        id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+      }
       const digest = createHash("sha256")
         .update(
           JSON.stringify(
@@ -519,11 +566,14 @@ export async function createReceiver(options: ReceiverOptions) {
         .digest("hex");
       let accepted: CaptureJob | undefined;
       const write = accepting.then(async () => {
+        if (jobs.has(id) && !canAccess(jobs.get(id)!))
+          throw Error("Capture ID unavailable");
         if (isLocalSource(capture.url)) {
           const records = await options.vault.sourceRecords(capture.url);
           if (records.length) {
             accepted = {
               id,
+              deviceId: device?.id,
               status: "completed",
               url: capture.url,
               title: capture.title,
@@ -561,6 +611,7 @@ export async function createReceiver(options: ReceiverOptions) {
           );
         const job: CaptureJob = {
           id,
+          deviceId: device?.id,
           status: "pending",
           url: capture.url,
           title: capture.title,
@@ -589,7 +640,7 @@ export async function createReceiver(options: ReceiverOptions) {
       });
       accepting = write.catch(() => {});
       await write;
-      send(res, 202, accepted);
+      send(res, 202, present(accepted!));
       pump();
     } catch (error) {
       if (!res.headersSent)

@@ -34,6 +34,19 @@
             placeholder="Anything GG should know?"
           ></textarea>
         </label>
+        <details>
+          <summary>Create new folders (optional)</summary>
+          <textarea
+            id="new-destinations"
+            rows="2"
+            maxlength="8016"
+            aria-label="New folder paths, one per line"
+            placeholder="Ideas/SoloDev"
+          ></textarea>
+          <p>
+            Only these exact paths may be created. List missing parents first.
+          </p>
+        </details>
         <button id="capture">Capture</button>
         <button class="secondary" id="allow">
           Allow image hosts (if needed)
@@ -86,6 +99,13 @@
           aria-label="Import instructions"
           placeholder="Anything GG should know? For example, organize under Art."
         ></textarea>
+        <textarea
+          id="import-destinations"
+          rows="2"
+          maxlength="8016"
+          aria-label="New import folder paths, one per line"
+          placeholder="Optional new folders, one path per line"
+        ></textarea>
         <button id="import-start">Import</button
         ><button class="secondary" id="import-stop" disabled>
           Stop after this file
@@ -96,7 +116,8 @@
         <h2>Capture instructions</h2>
         <p>
           Shared across your devices. Individual capture instructions take
-          priority. Changes apply to future captures and recaptures.
+          priority. Changes apply to future captures and recaptures. Editing
+          requires management pairing.
         </p>
         <label for="rules-folder">Apply to</label>
         <select id="rules-folder">

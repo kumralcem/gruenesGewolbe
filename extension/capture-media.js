@@ -88,7 +88,12 @@ async function encodeResponse(response) {
   return { bytes: btoa(binary), mimeType: blob.type.split(";")[0] };
 }
 
-export async function prepareCapture(snapshot, tabId, instructions) {
+export async function prepareCapture(
+  snapshot,
+  tabId,
+  instructions,
+  createDestinations = [],
+) {
   const images = [];
   const warnings = [...(snapshot.warnings ?? [])];
   let bytes = 0;
@@ -123,6 +128,7 @@ export async function prepareCapture(snapshot, tabId, instructions) {
     transcript: snapshot.transcript,
     contextText: snapshot.contextText,
     instructions: instructions || undefined,
+    createDestinations,
     images,
     warnings,
   };

@@ -73,6 +73,69 @@ const call = (name: string, args: unknown) => ({
     },
   ],
 });
+test("browser uploads and public image tools reject GIF, TIFF and AVIF disguised as PNG", async () => {
+  const sharp = (await import("sharp")).default;
+  const { validateBrowserCapture } = await import("../src/browser-capture.ts");
+  const make = () =>
+    sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } });
+  const formats = [
+    await make().gif().toBuffer(),
+    await make().tiff().toBuffer(),
+    await make().avif().toBuffer(),
+  ];
+  for (const bytes of formats)
+    assert.throws(
+      () =>
+        validateBrowserCapture({
+          version: 2,
+          intent: "capture",
+          url: "https://example.com/",
+          title: "Disguised image",
+          text: "",
+          capturedAt: new Date().toISOString(),
+          images: [
+            {
+              url: "https://example.com/image.png",
+              mimeType: "image/png",
+              bytes: bytes.toString("base64"),
+            },
+          ],
+        }),
+      /Only JPEG, PNG and WebP/,
+    );
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-image-formats-")),
+    ["Inbox"],
+  );
+  let step = 0;
+  const result = await worker({
+    vault,
+    intent: "capture",
+    input: "https://example.com/",
+    config: { provider: "openai", model: "fixture", maxRequests: 6 },
+    fixtureFetch: async (url) => ({
+      url,
+      type: "image/png",
+      bytes: formats[Number(new URL(url).searchParams.get("format"))],
+    }),
+    mockModel: async (body) => {
+      if (step > 0 && step <= formats.length)
+        assert.match(
+          body.messages.filter((m: any) => m.role === "tool").at(-1).content,
+          /Only JPEG, PNG and WebP/,
+        );
+      if (step < formats.length)
+        return call("download_image", {
+          url: `https://example.com/image.png?format=${step++}`,
+        });
+      if (step++ === formats.length)
+        return call("skip_capture", { reason: "Unsupported image formats" });
+      return { role: "assistant", content: "Skipped unsupported images." };
+    },
+  });
+  assert.equal(result.outcomes[0].status, "skipped");
+  assert.deepEqual(await vault.items(), []);
+});
 test(
   "real Pi captures private snapshots with split records, then manages the vault with confirmation outside the model",
   { timeout: 60000 },
@@ -292,6 +355,7 @@ test(
         capturedAt: "2026-09-20T00:00:00Z",
         instructions:
           "Save as an instruction set; create SoloDev under Ideas. Images are irrelevant.",
+        createDestinations: ["Ideas/SoloDev"],
         images: [{ url: url + "/banner", error: "Failed to fetch" }],
       },
       mockModel: async (body) => {
@@ -483,6 +547,11 @@ test(
             return call("fetch_text", { url: source });
           }
           if (step === 3) {
+            assert.match(
+              body.messages.filter((m: any) => m.role === "tool").at(-1)
+                .content,
+              /Network capability denied/,
+            );
             return call("capture", {
               kind: "art",
               title: "Green painting",
@@ -491,18 +560,8 @@ test(
               tags: [],
               assetIds: [assetId],
               attribution: {
-                year: {
-                  value: "1918",
-                  status: "source-supported",
-                  sourceUrl: source,
-                  quote: "Created 1918",
-                },
-                creator: {
-                  value: "Artist Example",
-                  status: "source-supported",
-                  sourceUrl: source,
-                  quote: "Artist Example",
-                },
+                year: { value: "1918", status: "uncertain" },
+                creator: { value: "Artist Example", status: "uncertain" },
               },
             });
           }
@@ -511,8 +570,8 @@ test(
       });
       assert.equal(result.outcomes[0]?.status, "saved");
       const [record] = await vault.sourceRecords(capture.url);
-      assert.equal(record.item.year, "1918");
-      assert.equal(record.item.creator, "Artist Example");
+      assert.equal(record.item.year, undefined);
+      assert.equal(record.item.creator, undefined);
       assert.equal(record.item.attribution?.title?.status, "uncertain");
       assert.deepEqual(
         await readFile(join(record.path, record.item.assets[0].file)),
@@ -564,7 +623,7 @@ test("a completed capture needs no additional model request to announce success"
   assert.equal(result.complete, true);
 });
 
-test("local research closes with space to save instead of overflowing on the next lookup", async () => {
+test("local imports reject public browsing and still preserve the supplied original", async () => {
   const sharp = (await import("sharp")).default;
   const { writeFile } = await import("node:fs/promises");
   const { imageCapture } = await import("../src/image-import.ts");
@@ -600,7 +659,10 @@ test("local research closes with space to save instead of overflowing on the nex
         ).previewAssets[0].assetId;
         return call("browse", { url: "https://example.com/research" });
       }
-      assert.match(body.messages[0].content, /research budget is now closed/);
+      assert.match(
+        body.messages.filter((m: any) => m.role === "tool").at(-1).content,
+        /no public network access/,
+      );
       return call("capture", {
         kind: "art",
         title: "Unidentified painting",

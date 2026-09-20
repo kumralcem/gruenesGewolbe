@@ -305,7 +305,7 @@ test(
 );
 
 test(
-  "capturing only an improved asset still retains the exact browser-selected original",
+  "browser art rejects public improvements and retains the exact supplied original",
   { timeout: 60000 },
   async () => {
     const vault = await setup();
@@ -316,8 +316,7 @@ test(
       })
         .png()
         .toBuffer();
-    const original = await image(100),
-      better = await image(200);
+    const original = await image(100);
     const result = await runJob({
       vault,
       config,
@@ -336,25 +335,28 @@ test(
           mimeType: "image/png",
         },
       },
-      fixtureFetch: async (url) => ({
-        bytes: url.endsWith("original") ? original : better,
-        type: "image/png",
-        url,
-      }),
+      fixtureFetch: async () => {
+        throw Error("Snapshot attempted public fetch");
+      },
       mockModel: async (body: any) => {
         const calls = body.messages
           .filter((m: any) => m.role === "assistant")
           .flatMap((m: any) => m.tool_calls ?? []);
-        if (calls.length >= 2)
+        if (calls.length >= 3)
           return { role: "assistant", content: "Finished." };
-        const name = calls.length < 1 ? "download_image" : "capture";
+        const name = calls.length < 2 ? "download_image" : "capture";
         const latest = body.messages
           .filter((m: any) => m.role === "tool")
           .at(-1);
+        if (calls.length === 1)
+          assert.match(latest.content, /Network capability denied/);
         const args =
-          calls.length < 1
+          calls.length < 2
             ? {
-                url: "https://fixtures.example/better",
+                url:
+                  calls.length === 0
+                    ? "https://fixtures.example/better"
+                    : "https://fixtures.example/original",
               }
             : {
                 title: "Square",
@@ -379,14 +381,8 @@ test(
     });
     assert.equal(result.outcome?.status, "saved", JSON.stringify(result));
     const [{ item, path }] = await vault.items();
-    assert.equal(item.assets.length, 2);
-    assert.deepEqual(await readFile(join(path, item.primary!)), better);
-    assert.deepEqual(
-      await readFile(
-        join(path, item.assets.find((a) => a.file !== item.primary)!.file),
-      ),
-      original,
-    );
+    assert.equal(item.assets.length, 1);
+    assert.deepEqual(await readFile(join(path, item.primary!)), original);
   },
 );
 
@@ -479,6 +475,7 @@ test(
         capturedAt: "2026-09-20T00:00:00Z",
         instructions:
           "Save instructions without images and create SoloDev under Ideas.",
+        createDestinations: ["Ideas/SoloDev"],
         images: [{ url: url + "/banner.png", error: "Failed to fetch" }],
       },
       mockModel: async () => replies[step++],

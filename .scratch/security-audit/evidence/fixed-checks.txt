@@ -1,0 +1,4 @@
+pnpm typecheck: passed
+pnpm format:check: passed
+git diff --check: passed
+Focused security regressions rerun after introducing the dedicated isolation probe route: 3 passed

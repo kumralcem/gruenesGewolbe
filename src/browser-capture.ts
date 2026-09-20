@@ -1,3 +1,5 @@
+import { newDestinations } from "./capture-permissions.ts";
+import { imageMime } from "./image-format.ts";
 import { originalTextFile, validateImportedText } from "./text-import.ts";
 import { createHash } from "node:crypto";
 import { isLocalSource } from "./local-source.ts";
@@ -16,6 +18,7 @@ export interface BrowserCapture {
   version: 1 | 2;
   intent: "art" | "idea" | "capture";
   instructions?: string;
+  createDestinations?: string[];
   contextText?: string;
   images?: CaptureImage[];
   warnings?: string[];
@@ -49,6 +52,7 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
     !string(b.contextText ?? "", 40000)
   )
     throw Error("Invalid browser capture");
+  const approvedDestinations = newDestinations(b.createDestinations);
   const url = new URL(b.url);
   if (
     (!["https:", "http:"].includes(url.protocol) && !isLocalSource(b.url)) ||
@@ -87,6 +91,11 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
           ))
       )
         throw Error("Invalid captured image bytes");
+      if (
+        image.bytes &&
+        imageMime(Buffer.from(image.bytes, "base64")) !== image.mimeType
+      )
+        throw Error("Image MIME type does not match its bytes");
       size += image.bytes?.length ?? 0;
       if (size > 86000000) throw Error("Captured images exceed 64 MB");
       return {
@@ -143,6 +152,9 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
     }
     return {
       document: b.document ? { extension: b.document.extension } : undefined,
+      createDestinations: b.createDestinations
+        ? approvedDestinations
+        : undefined,
       version: 2,
       intent: "capture",
       url: b.url,
@@ -169,6 +181,8 @@ export function validateBrowserCapture(input: unknown): BrowserCapture {
       !/^[A-Za-z0-9+/]*={0,2}$/.test(b.image.bytes)
     )
       throw Error("Select one supported image and include its bytes");
+    if (imageMime(Buffer.from(b.image.bytes, "base64")) !== b.image.mimeType)
+      throw Error("Image MIME type does not match its bytes");
     const imageUrl = new URL(b.image.url);
     if (
       !["https:", "http:"].includes(imageUrl.protocol) ||

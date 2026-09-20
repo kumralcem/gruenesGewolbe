@@ -31,7 +31,7 @@ The installer checks the worker image and isolation probe before starting the [u
 
 The unit sets a 3-GiB memory ceiling, a 512-task ceiling, a restrictive umask and cgroup delegation for rootless Podman. The installer does not change firewall settings. Schedule service updates between jobs; [update instructions](getting-started.md#update) include rebuilding the worker.
 
-Use `gg pair` for capture access or `gg pair --scope manage` for management and archive downloads. Codes expire after ten minutes; device connections remain valid until revoked with `gg revoke DEVICE_ID`. `gg devices` lists paired devices. Startup logs may contain a short-lived pairing code.
+Use `gg pair` for capture access to that device’s jobs or `gg pair --scope manage` for global job administration, editing capture policy, management and archive downloads. Ownerless jobs from earlier versions remain visible only to management devices. Codes expire after ten minutes; device connections remain valid until revoked with `gg revoke DEVICE_ID`. `gg devices` lists paired devices. Startup logs may contain a short-lived pairing code.
 
 ## Remote connections
 
@@ -85,3 +85,5 @@ systemctl --user start gg
 This example omits `--delete`; old moved/deleted records can remain in an existing copy. Copy into a fresh dated directory for an exact snapshot. The private controller state directory contains credentials and needs separate protection; do not distribute it with vault copies. Reconcile edits on the authoritative vault before refreshing another copy. Built-in encrypted, versioned backups remain a TODO.
 
 See [known limits](validation.md) for crash recovery and validation boundaries.
+
+GG creates new archive artifacts with mode 0600 and directories with mode 0700. Vaults with group/other root permissions produce a vault warning in job/probe results. Existing directories and files retain their permissions; review ownership, modes and ACLs on older/shared vaults and backups. Rebuild the worker whenever updating native image dependencies.

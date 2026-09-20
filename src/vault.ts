@@ -5,11 +5,11 @@ import { readCaptureRules, validateCaptureRules } from "./capture-rules.ts";
 import { History } from "./history.ts";
 import {
   lstat,
-  mkdir,
+  mkdir as fsMkdir,
   readFile,
   readdir,
   rename,
-  writeFile,
+  writeFile as fsWriteFile,
   realpath,
   unlink,
   rm,
@@ -26,6 +26,17 @@ import {
   refreshRecord,
   editRecord,
 } from "./records.ts";
+
+// Archive confidentiality must not depend on the invoking shell's umask.
+const mkdir = (
+  path: string,
+  options: { recursive?: boolean; mode?: number } = {},
+) => fsMkdir(path, { ...options, mode: 0o700 });
+const writeFile = (
+  path: string,
+  contents: string | Uint8Array,
+  options: { flag?: string; mode?: number } = {},
+) => fsWriteFile(path, contents, { ...options, mode: 0o600 });
 
 export const sha = (data: string | Buffer) =>
   createHash("sha256").update(data).digest("hex");
@@ -120,6 +131,7 @@ export class Vault {
     await mkdir(join(canonical, "queue"));
     await mkdir(join(canonical, ".staging"));
     const vault = new Vault(canonical, areas);
+    await vault.checkPermissions();
     await vault.index();
     await vault.captureRules();
     return vault;
@@ -144,8 +156,17 @@ export class Vault {
     )
       throw Error("Not a GG vault");
     const vault = new Vault(await realpath(root), data.areas);
+    await vault.checkPermissions();
     await vault.reloadAreas();
     return vault;
+  }
+  private async checkPermissions() {
+    const stat = await lstat(this.root);
+    if (stat.mode & 0o077)
+      this.problems.set(
+        this.root,
+        "Vault directory permits group/other access. Review existing file permissions and ACLs if this archive should be private; GG leaves deliberate sharing unchanged.",
+      );
   }
   private async rulesFolder(subvault = "") {
     if (!subvault) return this.root;

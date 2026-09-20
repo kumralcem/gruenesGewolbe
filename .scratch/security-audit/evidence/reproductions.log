@@ -1,0 +1,7 @@
+CONFIRMED: capture token edits global policy while archive access returns 403
+CONFIRMED: second capture device reads and cancels first device's job
+CONFIRMED: capture gateway reads unrelated archive and accepts exfiltration URL (fetch intercepted)
+CONFIRMED: unrelated nonempty instructions authorize arbitrary destination creation
+CONFIRMED: management gateway permits CONNECT without bearer (outbound socket replaced)
+CONFIRMED: declared PNG reaches GIF decoder; sharp=0.34.5, vips=8.17.3, heif=1.20.2
+CONFIRMED: umask 022 creates vault 0755 and source.md 0644 (parent traversal required)

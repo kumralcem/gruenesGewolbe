@@ -226,7 +226,7 @@ export class History {
         if (c.before[p] === c.after[p]) continue;
         const full = await this.safe(p);
         if (c.before[p] === "directory") {
-          await mkdir(full, { recursive: true });
+          await mkdir(full, { recursive: true, mode: 0o700 });
           continue;
         }
         if (!c.before[p] && c.after[p] === "directory") {
@@ -241,7 +241,7 @@ export class History {
           );
           if (hash(bytes) !== c.before[p])
             throw Error("History blob integrity check failed");
-          await mkdir(dirname(full), { recursive: true });
+          await mkdir(dirname(full), { recursive: true, mode: 0o700 });
           const temp = full + ".restore-" + randomUUID();
           await writeFile(temp, bytes, { mode: 0o600 });
           await rename(temp, full);

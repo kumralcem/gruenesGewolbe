@@ -1,0 +1,25 @@
+
+> gruenes-gewolbe@0.1.0 test:container /home/dev/projects/gruenesGewolbe
+> node --import tsx --test test/container.integration.ts
+
+✔ image application files are readable by the mapped worker UID (450.452546ms)
+✔ worker has a working broker/browser, but no host files, real credentials or direct network (4119.073668ms)
+✔ real Pi processes failed, ambiguous, successful and repeated fixture entries independently (12603.229138ms)
+✔ OpenRouter protocol and missing-transcript policy run through real Pi (3061.225576ms)
+✔ ask resolves verified file paths and leaves the stored record unchanged (6090.489068ms)
+✔ a hung model job is cancelled at its deadline and the next entry can run (6304.715288ms)
+✔ idea capture preserves fetched source independently of the generated summary or excerpt (3039.624518ms)
+✔ an explicitly included linked article retains its URL and complete fetched text (3148.73667ms)
+✔ capturing only an improved asset still retains the exact browser-selected original (3284.821684ms)
+✔ a signed-in browser snapshot reaches real Pi without re-fetching the private page or image (3382.892785ms)
+✔ text-only capture into a requested nested folder is complete despite failed decorative images (3065.658338ms)
+✔ local image import preserves originals in the isolated worker (3366.449555ms)
+✔ text documents preserve exact originals through the isolated worker (3246.052826ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56973.309034

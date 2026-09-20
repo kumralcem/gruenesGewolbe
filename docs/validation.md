@@ -2,7 +2,7 @@
 
 ## Latest checks
 
-With text import: 64 unit tests, 8 Pi worker tests (one optional private replay skipped), 13 rootless container tests and Chromium extension integration passed, along with typecheck. These exercise inherited policies/retries, export authorization and file integrity, context bounds, CONNECT broken-pipe recovery and completion after the final save, text import/resume and exact-original document downloads. Deterministic provider fixtures are not live attribution benchmarks.
+After security remediation: 67 unit tests, 9 Pi worker tests (one optional private replay skipped), 13 rootless container tests and Chromium extension integration passed, along with typecheck and formatting. The dependency audit reports zero known vulnerabilities. Security regressions cover device ownership, scoped policy/folder permissions, supported decoder formats, and network revocation including active tunnels and pending fetches. See the [remediation record](../.scratch/security-audit/REMEDIATION.md). These exercise inherited policies/retries, export authorization and file integrity, context bounds, CONNECT broken-pipe recovery and completion after the final save, text import/resume and exact-original document downloads. Deterministic provider fixtures are not live attribution benchmarks.
 
 Run checks from the checkout:
 
@@ -29,6 +29,6 @@ Coverage includes credential/network/filesystem isolation, bounded model request
 ## Other boundaries
 
 - Rootless isolation has been tested on Linux with Podman/crun; this is not a full host-hardening audit. Public HTTPS and other container platforms need separate validation. Live OpenRouter compatibility has not been established by fixture tests.
-- The worker prepares dimensions, previews and visual hashes; the controller validates structure, bytes and bounds rather than independently decoding all artifact metadata. A worker with permitted network access can disclose content it legitimately receives. Tests do not prove immunity to all prompt injection or kernel exploits.
+- The worker prepares dimensions, previews and visual hashes; the controller validates structure, bytes and bounds rather than independently decoding all artifact metadata. Public-collection workers can disclose the public content and limited destination metadata they receive. Snapshot/import workers have no public egress; capture cannot search/read unrelated archive records. Private policy access closes existing tunnels and in-flight fetches as well as future network requests. Tests do not prove immunity to all prompt injection or kernel exploits.
 - Hard crashes can leave receiver/writer/reclamation locks or staging files. Inspect ownership and running processes before recovery; never blindly remove a live lock. Publication is not guaranteed durable across every power-loss scenario.
 - Arbitrary file rearrangement, general synchronization, automatic long-source compaction, unsupported image formats and an approval UI for the legacy decision queue remain outside current functionality.

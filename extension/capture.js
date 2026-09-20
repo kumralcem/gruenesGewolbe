@@ -101,6 +101,14 @@ if (params.has("error")) {
 $("focus").oninput = () => {
   prepared = undefined;
 };
+$("new-destinations").oninput = () => {
+  prepared = undefined;
+};
+const newDestinations = () =>
+  $("new-destinations")
+    .value.split(/\r?\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 async function send() {
   $("capture").disabled = true;
   try {
@@ -110,6 +118,7 @@ async function send() {
         type: "submit-popup",
         id,
         instructions: $("focus").value,
+        createDestinations: newDestinations(),
       });
       if (result.error) throw Error(result.error);
       status(
@@ -120,7 +129,12 @@ async function send() {
       return;
     }
     if (!prepared) {
-      prepared = await prepareCapture(snapshot, tabId, $("focus").value);
+      prepared = await prepareCapture(
+        snapshot,
+        tabId,
+        $("focus").value,
+        newDestinations(),
+      );
     }
     const job = await request("/captures", {
       method: "POST",

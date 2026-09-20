@@ -19,6 +19,7 @@ export interface Command {
   text?: string;
   id?: string;
   instructions?: string;
+  createDestinations?: string[];
   provider?: Config["provider"];
   model?: string;
   requests?: number;
@@ -42,6 +43,7 @@ export class Controller {
     signal?: AbortSignal,
     capture?: BrowserCapture,
     instructions?: string,
+    createDestinations?: string[],
   ) {
     validateConfig(this.config, intent);
     if (["capture", "art", "idea"].includes(intent)) {
@@ -69,7 +71,7 @@ export class Controller {
     const effectiveInstructions =
       instructions ??
       capture?.instructions ??
-      (intent === "capture"
+      (intent === "capture" && capture
         ? (await this.vault.sourceRecords(input))[0]?.item.instructions
         : undefined);
     const result = await runJob({
@@ -81,6 +83,7 @@ export class Controller {
       browserCapture: capture,
       focus: effectiveInstructions,
       instructions: effectiveInstructions,
+      createDestinations,
       batchId: randomUUID(),
       ...(this.fixture ? await fixtures(this.fixtureImage) : {}),
     });
@@ -141,7 +144,14 @@ export class Controller {
           url.password
         )
           throw Error("Provide an HTTP(S) URL");
-        return this.run("capture", text, signal, undefined, input.instructions);
+        return this.run(
+          "capture",
+          text,
+          signal,
+          undefined,
+          input.instructions,
+          input.createDestinations,
+        );
       }
       case "confirm":
         if (!input.id) throw Error("Provide a proposal ID");

@@ -1,3 +1,4 @@
+import { newDestinations } from "./capture-permissions.ts";
 import { originalTextFile } from "./text-import.ts";
 import { normalizeLocalAttribution } from "./attribution.ts";
 import { isLocalSource } from "./local-source.ts";
@@ -7,6 +8,7 @@ import { UsagePaused } from "./usage.ts";
 import { fixtureCompletion } from "./model-bridge.ts";
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
+import type { Duplex } from "node:stream";
 import { connect, type Socket } from "node:net";
 import { mkdtemp, chmod, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -33,6 +35,7 @@ export interface GatewayOptions {
   browserCapture?: BrowserCapture;
   batchId?: string;
   instructions?: string;
+  createDestinations?: string[];
 }
 async function body(req: http.IncomingMessage, max: number) {
   let size = 0;
@@ -47,9 +50,14 @@ async function body(req: http.IncomingMessage, max: number) {
 export async function createGateway(options: GatewayOptions) {
   const { vault, config, intent } = options;
   validateConfig(config, intent);
+  const approvedDestinations = newDestinations(
+    options.createDestinations ?? options.browserCapture?.createDestinations,
+  );
   await vault.destinations();
   const captureRules =
-    intent === "capture" ? await vault.captureRules() : undefined;
+    intent === "capture" && options.browserCapture
+      ? await vault.captureRules()
+      : undefined;
   let batchId = options.batchId ?? randomUUID();
   const revision = createHash("sha256")
     .update(
@@ -154,6 +162,17 @@ export async function createGateway(options: GatewayOptions) {
     (config.maxSeconds ?? 180) * 1000,
   );
   const connections = new Set<Socket>();
+  const networkConnections = new Set<Duplex>();
+  const networkAbort = new AbortController();
+  let networkAllowed =
+    !options.browserCapture &&
+    ["capture", "art", "idea", "probe"].includes(intent);
+  const closeNetwork = () => {
+    networkAllowed = false;
+    networkAbort.abort(Error("Private context closes public network access"));
+    for (const connection of networkConnections) connection.destroy();
+  };
+  abort.signal.addEventListener("abort", closeNetwork, { once: true });
   const service = new ModelService(config.stateDir ?? defaultStateDir(), {
     ...config,
     usageJob: { job: batchId, input: options.input },
@@ -200,6 +219,10 @@ export async function createGateway(options: GatewayOptions) {
         if (finishing || (intent !== "capture" && outcomes.length))
           throw Error("This input already has an outcome");
       }
+      if (route === "/probe" && intent === "probe") {
+        send(res, 200, { ok: true });
+        return;
+      }
       if (route === "/model/pi") {
         const attempt = () => {
           if (requests >= (config.maxRequests ?? 10))
@@ -243,6 +266,7 @@ export async function createGateway(options: GatewayOptions) {
         return;
       }
       if (route === "/capture-policy" && intent === "capture") {
+        closeNetwork();
         if (typeof input.subvault !== "string")
           throw Error("Choose a destination first");
         // Validate the current destination even when resuming a saved policy.
@@ -256,6 +280,10 @@ export async function createGateway(options: GatewayOptions) {
         const policy = policies[input.subvault];
         send(res, 200, {
           text: policy.text,
+          instructions:
+            options.instructions ??
+            options.browserCapture?.instructions ??
+            (await vault.sourceRecords(options.input))[0]?.item.instructions,
           sources: policy.files.map(({ path, revision }) => ({
             path,
             revision,
@@ -267,12 +295,11 @@ export async function createGateway(options: GatewayOptions) {
         const records = await vault.sourceRecords(options.input);
         send(res, 200, {
           captureRules: captureRules?.text,
+          approvedDestinations,
           records: records.map((v) => ({
             id: v.item.id,
             key: v.item.captureKey ?? "source",
-            title: v.item.title,
             subvault: v.item.subvault,
-            summary: v.item.summary.slice(0, 1000),
           })),
           plannedKeys: planned,
           completedKeys: [...savedKeys],
@@ -280,7 +307,9 @@ export async function createGateway(options: GatewayOptions) {
           instructions:
             options.instructions ??
             options.browserCapture?.instructions ??
-            records[0]?.item.instructions,
+            (options.browserCapture
+              ? records[0]?.item.instructions
+              : undefined),
         });
         return;
       }
@@ -324,13 +353,9 @@ export async function createGateway(options: GatewayOptions) {
         return;
       }
       if (route === "/create-destination" && intent === "capture") {
-        const instructions =
-          options.instructions ??
-          options.browserCapture?.instructions ??
-          (await vault.sourceRecords(options.input))[0]?.item.instructions;
-        if (!instructions?.trim())
+        if (!approvedDestinations.includes(input.subvault))
           throw Error(
-            "Destination creation requires user capture instructions",
+            "Destination creation requires an explicitly approved path",
           );
         if (typeof input.subvault !== "string")
           throw Error("Provide a destination path");
@@ -509,12 +534,16 @@ export async function createGateway(options: GatewayOptions) {
         return;
       }
       if (route === "/search") {
+        if (intent !== "ask" && intent !== "manage")
+          throw Error("Capture cannot search unrelated archive records");
         const hits = await vault.search(input.query);
         hits.forEach((h) => seen.add(h.id));
         send(res, 200, hits);
         return;
       }
       if (route === "/read") {
+        if (intent !== "ask" && intent !== "manage")
+          throw Error("Capture cannot read unrelated archive records");
         if (!seen.has(input.id)) throw Error("Search before reading an item");
         send(res, 200, await vault.read(input.id, input.offset));
         return;
@@ -548,16 +577,25 @@ export async function createGateway(options: GatewayOptions) {
           "Ask job has read-only archive access and no website access",
         );
       if (route === "/fetch") {
+        if (!networkAllowed || networkBytes >= 150_000_000)
+          throw Error("Network capability denied");
         const result = options.fixtureFetch
           ? await options.fixtureFetch(input.url)
-          : await fetchPublic(input.url, abort.signal);
+          : await fetchPublic(
+              input.url,
+              networkAbort.signal,
+              Math.min(64_000_000, 150_000_000 - networkBytes),
+            );
+        networkAbort.signal.throwIfAborted();
+        networkBytes += result.bytes.length;
+        if (networkBytes > 150_000_000) {
+          closeNetwork();
+          throw Error("Job download budget exceeded");
+        }
         if (/text|html|json|xml/.test(result.type)) {
           attributionEvidence.set(input.url, result.bytes.toString("utf8"));
           attributionEvidence.set(result.url, result.bytes.toString("utf8"));
         }
-        networkBytes += result.bytes.length;
-        if (networkBytes > 150_000_000)
-          throw Error("Job download budget exceeded");
         send(res, 200, { ...result, bytes: result.bytes.toString("base64") });
         return;
       }
@@ -566,6 +604,7 @@ export async function createGateway(options: GatewayOptions) {
         return;
       }
       if (route === "/save") {
+        closeNetwork();
         if (intent !== "capture" && outcomes.length)
           throw Error("This input already has an outcome");
         if (!["art", "idea", "capture"].includes(intent))
@@ -803,14 +842,18 @@ export async function createGateway(options: GatewayOptions) {
     // validation or DNS: even writing a rejection can fail asynchronously.
     client.on("error", () => client.destroy());
     try {
-      if (intent === "ask" || abort.signal.aborted || connections.size > 24)
+      if (!networkAllowed || abort.signal.aborted || connections.size > 24)
         throw Error("Network capability denied");
       const { url, address } = await publicTarget(`https://${req.url}`);
-      if (abort.signal.aborted || client.destroyed)
+      if (!networkAllowed || abort.signal.aborted || client.destroyed)
         throw Error("Job ended during DNS lookup");
       if (url.port && url.port !== "443")
         throw Error("HTTPS proxy port denied");
       const remote = connect({ host: address.address, port: 443 });
+      networkConnections.add(remote);
+      networkConnections.add(client);
+      remote.on("close", () => networkConnections.delete(remote));
+      client.on("close", () => networkConnections.delete(client));
       connections.add(remote);
       remote.on("close", () => connections.delete(remote));
       remote.setTimeout(30000, () => remote.destroy());

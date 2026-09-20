@@ -475,6 +475,7 @@ test("capture can create a requested destination and ignore irrelevant images wi
     ...options,
     instructions:
       "Save as instructions without images; create SoloDev under Ideas.",
+    createDestinations: ["Ideas/SoloDev"],
   });
   try {
     assert.equal(

@@ -38,6 +38,7 @@ const { values, positionals } = parseArgs({
     stdin: { type: "boolean" },
     focus: { type: "string" },
     instructions: { type: "string" },
+    "create-destination": { type: "string", multiple: true },
     seconds: { type: "string" },
     "max-requests": { type: "string" },
     "fixture-image": { type: "string" },
@@ -72,7 +73,7 @@ const help = `GG — your personal archive
   gg serve [--public-origin https://gg.example.com] [--port 48123]
   gg pair [--scope capture|manage] | devices | revoke DEVICE_ID
   gg connect SERVER_URL                  (prompts for a management pairing code)
-  gg capture URL... [--instructions TEXT] [--stdin]
+  gg capture URL... [--instructions TEXT] [--create-destination PATH] [--stdin]
   gg download RECORD_ID --to FILE.tar.gz [--originals-only]
   gg import PATH... [--instructions TEXT] (text/images; directories recursive)
   gg capture-file FILE...                (browser snapshots)
@@ -460,6 +461,7 @@ async function main() {
     let count = 0;
     for await (const path of importFiles(positionals)) {
       const capture = await fileCapture(path, values.instructions);
+      capture.createDestinations = values["create-destination"];
       if (seen.has(capture.url)) continue;
       seen.add(capture.url);
       count++;
@@ -566,6 +568,7 @@ async function main() {
                 command: "capture",
                 text: url,
                 instructions: values.instructions ?? values.focus,
+                createDestinations: values["create-destination"],
               })
             : await (
                 await local()

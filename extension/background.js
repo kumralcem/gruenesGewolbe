@@ -63,7 +63,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   task.then(respond, (error) => respond({ error: error.message }));
   return true;
 });
-async function submitPopup({ id, instructions }) {
+async function submitPopup({ id, instructions, createDestinations }) {
   const key = "capture_" + id;
   const entry = (await chrome.storage.session.get(key))[key];
   if (!entry) throw Error("Capture expired. Open GG on the source page again.");
@@ -87,6 +87,7 @@ async function submitPopup({ id, instructions }) {
     entry.snapshot,
     entry.tabId,
     instructions,
+    createDestinations,
   );
   const response = await fetch(url.origin + "/captures", {
     method: "POST",

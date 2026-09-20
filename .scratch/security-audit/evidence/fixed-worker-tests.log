@@ -1,0 +1,22 @@
+
+> gruenes-gewolbe@0.1.0 test:worker /home/dev/projects/gruenesGewolbe
+> node --import tsx --test test/worker.integration.ts
+
+✔ browser uploads and public image tools reject GIF, TIFF and AVIF disguised as PNG (3997.580315ms)
+✔ real Pi captures private snapshots with split records, then manages the vault with confirmation outside the model (5941.638055ms)
+✔ real Pi preserves several supplied images and flags undecodable media without losing content (2742.782177ms)
+✔ Pi saves text instructions into a requested new nested destination despite irrelevant failed images (2275.844483ms)
+✔ long browser transcripts fit the normal model bound and normalized post URLs stay on the snapshot (4924.991746ms)
+﹣ stored browser snapshots replay within the model bound (0.44785ms) # SKIP
+✔ real Pi imports a local image through the gateway and preserves exact original bytes (2572.56204ms)
+✔ a completed capture needs no additional model request to announce success (2227.387095ms)
+✔ local imports reject public browsing and still preserve the supplied original (2401.864947ms)
+✔ real Pi imports a text document without artwork research and preserves the controller's original (2325.064521ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 33721.355057
