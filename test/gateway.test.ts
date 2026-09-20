@@ -530,3 +530,78 @@ test("capture can create a requested destination and ignore irrelevant images wi
     await gateway.close();
   }
 });
+
+test("capture loads only destination guidance, pins revisions on retry, and can plan a split afterward", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-policy-gateway-")),
+    ["Art", "Ideas"],
+  );
+  const initial = await vault.setCaptureRules(
+    "Art guidance v1",
+    "missing",
+    "Art",
+  );
+  const options = {
+    vault,
+    intent: "capture" as const,
+    input: "https://example.com/policy",
+    config: { provider: "openai" as const, model: "fixture" },
+    browserCapture: {
+      version: 2 as const,
+      intent: "capture" as const,
+      url: "https://example.com/policy",
+      title: "Source",
+      capturedAt: "2026-09-20T00:00:00Z",
+      text: "Source text",
+      images: [],
+    },
+  };
+  const first = await createGateway(options);
+  const call = (gateway: typeof first, route: string, body: unknown) =>
+    request(gateway.socket, gateway.token, route, body);
+  const draft = {
+    kind: "idea",
+    title: "Example",
+    summary: "Description",
+    subvault: "Art",
+    sourceUrl: options.input,
+    tags: [],
+    includeImages: false,
+  };
+  try {
+    assert.match(
+      (await call(first, "/save", draft)).data.error,
+      /capture_policy/,
+    );
+    const rules = await call(first, "/capture-policy", { subvault: "Art" });
+    assert.match(rules.data.text, /Art guidance v1/);
+    assert.equal(
+      (await call(first, "/plan", { keys: ["first", "second"] })).status,
+      200,
+    );
+    assert.equal(
+      (await call(first, "/save", { ...draft, captureKey: "first" })).status,
+      200,
+    );
+  } finally {
+    await first.close();
+  }
+  await vault.setCaptureRules("Art guidance v2", initial.revision, "Art");
+  const retry = await createGateway(options);
+  try {
+    assert.match(
+      (await call(retry, "/capture-policy", { subvault: "Art" })).data.text,
+      /Art guidance v1/,
+    );
+    assert.doesNotMatch(
+      (await call(retry, "/capture-policy", { subvault: "Ideas" })).data.text,
+      /Art guidance/,
+    );
+    assert.equal(
+      (await call(retry, "/save", { ...draft, captureKey: "second" })).status,
+      200,
+    );
+  } finally {
+    await retry.close();
+  }
+});

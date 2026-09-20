@@ -50,12 +50,57 @@
           limits while GG is open</label
         >
       </section>
+      <section class="panel" id="archive-panel">
+        <h2>Archive</h2>
+        <form id="archive-search">
+          <input
+            id="archive-query"
+            aria-label="Search archive"
+            placeholder="Find a saved record"
+          /><button>Search</button>
+        </form>
+        <ol id="archive-records"></ol>
+        <button class="secondary" id="archive-more" hidden>More</button>
+        <p id="archive-status" role="status"></p>
+      </section>
+      <section class="panel" id="import-panel">
+        <h2>Import images</h2>
+        <div id="import-drop">
+          <input
+            id="import-files"
+            type="file"
+            multiple
+            accept="image/jpeg,image/png,image/webp"
+            aria-label="Choose images"
+          />
+          <p>
+            Choose images or drop them here. JPEG, PNG or WebP; up to 64 MB
+            each.
+          </p>
+        </div>
+        <textarea
+          id="import-instructions"
+          rows="2"
+          maxlength="2000"
+          aria-label="Import instructions"
+          placeholder="Anything GG should know? For example, organize under Art."
+        ></textarea>
+        <button id="import-start">Import</button
+        ><button class="secondary" id="import-stop" disabled>
+          Stop after this image
+        </button>
+        <p id="import-status" role="status"></p>
+      </section>
       <section class="panel" id="capture-rules-panel">
         <h2>Capture instructions</h2>
         <p>
           Shared across your devices. Individual capture instructions take
           priority. Changes apply to future captures and recaptures.
         </p>
+        <label for="rules-folder">Apply to</label>
+        <select id="rules-folder">
+          <option value="">Whole vault</option>
+        </select>
         <textarea
           id="capture-rules"
           aria-label="Default capture instructions"
@@ -64,6 +109,10 @@
           spellcheck="false"
           disabled
         ></textarea>
+        <details>
+          <summary>Effective instructions</summary>
+          <pre id="effective-rules"></pre>
+        </details>
         <button id="save-rules" disabled>Save instructions</button>
         <button class="secondary" id="reload-rules">Reload</button>
         <p id="rules-status" role="status" aria-live="polite">

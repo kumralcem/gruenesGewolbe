@@ -2,7 +2,7 @@
 
 ## Latest checks
 
-At implementation commit `84d94c6` (2026-09-20): typecheck, changed-file formatting, **54 unit tests**, **5 real Pi worker tests** (optional private replay skipped), and **12 rootless container tests** passed. These use deterministic provider fixtures; they are not live attribution benchmarks. Earlier reviews and run transcripts remain in Git history.
+Before this iteration, commit `84d94c6` passed typecheck, **54 unit tests**, **5 real Pi worker tests** (optional private replay skipped), and **12 rootless container tests**. The current iteration passed 61 unit tests plus the added attribution-tag regression, 6 Pi worker tests (one optional private replay skipped), 12 rootless container tests and the Chromium extension integration (run inside the Playwright image). Typecheck also passed. Current changes exercise inherited policies/retries, portable export authorization and bytes, duplicate-image context reduction, CONNECT broken-pipe recovery and no completion after final save. These use deterministic provider fixtures; they are not live attribution benchmarks. Earlier reviews and run transcripts remain in Git history.
 
 Run checks from the checkout:
 
@@ -21,8 +21,8 @@ Coverage includes credential/network/filesystem isolation, bounded model request
 
 ## Live findings requiring follow-up
 
-- **Transport crash:** the collection import stopped at item 10 with unhandled `write EPIPE`, stack pointing to the proxy CONNECT error response in `src/gateway.ts`. An earlier browser job crashed with `read ECONNRESET`; a dead receiver lock then blocked restarts. Neither live failure has a deterministic regression test or fix yet. See [handoff](handoff.md) for current service/log details. Do not call unattended operation reliable yet.
-- **Context accumulation:** a YouTube retry saved a record then exceeded the model-input bound on another request. Initial payload reduction and paging help but do not bound the whole conversation. Full preserved source and model context need separate treatment.
+- **Transport crash:** the collection import stopped at item 10 with unhandled `write EPIPE` in the proxy CONNECT rejection response. Commit `066c7b2` fixes it with a deterministic regression; the resumed live import passed that item. An earlier browser job crashed with `read ECONNRESET`; that exact trace has not been independently reproduced. See [handoff](handoff.md) for current service/log details. Do not call unattended operation reliable yet.
+- **Context accumulation:** a YouTube retry saved a record then exceeded the model-input bound on another request. Duplicate previews and oversized public candidate lists are now bounded, local research is limited, and a successful final save needs no further model call. These changes and paging still do not bound the whole conversation. Full preserved source and model context need separate treatment.
 - **Attribution research:** two new live imports saved with honest provisional metadata after research failures. Routing improved, but automatic identification is not reliably verified. Seven earlier records received a separate manual evidence/routing review.
 - **Browser extraction:** scripts/forms are stripped and post isolation is attempted, but completeness varies with site layout, viewport, transcript UI and virtualized content. No ongoing signed-in browser interaction capability exists.
 

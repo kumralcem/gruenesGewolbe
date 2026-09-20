@@ -1,3 +1,6 @@
+import { recordDownload } from "./archive-download.ts";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { imageFiles, imageCapture, importId } from "./image-import.ts";
 import { formatResult, startProgress } from "./cli-output.ts";
 import { parseArgs } from "node:util";
@@ -12,13 +15,21 @@ import { createReceiver } from "./receiver.ts";
 import { validateBrowserCapture } from "./browser-capture.ts";
 import { defaultStateDir, readJson, writeJson } from "./state.ts";
 import { providerRuntime, loginProvider } from "./model-service.ts";
-import { connect, connection, remote, importRemote } from "./client.ts";
+import {
+  connect,
+  connection,
+  remote,
+  importRemote,
+  endpoint,
+} from "./client.ts";
 import type { Config } from "./types.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     vault: { type: "string" },
+    to: { type: "string" },
+    "originals-only": { type: "boolean" },
     config: { type: "string" },
     model: { type: "string" },
     provider: { type: "string" },
@@ -62,6 +73,7 @@ const help = `GG — your personal archive
   gg pair [--scope capture|manage] | devices | revoke DEVICE_ID
   gg connect SERVER_URL                  (prompts for a management pairing code)
   gg capture URL... [--instructions TEXT] [--stdin]
+  gg download RECORD_ID --to FILE.tar.gz [--originals-only]
   gg import PATH... [--instructions TEXT] (JPEG, PNG, WebP; directories recursive)
   gg capture-file FILE...                (browser snapshots)
   gg ask QUESTION | search QUERY | do INSTRUCTIONS | chat
@@ -396,6 +408,49 @@ async function main() {
     } finally {
       rl.close();
     }
+    return;
+  }
+  if (command === "download") {
+    const id = positionals[0];
+    if (!/^[a-f0-9-]{36}$/.test(id ?? "") || !values.to)
+      throw Error(
+        "Use gg download RECORD_ID --to FILE.tar.gz [--originals-only]",
+      );
+    const { open, unlink } = await import("node:fs/promises");
+    const target = resolve(values.to);
+    const file = await open(target, "wx", 0o600);
+    try {
+      let stream;
+      if (client) {
+        const response = await fetch(
+          endpoint(client.url) +
+            `/archive/${id}/download?originals=${values["originals-only"] ? "1" : "0"}`,
+          {
+            headers: { authorization: `Bearer ${client.token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(300000),
+          },
+        );
+        if (!response.ok)
+          throw Error(
+            ((await response.json()) as any).error ?? "Download failed",
+          );
+        stream = Readable.fromWeb(response.body! as any);
+      } else
+        stream = (
+          await recordDownload(
+            (await local()).vault,
+            id,
+            values["originals-only"],
+          )
+        ).stream;
+      await pipeline(stream, file.createWriteStream());
+    } catch (error) {
+      await file.close();
+      await unlink(target);
+      throw error;
+    }
+    print(`Downloaded ${target}`);
     return;
   }
   if (command === "import") {

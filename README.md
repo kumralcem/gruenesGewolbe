@@ -71,11 +71,14 @@ Browser source URL aliases (YouTube video links and X/Twitter post links) reuse 
 
 ## Shared capture instructions
 
-`CAPTURE.md` in the vault root controls the default level of detail and writing style for new captures and recaptures. GG creates it with useful defaults if it is missing, without replacing an existing file. For lists, those defaults ask for every substantive tip, an explanation of each, and concrete actions or examples. Tutorials retain steps, prerequisites and caveats; essays retain their argument and supporting points.
+`CAPTURE.md` in the vault root, with optional overrides in destination folders, controls the default level of detail and writing style for new captures and recaptures. GG creates it with useful defaults if it is missing, without replacing an existing file. For lists, those defaults ask for every substantive tip, an explanation of each, and concrete actions or examples. Tutorials retain steps, prerequisites and caveats; essays retain their argument and supporting points.
 
 Edit the file directly, or open the extension's **Settings & recent captures → Capture instructions**, edit, and click **Save instructions**. Both edit the same server-side file, shared by all your devices. No service restart is needed. The editor detects stale copies rather than overwriting someone else's changes; reload explicitly after a conflict. Settings edits appear in GG history and can be undone. The limit is 16,000 UTF-8 bytes; an empty file disables the shared defaults.
 
-Instructions for an individual capture override these defaults. Saved source instructions still carry forward on recapture when no new instructions are supplied. Changes do not rewrite existing records automatically, and recapture continues to preserve human edits. Source pages cannot edit `CAPTURE.md`; the worker only receives a read-only snapshot for its job. Paired browser devices may edit these capture preferences, without gaining general management permissions. The file expresses content/style preferences, not additional tool permissions or authorization to rearrange the vault.
+Instructions for an individual capture override these defaults. Saved source instructions still carry forward on recapture when no new instructions are supplied. Changes do not rewrite existing records automatically, and recapture continues to preserve human edits. Source pages cannot edit `CAPTURE.md`; the worker receives read-only guidance. Folder guidance is pinned when first loaded and reused for retries of that capture. Paired browser devices may edit these capture preferences, without gaining general management permissions. The file expresses content/style preferences, not additional tool permissions or authorization to rearrange the vault.
+
+Folder guidance inherits from root → parent → child, for example `CAPTURE.md` → `subvaults/Art/CAPTURE.md` → `subvaults/Art/Paintings/CAPTURE.md`. In extension settings, choose **Apply to** to edit one file; **Effective instructions** shows the combined guidance. A missing or empty child file adds no overrides. Individual capture instructions take priority. Files are limited to 16 KB each and combined guidance to 64 KB. Folder moves carry their files and change inherited defaults for future jobs. No installation or vault migration is needed.
+
 
 ## Nested folders and automatic routing
 
@@ -115,6 +118,7 @@ Moves, edits, and creating/renaming subvaults execute on your instruction. Delet
 | `pair --scope capture\|manage`, `devices`, `revoke ID` | Pair and revoke individual devices                                          |
 | `connect URL`                                          | Pair a remote management CLI; prompts for a code                            |
 | `capture URL... [--instructions TEXT] [--stdin]`       | Public URL capture; browser capture handles signed-in pages                 |
+| `download RECORD_ID --to FILE.tar.gz [--originals-only]` | Download a portable record bundle locally or from the paired server; existing output files are never overwritten |
 | `import PATH... [--instructions TEXT]` | Import local JPEG, PNG and WebP files or directories, locally or to the paired server |
 | `capture-file FILE...`                                 | Process saved browser snapshots locally                                     |
 | `search QUERY`, `ask QUESTION`                         | File search or model-assisted read-only retrieval                           |
@@ -224,3 +228,15 @@ The agent makes a bounded attempt to check a museum, artist foundation or other 
 - [Domain vocabulary](CONTEXT.md)
 
 Completed interviews, superseded designs and old run reports remain in Git history rather than alongside current instructions.
+
+### Browser import and archive downloads
+
+The extension settings page accepts image uploads through a file picker or drag-and-drop. Files upload and process one at a time under normal GG limits. Keep the page open to send remaining images; **Stop after this image** stops the batch without cancelling the accepted job. Select the same files again to resume: stored originals are skipped. A usage pause stops the batch rather than spending beyond your limits.
+
+**Archive** searches saved records without a model call. **Download bundle** produces a `.tar.gz` archive containing `record.md`, preserved source, original files and a preview when present. Relative media links work after extraction. **Originals only** omits Markdown and previews. Downloads exclude credentials, internal state and history, and are currently limited to 128 MB per record bundle. The CLI streams downloads; the browser buffers one bundle before saving.
+
+Archive browsing/downloads require management pairing. A capture-only extension can still capture and import; to enable archive access, run `gg pair --scope manage` on the server and reconnect the extension using that code. Pairing remains durable afterward. Use `gg list` or archive search to obtain a record ID for CLI downloads:
+
+```sh
+gg download RECORD_ID --to artwork.tar.gz
+```

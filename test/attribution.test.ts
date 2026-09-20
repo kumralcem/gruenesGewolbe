@@ -30,3 +30,14 @@ test("filename metadata cannot masquerade as sourced facts and citations require
   normalizeLocalAttribution(d, new Map([[source, "<p>Created 1918</p>"]]));
   assert.equal(d.year, "1918");
 });
+
+test("uncertain artist and date hints do not leak into confident tags", () => {
+  const draft = {
+    title: "A painting",
+    creator: "Andrew Wyeth",
+    year: "1961",
+    tags: ["Andrew-Wyeth", "1961", "landscape"],
+  };
+  normalizeLocalAttribution(draft);
+  assert.deepEqual(draft.tags, ["landscape"]);
+});

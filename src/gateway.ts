@@ -122,6 +122,14 @@ export async function createGateway(options: GatewayOptions) {
       }
     }
   }
+  const policies: Record<
+    string,
+    Awaited<ReturnType<Vault["effectiveCaptureRules"]>>
+  > = Object.assign(
+    Object.create(null),
+    intent === "capture" ? await readJson(planPath + ".policies", {}) : {},
+  );
+  const loadedPolicies = new Set<string>();
   const persistPlan = async (keys: string[]) => {
     if (planFrozen && JSON.stringify(keys) !== JSON.stringify(planned))
       throw Error(
@@ -233,6 +241,27 @@ export async function createGateway(options: GatewayOptions) {
         }
         return;
       }
+      if (route === "/capture-policy" && intent === "capture") {
+        if (typeof input.subvault !== "string")
+          throw Error("Choose a destination first");
+        // Validate the current destination even when resuming a saved policy.
+        if (!(await vault.destinations()).includes(input.subvault))
+          throw Error("Unknown capture destination");
+        policies[input.subvault] ??= await vault.effectiveCaptureRules(
+          input.subvault,
+        );
+        loadedPolicies.add(input.subvault);
+        await writeJson(planPath + ".policies", policies);
+        const policy = policies[input.subvault];
+        send(res, 200, {
+          text: policy.text,
+          sources: policy.files.map(({ path, revision }) => ({
+            path,
+            revision,
+          })),
+        });
+        return;
+      }
       if (route === "/capture-context" && intent === "capture") {
         const records = await vault.sourceRecords(options.input);
         send(res, 200, {
@@ -241,6 +270,7 @@ export async function createGateway(options: GatewayOptions) {
             id: v.item.id,
             key: v.item.captureKey ?? "source",
             title: v.item.title,
+            subvault: v.item.subvault,
             summary: v.item.summary.slice(0, 1000),
           })),
           plannedKeys: planned,
@@ -553,6 +583,28 @@ export async function createGateway(options: GatewayOptions) {
           }
           if (savedKeys.has(key))
             throw Error("Record already saved in this job");
+          const existingDestination = (
+            await vault.sourceRecords(options.input)
+          ).find((record) => (record.item.captureKey ?? "source") === key)?.item
+            .subvault;
+          const destinations = await vault.destinations();
+          const destination =
+            existingDestination ??
+            (destinations.includes(input.subvault) ? input.subvault : "Inbox");
+          const policy =
+            policies[destination] ??
+            (await vault.effectiveCaptureRules(
+              destinations.includes(destination) ? destination : "",
+            ));
+          if (
+            policy.files.some(
+              (file) => file.path !== "CAPTURE.md" && file.text.trim(),
+            ) &&
+            !loadedPolicies.has(destination)
+          )
+            throw Error(
+              `Read capture_policy for ${destination} and apply its instructions before saving`,
+            );
           await persistPlan(planned);
           if (
             input.includeImages !== undefined &&

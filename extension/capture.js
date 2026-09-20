@@ -1,3 +1,4 @@
+import { setupArchive } from "./archive.js";
 import { prepareCapture } from "./capture-media.js";
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -269,19 +270,51 @@ $("allow").onclick = async () => {
 };
 let rulesRevision;
 let rulesDirty = false;
+let rulesFolder = "";
 async function loadRules() {
+  $("rules-folder").disabled = true;
   try {
-    const rules = await request("/capture-rules");
+    const rules = await request(
+      "/capture-rules?subvault=" + encodeURIComponent(rulesFolder),
+    );
+    $("rules-folder").replaceChildren(
+      ...["", ...rules.destinations].map((path) => {
+        const option = document.createElement("option");
+        option.value = path;
+        option.textContent = path || "Whole vault";
+        return option;
+      }),
+    );
+    $("rules-folder").value = rulesFolder;
+    $("effective-rules").textContent = rules.effective.text;
     $("capture-rules").value = rules.text;
     rulesRevision = rules.revision;
     rulesDirty = false;
     $("capture-rules").disabled = false;
     $("save-rules").disabled = false;
-    $("rules-status").textContent = "Stored as CAPTURE.md in your vault.";
+    $("rules-status").textContent = rules.exists
+      ? "Stored as CAPTURE.md in this folder."
+      : "No folder overrides yet. Ancestor instructions apply.";
   } catch (error) {
     $("rules-status").textContent = error.message;
+  } finally {
+    $("rules-folder").disabled = false;
   }
 }
+$("rules-folder").onchange = () => {
+  if (
+    rulesDirty &&
+    !confirm("Discard unsaved instructions and switch folders?")
+  ) {
+    $("rules-folder").value = rulesFolder;
+    return;
+  }
+  rulesFolder = $("rules-folder").value;
+  rulesRevision = undefined;
+  $("save-rules").disabled = true;
+  $("capture-rules").disabled = true;
+  void loadRules();
+};
 $("capture-rules").oninput = () => {
   rulesDirty = true;
 };
@@ -293,15 +326,24 @@ $("reload-rules").onclick = () => {
     void loadRules();
 };
 $("save-rules").onclick = async () => {
+  $("rules-folder").disabled = true;
   $("save-rules").disabled = true;
   const draft = $("capture-rules").value;
   try {
     const saved = await request("/capture-rules", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: draft, revision: rulesRevision }),
+      body: JSON.stringify({
+        text: draft,
+        revision: rulesRevision,
+        subvault: rulesFolder,
+      }),
     });
     rulesRevision = saved.revision;
+    const effective = await request(
+      "/capture-rules?subvault=" + encodeURIComponent(rulesFolder),
+    );
+    $("effective-rules").textContent = effective.effective.text;
     rulesDirty = $("capture-rules").value !== draft;
     $("rules-status").textContent = rulesDirty
       ? "Saved. You have additional unsaved changes."
@@ -309,6 +351,7 @@ $("save-rules").onclick = async () => {
   } catch (error) {
     $("rules-status").textContent = error.message;
   } finally {
+    $("rules-folder").disabled = false;
     $("save-rules").disabled = false;
   }
 };
@@ -357,3 +400,6 @@ if (settings.token && !popup) {
   await refresh();
   await loadRules();
 }
+
+if (!popup)
+  setupArchive(request, () => ({ url: connection(), token: $("token").value }));

@@ -58,6 +58,7 @@ export const evidenceText = (text: string) =>
 export function normalizeLocalAttribution(
   draft: {
     title: string;
+    tags?: string[];
     creator?: string;
     year?: string;
     attribution?: Attribution;
@@ -103,5 +104,15 @@ export function normalizeLocalAttribution(
     attribution.year?.status === "source-supported"
       ? attribution.year.value
       : undefined;
+  if (draft.tags) {
+    const normalize = (value: string) =>
+      value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const uncertain = [attribution.creator, attribution.year]
+      .filter((field) => field && field.status !== "source-supported")
+      .map((field) => normalize(field!.value));
+    draft.tags = draft.tags.filter(
+      (tag) => !uncertain.includes(normalize(tag)),
+    );
+  }
   draft.title = attribution.title.value;
 }

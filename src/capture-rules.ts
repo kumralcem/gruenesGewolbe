@@ -27,25 +27,34 @@ export function validateCaptureRules(value: unknown): asserts value is string {
       `Capture instructions must be text of at most ${CAPTURE_RULES_LIMIT} UTF-8 bytes`,
     );
 }
-export async function readCaptureRules(root: string) {
+export async function readCaptureRules(root: string, initialize = true) {
   const path = join(root, "CAPTURE.md");
-  await writeFile(path, DEFAULT_CAPTURE_RULES, {
-    flag: "wx",
-    mode: 0o600,
-  }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "EEXIST") throw error;
-  });
+  if (initialize)
+    await writeFile(path, DEFAULT_CAPTURE_RULES, {
+      flag: "wx",
+      mode: 0o600,
+    }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+    });
   const file = await open(
     path,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
+  ).catch((error: NodeJS.ErrnoException) => {
+    if (!initialize && error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!file) return { text: "", revision: "missing", exists: false };
   try {
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > CAPTURE_RULES_LIMIT)
       throw Error("CAPTURE.md must be a regular file of at most 16000 bytes");
     const text = await file.readFile("utf8");
     validateCaptureRules(text);
-    return { text, revision: createHash("sha256").update(text).digest("hex") };
+    return {
+      text,
+      revision: createHash("sha256").update(text).digest("hex"),
+      exists: true,
+    };
   } finally {
     await file.close();
   }

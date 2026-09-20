@@ -58,6 +58,29 @@ test(
       port: 0,
       processCapture: async (c) => {
         captures.push(c);
+        if (c.url.startsWith("gg-local:"))
+          return {
+            outcome: await vault.capture(
+              {
+                kind: "art",
+                title: c.title,
+                summary: "Uploaded original",
+                subvault: "Ideas",
+                sourceUrl: c.url,
+                tags: [],
+                assets: [
+                  {
+                    bytes: c.images![0].bytes!,
+                    width: 300,
+                    height: 200,
+                    visualHash: "a".repeat(64),
+                  },
+                ],
+              },
+              "upload",
+              "upload",
+            ),
+          };
         return {
           outcome: {
             status: "skipped",
@@ -174,7 +197,7 @@ test(
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.4.1");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.5.0");
       assert.equal(await popup.locator("#source").isVisible(), false);
       await popup.setViewportSize({ width: 400, height: 440 });
       const dashboard = await context.newPage();
@@ -218,6 +241,46 @@ test(
         await popup.locator("#capture-rules-panel").isVisible(),
         false,
       );
+      await dashboard.locator("#rules-folder").selectOption("Ideas");
+      await dashboard.locator("#capture-rules:not([disabled])").waitFor();
+      assert.equal(await dashboard.locator("#capture-rules").inputValue(), "");
+      await dashboard.locator("#capture-rules").fill("Keep practical steps.");
+      await dashboard.locator("#save-rules").click();
+      await dashboard
+        .locator("#rules-status")
+        .filter({ hasText: "Saved." })
+        .waitFor();
+      assert.match(
+        (await dashboard.locator("#effective-rules").textContent()) ?? "",
+        /List all five tips/,
+      );
+      assert.equal(
+        (await vault.captureRules("Ideas")).text,
+        "Keep practical steps.",
+      );
+      await dashboard.locator("#import-files").setInputFiles({
+        name: "original.png",
+        mimeType: "image/png",
+        buffer: image,
+      });
+      await dashboard.locator("#import-start").click();
+      await dashboard
+        .locator("#import-status")
+        .filter({ hasText: "Import finished." })
+        .waitFor();
+      assert.deepEqual(
+        Buffer.from(captures.at(-1).images[0].bytes, "base64"),
+        image,
+      );
+      await dashboard.locator("#archive-query").fill("original.png");
+      await dashboard.locator("#archive-search button").click();
+      const downloadPromise = dashboard.waitForEvent("download");
+      await dashboard
+        .getByRole("button", { name: "Download bundle", exact: true })
+        .click();
+      const download = await downloadPromise;
+      assert.match(download.suggestedFilename(), /\.tar\.gz$/);
+      assert.equal(await download.failure(), null);
       await dashboard.locator("#theme").selectOption("light");
       await popup.waitForFunction(
         () => document.documentElement.dataset.theme === "light",

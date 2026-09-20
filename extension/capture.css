@@ -330,3 +330,25 @@ select {
   font-size: 14px;
   margin: 12px 0;
 }
+
+.popup #archive-panel,
+.popup #import-panel {
+  display: none;
+}
+#effective-rules {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
+#archive-records li {
+  margin: 12px 0;
+}
+#archive-records button {
+  margin: 6px;
+}
+#import-drop {
+  border: 1px dashed;
+  border-radius: 12px;
+  padding: 16px;
+}

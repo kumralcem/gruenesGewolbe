@@ -1,3 +1,5 @@
+import { recordDownload } from "./archive-download.ts";
+import { pipeline } from "node:stream/promises";
 import { isLocalSource } from "./local-source.ts";
 import type { Devices } from "./devices.ts";
 import http from "node:http";
@@ -289,8 +291,69 @@ export async function createReceiver(options: ReceiverOptions) {
         send(res, 401, { error: "Pair this device with GG" });
         return;
       }
-      if (req.url === "/capture-rules" && req.method === "GET") {
-        send(res, 200, await options.vault.captureRules());
+      const requestUrl = new URL(req.url ?? "/", "http://localhost");
+      if (
+        req.method === "GET" &&
+        (requestUrl.pathname === "/archive" ||
+          requestUrl.pathname.startsWith("/archive/"))
+      ) {
+        if (options.devices && device?.scope !== "manage") {
+          send(res, 403, {
+            error:
+              "Archive browsing and downloads require management pairing. Run gg pair --scope manage, then connect with that code.",
+          });
+          return;
+        }
+        if (requestUrl.pathname === "/archive") {
+          const query = (
+            requestUrl.searchParams.get("q") ?? ""
+          ).toLocaleLowerCase();
+          const offset = Number(requestUrl.searchParams.get("offset") ?? 0);
+          if (
+            !Number.isSafeInteger(offset) ||
+            offset < 0 ||
+            query.length > 1000
+          )
+            throw Error("Invalid archive query");
+          const records = (await options.vault.items())
+            .map(({ item }) => ({
+              id: item.id,
+              title: item.title,
+              subvault: item.subvault,
+              tags: item.tags,
+            }))
+            .filter((item) =>
+              JSON.stringify(item).toLocaleLowerCase().includes(query),
+            );
+          send(res, 200, {
+            records: records.slice(offset, offset + 50),
+            nextOffset: offset + 50 < records.length ? offset + 50 : null,
+          });
+          return;
+        }
+        const match = requestUrl.pathname.match(
+          /^\/archive\/([a-f0-9-]{36})\/download$/,
+        );
+        if (!match) throw Error("Unknown archive route");
+        const download = await recordDownload(
+          options.vault,
+          match[1],
+          requestUrl.searchParams.get("originals") === "1",
+        );
+        res.writeHead(200, {
+          "content-type": "application/gzip",
+          "content-disposition": `attachment; filename="${download.filename}"`,
+        });
+        await pipeline(download.stream, res);
+        return;
+      }
+      if (requestUrl.pathname === "/capture-rules" && req.method === "GET") {
+        const subvault = requestUrl.searchParams.get("subvault") ?? "";
+        send(res, 200, {
+          ...(await options.vault.captureRules(subvault)),
+          effective: await options.vault.effectiveCaptureRules(subvault),
+          destinations: await options.vault.destinations(),
+        });
         return;
       }
       if (req.url === "/capture-rules" && req.method === "POST") {
@@ -304,7 +367,11 @@ export async function createReceiver(options: ReceiverOptions) {
         send(
           res,
           200,
-          await options.vault.setCaptureRules(input.text, input.revision),
+          await options.vault.setCaptureRules(
+            input.text,
+            input.revision,
+            input.subvault ?? "",
+          ),
         );
         return;
       }

@@ -103,3 +103,48 @@ test("paired extension settings read and save the same file, without unauthentic
     await receiver.close();
   }
 });
+
+test("folder rules inherit in order, reject symlinks and retain undoable local overrides", async () => {
+  const { mkdir, rename } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "gg-folder-rules-"));
+  const vault = await Vault.create(root, ["Art", "Ideas"]);
+  await mkdir(join(root, "subvaults/Art/Paintings"));
+  const absent = await vault.captureRules("Art/Paintings");
+  assert.equal(absent.exists, false);
+  await vault.setCaptureRules("Prefer checked attribution.", "missing", "Art");
+  await vault.setCaptureRules(
+    "Retain medium and creation date.",
+    "missing",
+    "Art/Paintings",
+  );
+  const rules = await vault.effectiveCaptureRules("Art/Paintings");
+  assert.deepEqual(
+    rules.files.map((f) => f.path),
+    [
+      "CAPTURE.md",
+      "subvaults/Art/CAPTURE.md",
+      "subvaults/Art/Paintings/CAPTURE.md",
+    ],
+  );
+  assert.match(rules.text, /checked attribution/);
+  assert.doesNotMatch(
+    (await vault.effectiveCaptureRules("Ideas")).text,
+    /checked attribution/,
+  );
+  await assert.rejects(
+    vault.setCaptureRules("overwrite", "missing", "Art/Paintings"),
+    /changed since/,
+  );
+  await vault.undo();
+  assert.equal((await vault.captureRules("Art/Paintings")).exists, false);
+  await assert.rejects(vault.captureRules("../outside"));
+  await rename(
+    join(root, "subvaults/Art/Paintings"),
+    join(root, "subvaults/Art/Original"),
+  );
+  await symlink(
+    join(root, "subvaults/Art/Original"),
+    join(root, "subvaults/Art/Paintings"),
+  );
+  await assert.rejects(vault.captureRules("Art/Paintings"));
+});

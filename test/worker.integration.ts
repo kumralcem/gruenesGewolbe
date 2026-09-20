@@ -523,3 +523,43 @@ test(
     }
   },
 );
+
+test("a completed capture needs no additional model request to announce success", async () => {
+  const vault = await Vault.create(
+    await mkdtemp(join(tmpdir(), "gg-final-save-")),
+    ["Ideas"],
+  );
+  let requests = 0;
+  const result = await worker({
+    vault,
+    intent: "capture",
+    input: "https://example.com/one",
+    config: { provider: "openai", model: "fixture", maxRequests: 1 },
+    browserCapture: {
+      version: 2,
+      intent: "capture",
+      url: "https://example.com/one",
+      title: "One",
+      text: "Useful steps",
+      capturedAt: "2026-09-20T00:00:00Z",
+      images: [],
+    },
+    mockModel: async () => {
+      assert.equal(
+        ++requests,
+        1,
+        "No paid model request after the successful final save",
+      );
+      return call("capture", {
+        kind: "idea",
+        title: "One",
+        summary: "Useful steps",
+        subvault: "Ideas",
+        tags: [],
+        includeImages: false,
+      });
+    },
+  });
+  assert.equal(requests, 1);
+  assert.equal(result.complete, true);
+});

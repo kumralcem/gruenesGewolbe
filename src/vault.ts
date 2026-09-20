@@ -14,7 +14,7 @@ import {
   rm,
   cp,
 } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Asset, Draft, Hit, Item, Outcome, StoredAsset } from "./types.ts";
 import {
@@ -146,23 +146,57 @@ export class Vault {
     await vault.reloadAreas();
     return vault;
   }
-  async captureRules() {
-    return readCaptureRules(this.root);
+  private async rulesFolder(subvault = "") {
+    if (!subvault) return this.root;
+    await this.reloadAreas();
+    return dirname(await this.areaPath(subvault));
   }
-  async setCaptureRules(value: unknown, revision: unknown) {
+  async captureRules(subvault = "") {
+    return readCaptureRules(await this.rulesFolder(subvault), !subvault);
+  }
+  async effectiveCaptureRules(subvault = "") {
+    await this.rulesFolder(subvault);
+    const paths = [
+      "",
+      ...(subvault
+        ? subvault
+            .split("/")
+            .map((_, i, parts) => parts.slice(0, i + 1).join("/"))
+        : []),
+    ];
+    const files = [];
+    for (const path of paths) {
+      const rules = await this.captureRules(path);
+      if (rules.exists)
+        files.push({
+          path: path ? `subvaults/${path}/CAPTURE.md` : "CAPTURE.md",
+          ...rules,
+        });
+    }
+    const text = files
+      .map((file) => `## ${file.path}\n${file.text}`)
+      .join("\n\n");
+    if (Buffer.byteLength(text) > 64000)
+      throw Error(
+        "Combined capture instructions exceed 64000 bytes; shorten ancestor or folder instructions",
+      );
+    return { text, files };
+  }
+  async setCaptureRules(value: unknown, revision: unknown, subvault = "") {
     validateCaptureRules(value);
     return this.serialize(async () => {
-      const current = await this.captureRules();
+      const folder = await this.rulesFolder(subvault);
+      const current = await this.captureRules(subvault);
       if (typeof revision !== "string" || revision !== current.revision)
         throw Error(
           "CAPTURE.md changed since you loaded it. Reload the instructions before saving; your draft has not been saved.",
         );
       await new History(this.root).run(
         "Edit capture instructions",
-        ["CAPTURE.md"],
-        () => this.atomic(join(this.root, "CAPTURE.md"), value),
+        [relative(this.root, join(folder, "CAPTURE.md"))],
+        () => this.atomic(join(folder, "CAPTURE.md"), value),
       );
-      return this.captureRules();
+      return this.captureRules(subvault);
     });
   }
   private async reloadAreas() {
