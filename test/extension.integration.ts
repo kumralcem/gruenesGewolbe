@@ -167,7 +167,17 @@ test(
         image,
       );
       assert.equal(await popup.locator("#settings").isVisible(), false);
-      assert.equal(await popup.locator("#version").textContent(), "GG 0.2.0");
+      assert.equal(await popup.locator("#version").textContent(), "GG 0.2.1");
+      assert.equal(await popup.locator("#source").isVisible(), false);
+      await popup.setViewportSize({ width: 400, height: 440 });
+      const dashboard = await context.newPage();
+      await dashboard.goto(extensionOrigin + "/capture.html");
+      assert.equal(
+        await dashboard.locator("#capture-panel").isVisible(),
+        false,
+      );
+      assert.equal(await dashboard.locator("#dashboard").isVisible(), false);
+      assert.equal(await dashboard.locator("#settings").isVisible(), true);
       await popup.screenshot({ path: ".runs/extension-evidence/popup.png" });
       for (const path of ["/editor", "/form", "/selection"]) {
         await page.goto(origin + path);

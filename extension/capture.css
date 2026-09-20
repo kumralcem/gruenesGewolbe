@@ -174,23 +174,46 @@ nav {
 #version {
   color: #56665d;
 }
+html.popup-root {
+  background: transparent;
+  border-radius: 18px;
+  overflow: hidden;
+}
 body.popup {
-  width: 380px;
+  width: 400px;
+  padding: 6px;
+  background: transparent;
+  border-radius: 18px;
+  overflow: hidden;
 }
 .popup main {
   margin: 0;
   padding: 18px;
+  border-radius: 16px;
+  background: #f3f2eb;
 }
 .popup header {
   gap: 12px;
-  margin-bottom: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+header > div {
+  min-width: 0;
+}
+header h1 {
+  margin: 0;
+}
+.popup header > div {
+  flex: 1;
 }
 .popup .brand {
   width: 40px;
   height: 40px;
 }
 .popup h1 {
-  font-size: 20px;
+  font-size: 21px;
+  line-height: 1.2;
+  text-wrap: balance;
 }
 .popup #source {
   font-size: 12px;

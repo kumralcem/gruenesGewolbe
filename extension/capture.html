@@ -19,19 +19,18 @@
         />
         <div>
           <h1>Save something worth keeping.</h1>
-          <p id="source">Capture the page you are viewing.</p>
+          <p id="source" hidden></p>
         </div>
       </header>
-      <section class="panel">
-        <h2>Capture this page</h2>
-        <p id="summary"></p>
-        <label class="field"
-          >Instructions (optional)
+      <section class="panel" id="capture-panel" hidden>
+        <p id="summary" hidden></p>
+        <label class="field">
           <textarea
             id="focus"
+            aria-label="Instructions (optional)"
             rows="3"
             maxlength="2000"
-            placeholder="For example: save each painting separately, including its attribution."
+            placeholder="Anything GG should know?"
           ></textarea>
         </label>
         <button id="capture">Capture</button>
@@ -54,7 +53,8 @@
         <summary>Connect to GG</summary>
         <p>
           Enter your GG server address and a pairing code. You only need to pair
-          this device once.
+          this device once. The code expires after 10 minutes; your paired
+          connection does not.
         </p>
         <label class="field"
           >GG server address<input

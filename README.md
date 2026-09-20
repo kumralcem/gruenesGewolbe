@@ -141,4 +141,4 @@ The coral vault mark combines phthalo green, coral and warm gold. See the [three
 
 ### Updating the unpacked extension
 
-After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.2.0** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
+After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.2.1** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.

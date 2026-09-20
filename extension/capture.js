@@ -2,7 +2,13 @@ import { prepareCapture } from "./capture-media.js";
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const popup = params.has("popup");
-if (popup) document.body.classList.add("popup");
+if (popup) {
+  document.body.classList.add("popup");
+  document.documentElement.classList.add("popup-root");
+  $("capture-panel").hidden = false;
+} else {
+  $("dashboard").hidden = true;
+}
 $("version").textContent = "GG " + chrome.runtime.getManifest().version;
 $("dashboard").onclick = () =>
   chrome.tabs.create({ url: chrome.runtime.getURL("capture.html") });
@@ -67,7 +73,11 @@ if (popup) {
   }
 }
 if (params.has("error")) {
-  status(params.get("error"));
+  status(
+    popup
+      ? "Open a website tab, then click GG to capture it."
+      : params.get("error"),
+  );
   $("capture").disabled = true;
 } else if (id) {
   const entry = (await chrome.storage.session.get("capture_" + id))[
@@ -78,6 +88,7 @@ if (params.has("error")) {
     $("capture").disabled = true;
   } else {
     ({ snapshot, tabId } = entry);
+    $("capture-panel").hidden = false;
     $("source").textContent = snapshot.title + " — " + snapshot.url;
     $("summary").textContent =
       "GG will interpret this page and collect relevant images. Instructions are optional.";
