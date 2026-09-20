@@ -7,6 +7,7 @@ export interface Asset {
   preview?: string;
 }
 export interface Draft {
+  attribution?: import("./attribution.ts").Attribution;
   kind: "art" | "idea";
   captureKey?: string;
   instructions?: string;
@@ -63,6 +64,8 @@ export interface Hit {
   capturedAt: string;
 }
 export interface Config {
+  usageGrant?: string;
+  usageJob?: { job: string; input: string };
   provider: "openai" | "openrouter" | "openai-codex";
   stateDir?: string;
   maxInputTokens?: number;

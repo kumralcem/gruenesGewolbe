@@ -46,3 +46,32 @@ test("partial saves and failures remain visible even when the model claims succe
   ])
     assert.ok(output.includes(detail));
 });
+
+test("usage output distinguishes application budgets, provider observations and actionable controls", () => {
+  const result = formatResult({
+    provider: "openai-codex",
+    model: "fixture",
+    usage: {
+      windows: [
+        {
+          name: "hour",
+          usedRequests: 50,
+          requests: 50,
+          usedTokens: 200,
+          tokens: 1000,
+          nextReset: 1000,
+        },
+      ],
+      providers: {
+        "openai-codex": {
+          allowance: { usedPercent: 56, observedAt: 1000, resetAt: 2000 },
+        },
+      },
+    },
+  });
+  assert.match(result, /LIMIT REACHED/);
+  assert.match(result, /44% remaining/);
+  assert.match(result, /last reported/);
+  assert.match(result, /capacity returns gradually/);
+  assert.match(result, /gg usage reset/);
+});

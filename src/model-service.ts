@@ -121,6 +121,7 @@ export class ModelService {
           (this.config.provider === "openai-codex"
             ? model.maxTokens
             : (this.config.maxOutputTokens ?? 4096)),
+        { ...this.config.usageJob, grant: this.config.usageGrant },
       );
       let status = 0;
       try {

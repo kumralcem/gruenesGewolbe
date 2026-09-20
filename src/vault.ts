@@ -1,3 +1,4 @@
+import { validateAttribution } from "./attribution.ts";
 import { isLocalSource } from "./local-source.ts";
 import { readCaptureRules, validateCaptureRules } from "./capture-rules.ts";
 import { History } from "./history.ts";
@@ -376,6 +377,7 @@ export class Vault {
     )
       throw Error("Invalid capture record");
     validateUrl(d.sourceUrl);
+    if (d.attribution) validateAttribution(d.attribution);
     if (d.publishedAt && !/^\d{4}-\d{2}-\d{2}$/.test(d.publishedAt))
       throw Error("Invalid publication date");
     if (d.kind === "idea" && (!d.sourceText?.trim() || !d.summary.trim()))
@@ -507,6 +509,7 @@ export class Vault {
         subvault: d.subvault,
         capturedAt: new Date().toISOString(),
         publishedAt: d.publishedAt,
+        attribution: d.attribution,
         creator: d.creator,
         year: d.year,
         selectedImage: d.selectedImage,

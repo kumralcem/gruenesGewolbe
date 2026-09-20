@@ -183,3 +183,35 @@ The coral vault mark combines phthalo green, coral and warm gold. See the [three
 ### Updating the unpacked extension
 
 After `git pull` on `master`, open `chrome://extensions` (or your Chromium browser’s extensions page) and click **Reload** on GG Capture. Close old GG tabs. Version **0.4.1** shows the coral icon and a compact capture popup when you click the toolbar icon or use Alt+Shift+G. **Settings & recent captures** opens the full page for pairing and history. If the old GG letters or idea/image selector remain, check that the loaded extension directory is the `extension/` folder of this checkout, rather than another clone.
+
+### Usage controls
+
+`gg usage` shows readable rolling limits, remaining capacity, the last subscription observation and recovery commands. `--json` retains structured output; `--watch` refreshes every two seconds. Subscription readings are observations, not a live promise of remaining capacity. GG cannot reset a provider's subscription allowance.
+
+```sh
+gg usage reset --window hour              # or week / all; preserves request history
+gg usage grant --requests 50 --tokens 1000000 --minutes 60
+gg usage limits --hour-requests 100 --week-requests 1000
+gg usage history                         # requests/tokens by job, plus budget changes
+```
+
+Limits persist in controller state and apply to running controllers on the next reservation. Resets affect GG's chosen window across providers; they do not clear provider-error pauses or erase accounting. Request history retains seven days; older requests lack job attribution. Failed attempts retain their conservative token reservation. A job may need more tokens than the displayed remainder to start its next model request.
+
+For a substantial import, authorize a **collection-specific allowance** on the server:
+
+```sh
+gg usage grant --local --collection ~/gg-import/Paintings \
+  --requests 1500 --tokens 50000000 --minutes 720
+# Copy the returned grant ID:
+gg import ~/gg-import/Paintings --local --grant GRANT_ID \
+  --instructions "Organize these under Art" --continue-on-error
+gg usage revoke GRANT_ID
+```
+
+This allowance accepts only the exact image hashes scanned from that collection. It consumes its own bounded request/token pool instead of the normal hourly/weekly enforcement, while retaining ordinary accounting, provider pauses, deadlines and per-job limits. Successful requests settle against actual reported tokens; failed attempts keep their reservation. Maximum grant: 10,000 requests, 2B reserved tokens, 24 hours, 2,000 image hashes. Collection grants currently work with server-local imports; ordinary remote imports remain supported. Grants are never renewed automatically. `--continue-on-error` continues past unsuccessful model results but still stops on usage/provider pauses or input/transport errors. Check the log for unfinished images before deleting staging files.
+
+### Artwork attribution
+
+Local-image imports distinguish each title, artist and year as filename-derived, uncertain, or source-supported. A source-supported value requires a source URL and an excerpt actually fetched during the job, containing the claimed value. Artist/year fields remain empty when only filename hints are available; hints remain in the attribution properties and readable record. Source-supported means cited evidence, not guaranteed authentication: matching that evidence to the pictured work remains the agent's responsibility.
+
+The agent makes a bounded attempt to check a museum, artist foundation or other primary source, preferring an honest unresolved attribution over a guessed fact. It preserves the image even when research is inconclusive. Artwork creation dates are distinct from download or exhibition dates. Import routing prefers a suitable existing child folder (for example Art/Paintings) over its parent. Existing imports are not automatically reprocessed.

@@ -1,3 +1,4 @@
+import { normalizeLocalAttribution } from "./attribution.ts";
 import { isLocalSource } from "./local-source.ts";
 import { ModelService, estimateInput } from "./model-service.ts";
 import { defaultStateDir, readJson, writeJson } from "./state.ts";
@@ -144,10 +145,10 @@ export async function createGateway(options: GatewayOptions) {
     (config.maxSeconds ?? 180) * 1000,
   );
   const connections = new Set<Socket>();
-  const service = new ModelService(
-    config.stateDir ?? defaultStateDir(),
-    config,
-  );
+  const service = new ModelService(config.stateDir ?? defaultStateDir(), {
+    ...config,
+    usageJob: { job: batchId, input: options.input },
+  });
   const management: unknown[] = [];
   let paused: string | undefined;
   let retryAt: number | undefined;
@@ -156,6 +157,7 @@ export async function createGateway(options: GatewayOptions) {
     finishing = false;
   const outcomes: Outcome[] = previousOutcomes;
   const seen = new Set<string>();
+  const attributionEvidence = new Map<string, string>();
   let answers: unknown[] = [];
   const events: Record<string, unknown>[] = [];
   const send = (res: http.ServerResponse, code: number, data: unknown) => {
@@ -518,6 +520,10 @@ export async function createGateway(options: GatewayOptions) {
         const result = options.fixtureFetch
           ? await options.fixtureFetch(input.url)
           : await fetchPublic(input.url, abort.signal);
+        if (/text|html|json|xml/.test(result.type)) {
+          attributionEvidence.set(input.url, result.bytes.toString("utf8"));
+          attributionEvidence.set(result.url, result.bytes.toString("utf8"));
+        }
         networkBytes += result.bytes.length;
         if (networkBytes > 150_000_000)
           throw Error("Job download budget exceeded");
@@ -563,6 +569,8 @@ export async function createGateway(options: GatewayOptions) {
               "Text-only capture must be an idea with no image assets or media errors",
             );
           const snapshot = options.browserCapture;
+          if (isLocalSource(options.input))
+            normalizeLocalAttribution(input, attributionEvidence);
           if (
             isLocalSource(options.input) &&
             (!snapshot ||

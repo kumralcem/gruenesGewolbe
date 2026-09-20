@@ -12,6 +12,10 @@ import type { BrowserCapture } from "./browser-capture.ts";
 import { writeJson } from "./state.ts";
 export interface Command {
   command: string;
+  action?: string;
+  window?: string;
+  limits?: Partial<import("./usage.ts").Limits>;
+  sources?: string[];
   text?: string;
   id?: string;
   instructions?: string;
@@ -153,7 +157,43 @@ export class Controller {
           subvault: v.item.subvault,
           path: v.path,
         }));
-      case "usage":
+      case "usage": {
+        switch (input.action ?? "status") {
+          case "status":
+            break;
+          case "reset":
+            await this.usage.reset(input.window ?? "");
+            break;
+          case "limits":
+            if (input.limits && Object.keys(input.limits).length)
+              await this.usage.setLimits(input.limits);
+            break;
+          case "history":
+            return this.usage.history();
+          case "revoke":
+            await this.usage.revokeGrant(input.id ?? "");
+            break;
+          case "grant":
+            if (input.sources?.length) {
+              const grantId = await this.usage.grant(
+                input.requests!,
+                input.tokens!,
+                input.minutes ?? 60,
+                input.sources,
+              );
+              return { ...(await this.status()), grantId };
+            }
+            await this.usage.override(
+              input.requests!,
+              input.tokens!,
+              input.minutes ?? 60,
+            );
+            break;
+          default:
+            throw Error("Usage actions: reset, grant, revoke, limits, history");
+        }
+        return this.status();
+      }
       case "status":
         return this.status();
       case "resume":

@@ -28,3 +28,61 @@ test("global budgets persist, include failures, warn and pause across controller
   await guard.resume("openai");
   await guard.reserve("openai", 100);
 });
+
+test("reset retains history, limits persist, and collection grants are scoped, bounded and revocable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gg-usage-controls-"));
+  let now = 100000000;
+  const g = new UsageGuard(
+    root,
+    { hourRequests: 1, weekRequests: 2 },
+    () => now,
+  );
+  await g.reserve("openai", 100, { job: "first", input: "original" });
+  await assert.rejects(g.reserve("openai", 100), /hour request limit/);
+  await g.reset("hour");
+  assert.equal((await g.status()).windows[0].usedRequests, 0);
+  assert.equal((await g.status()).windows[1].usedRequests, 1);
+  await g.reserve("openai", 100, { job: "second" });
+  await g.reset("hour");
+  await assert.rejects(g.reserve("openai", 100), /week request limit/);
+  assert.equal((await g.history()).jobs.length, 2);
+  const source = "gg-local:sha256:" + "a".repeat(64);
+  const id = await g.grant(2, 1000, 60, [source]);
+  await assert.rejects(
+    g.reserve("openai", 100, { grant: id, input: "https://other" }),
+    /does not include/,
+  );
+  const a = await g.reserve("openai", 400, {
+    grant: id,
+    input: source,
+    job: "import",
+  });
+  await g.settle(a, 100);
+  assert.equal((await g.status()).grants[id].tokens, 900);
+  await g.reserve("openai", 100, { grant: id, input: source, job: "import" });
+  await assert.rejects(
+    g.reserve("openai", 100, { grant: id, input: source }),
+    /exhausted/,
+  );
+  await g.revokeGrant(id);
+  await assert.rejects(
+    g.reserve("openai", 100, { grant: id, input: source }),
+    /missing/,
+  );
+  await g.reset("all");
+  await g.setLimits({ hourRequests: 12 });
+  assert.equal(
+    (await new UsageGuard(root, {}, () => now).status()).windows[0].requests,
+    12,
+  );
+  await g.failure("openai", "authentication");
+  await g.reset("all");
+  await assert.rejects(g.reserve("openai", 100), /authentication/);
+  await g.resume("openai");
+  const exp = await g.grant(2, 1000, 1, [source]);
+  now += 60001;
+  await assert.rejects(
+    g.reserve("openai", 100, { grant: exp, input: source }),
+    /expired/,
+  );
+});

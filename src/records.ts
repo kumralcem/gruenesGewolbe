@@ -37,6 +37,7 @@ function properties(item: Item) {
       sourceUrl: item.sourceUrl,
       capturedAt: item.capturedAt,
       publishedAt: item.publishedAt || undefined,
+      attribution: item.attribution,
       creator: item.creator || undefined,
       year: item.year || undefined,
       tags: [...new Set(item.tags.map(tagName).filter(Boolean))],
@@ -67,8 +68,21 @@ function media(item: Item) {
     .join("\n");
   return `${mediaStart}\n${embeds ? embeds + "\n\n" : ""}${omissions}${links ? `Preserved files:\n\n${links}\n\n` : ""}${item.kind === "idea" || item.captureKey ? "[Preserved source](source.md)\n" : ""}${mediaEnd}`;
 }
+function attributionNote(item: Item) {
+  if (!item.attribution) return "";
+  return (
+    "\n\n<!-- gg:attribution -->\n### Attribution\n\n" +
+    Object.entries(item.attribution)
+      .map(
+        ([key, f]) =>
+          `- **${key}**: ${markdownLabel(f!.value)} — ${f!.status === "source-supported" ? `supported by [source](${encodeURI(f!.sourceUrl!)})` : f!.status === "filename" ? "from filename; unverified" : "uncertain"}${f!.quote ? `; evidence: ${markdownLabel(f!.quote)}` : ""}`,
+      )
+      .join("\n") +
+    "\n<!-- /gg:attribution -->"
+  );
+}
 export function renderRecord(item: Item) {
-  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n${isLocalSource(item.sourceUrl) ? `Imported local image. Content ID: \`${item.sourceUrl.slice(16)}\`. Original file preserved above.` : `[Original page](${encodeURI(item.sourceUrl)})`}\n`;
+  return `---\n${stringify(properties(item))}---\n\n# ${markdownLabel(item.title)}\n\n${media(item)}\n\n## Summary\n\n${item.summary}\n\n## Source\n\n${isLocalSource(item.sourceUrl) ? `Imported local image. Content ID: \`${item.sourceUrl.slice(16)}\`. Original file preserved above.` : `[Original page](${encodeURI(item.sourceUrl)})`}${attributionNote(item)}\n`;
 }
 export function readRecord(source: string, assets?: StoredAsset[]): Item {
   const { props, body } = split(source);
@@ -138,6 +152,7 @@ export function refreshRecord(
     "subvault",
     "sourceUrl",
     "publishedAt",
+    "attribution",
     "creator",
     "year",
     "tags",
@@ -173,6 +188,17 @@ export function refreshRecord(
       (_all, heading) => `${heading}\n${next.summary}\n`,
     );
   } else if (current.summary !== next.summary) conflicts.push("summary");
+  if (
+    JSON.stringify(current.attribution) ===
+    JSON.stringify(baseline?.attribution)
+  ) {
+    if (updated.includes("<!-- gg:attribution -->"))
+      updated = updated.replace(
+        /\s*<!-- gg:attribution -->[\s\S]*?<!-- \/gg:attribution -->/,
+        () => attributionNote(next),
+      );
+    else if (next.attribution) updated += attributionNote(next) + "\n";
+  }
   doc.set("primary", next.primary ?? null);
   doc.set(
     "files",

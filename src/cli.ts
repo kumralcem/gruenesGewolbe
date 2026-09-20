@@ -40,6 +40,15 @@ const { values, positionals } = parseArgs({
     tokens: { type: "string" },
     requests: { type: "string" },
     minutes: { type: "string" },
+    window: { type: "string" },
+    collection: { type: "string" },
+    grant: { type: "string" },
+    watch: { type: "boolean" },
+    "continue-on-error": { type: "boolean" },
+    "hour-requests": { type: "string" },
+    "week-requests": { type: "string" },
+    "hour-tokens": { type: "string" },
+    "week-tokens": { type: "string" },
   },
 });
 const command = positionals.shift() ?? "help";
@@ -57,7 +66,8 @@ const help = `GG — your personal archive
   gg capture-file FILE...                (browser snapshots)
   gg ask QUESTION | search QUERY | do INSTRUCTIONS | chat
   gg list | history | undo [OPERATION_OR_BATCH] | confirm PROPOSAL
-  gg usage | resume | override --requests N --tokens N [--minutes N]
+  gg usage [reset|grant|revoke|limits|history] [--watch]
+  gg resume | override --requests N --tokens N [--minutes N]
   gg provider PROVIDER MODEL             (explicit switch; never automatic)
   gg index | queue | probe
 
@@ -266,8 +276,54 @@ async function main() {
       values.fixture,
       values["fixture-image"],
     ));
+  if (values.grant) {
+    if (command !== "import" || client)
+      throw Error(
+        "--grant currently requires a local import (--local on the server)",
+      );
+    config.usageGrant = values.grant;
+  }
   const execute = async (input: Command) =>
     client ? remote(client, input) : (await local()).execute(input);
+  if (command === "usage") {
+    const action = positionals[0] ?? "status";
+    if (values.watch && action !== "status")
+      throw Error("--watch is only for usage status");
+    const limits: Record<string, number> = {};
+    for (const [flag, key] of [
+      ["hour-requests", "hourRequests"],
+      ["week-requests", "weekRequests"],
+      ["hour-tokens", "hourTokens"],
+      ["week-tokens", "weekTokens"],
+    ] as const)
+      if (values[flag] !== undefined) limits[key] = Number(values[flag]);
+    const sources: string[] = [];
+    if (values.collection) {
+      if (action !== "grant") throw Error("--collection requires usage grant");
+      for await (const path of imageFiles([values.collection]))
+        sources.push((await imageCapture(path)).url);
+      if (!sources.length) throw Error("No supported images in collection");
+    }
+    do {
+      const result = await execute({
+        command: "usage",
+        action,
+        window: values.window,
+        limits,
+        sources,
+        id: positionals[1],
+        requests: Number(values.requests),
+        tokens: Number(values.tokens),
+        minutes: values.minutes ? Number(values.minutes) : undefined,
+      });
+      if (values.watch && process.stdout.isTTY)
+        process.stdout.write("\u001b[2J\u001b[H");
+      print(result);
+      if (values.watch)
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+    } while (values.watch);
+    return;
+  }
   if (command === "serve") {
     const c = await local();
     const port = Number(values.port ?? 48123);
@@ -383,10 +439,20 @@ async function main() {
         !["saved", "existing", "updated", "upgraded"].includes(
           result?.outcome?.status,
         )
-      )
-        throw Error(
-          "Import stopped before the next file. Resolve this result and rerun to resume.",
-        );
+      ) {
+        if (
+          values["continue-on-error"] &&
+          result?.outcome?.status !== "paused"
+        ) {
+          process.exitCode = 1;
+          console.error(
+            "Image unfinished; continuing. Rerun later to retry missing records.",
+          );
+        } else
+          throw Error(
+            "Import stopped before the next file. Resolve this result and rerun to resume.",
+          );
+      }
     }
     if (!count) throw Error("No JPEG, PNG or WebP images found");
     return;

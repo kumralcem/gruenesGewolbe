@@ -451,6 +451,8 @@ test(
       const capture = await imageCapture(file, "Save this in Paintings");
       const vault = await Vault.create(join(root, "vault"), ["Paintings"]);
       let step = 0;
+      let assetId = "";
+      const source = "https://museum.example/green";
       const result = await worker({
         vault,
         config: {
@@ -462,6 +464,13 @@ test(
         intent: "capture",
         input: capture.url,
         browserCapture: capture,
+        fixtureFetch: async (url) => ({
+          url,
+          type: "text/html",
+          bytes: Buffer.from(
+            "<p>Green painting. Artist Example. Created 1918.</p>",
+          ),
+        }),
         mockModel: async (body) => {
           if (step++ === 0) return call("browse", { url: capture.url });
           if (step === 2) {
@@ -470,13 +479,31 @@ test(
                 .content,
             );
             assert.equal(view.previewAssets.length, 1);
+            assetId = view.previewAssets[0].assetId;
+            return call("fetch_text", { url: source });
+          }
+          if (step === 3) {
             return call("capture", {
               kind: "art",
               title: "Green painting",
               summary: "A green painting",
               subvault: "Paintings",
               tags: [],
-              assetIds: [view.previewAssets[0].assetId],
+              assetIds: [assetId],
+              attribution: {
+                year: {
+                  value: "1918",
+                  status: "source-supported",
+                  sourceUrl: source,
+                  quote: "Created 1918",
+                },
+                creator: {
+                  value: "Artist Example",
+                  status: "source-supported",
+                  sourceUrl: source,
+                  quote: "Artist Example",
+                },
+              },
             });
           }
           return { role: "assistant", content: "Saved." };
@@ -484,6 +511,9 @@ test(
       });
       assert.equal(result.outcomes[0]?.status, "saved");
       const [record] = await vault.sourceRecords(capture.url);
+      assert.equal(record.item.year, "1918");
+      assert.equal(record.item.creator, "Artist Example");
+      assert.equal(record.item.attribution?.title?.status, "uncertain");
       assert.deepEqual(
         await readFile(join(record.path, record.item.assets[0].file)),
         bytes,
