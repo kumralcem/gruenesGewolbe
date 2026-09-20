@@ -744,15 +744,20 @@ export class Vault {
       (!action.subvault || !validDestinationPath(action.subvault))
     )
       throw Error("Invalid destination name");
-    if (
-      action.action === "rename-subvault" &&
-      (!action.from ||
-        !this.areas.includes(action.from) ||
-        action.from === "Inbox" ||
-        this.areas.includes(action.subvault!) ||
-        action.subvault!.startsWith(action.from + "/"))
-    )
-      throw Error("Invalid subvault rename (Inbox is permanent)");
+    if (action.action === "rename-subvault") {
+      if (!action.from || !this.areas.includes(action.from))
+        throw Error(
+          `Unknown source destination: ${action.from ?? "(missing)"}. Use an exact relative path from vault_catalog.`,
+        );
+      if (action.from === "Inbox")
+        throw Error("Inbox is permanent and cannot be renamed or moved");
+      if (this.areas.includes(action.subvault!))
+        throw Error(
+          `Destination already exists: ${action.subvault}. rename-subvault requires the full new path, not an existing parent. To move into that parent, use ${action.subvault}/${action.from.split("/").at(-1)} if it does not already exist.`,
+        );
+      if (action.subvault!.startsWith(action.from + "/"))
+        throw Error("Cannot move a destination inside itself");
+    }
     if (
       action.action === "rename-subvault" &&
       this.areas.some(

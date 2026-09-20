@@ -14,7 +14,7 @@ test("an already-open vault discovers manually created nested destinations and s
     {
       kind: "idea",
       title: "Early photography",
-      summary: "Historic (写真)al photographic methods",
+      summary: "Historical photographic methods",
       sourceText: "Original source",
       sourceUrl: "https://example.com/history",
       subvault: "Photography/Historic (写真)",
@@ -114,4 +114,36 @@ test("parent renames cannot hide descendants by exceeding path limits", async ()
     /path limits/,
   );
   assert.ok((await vault.destinations()).includes(deepest));
+});
+
+test("moving destinations under an existing parent explains full-path targets and preserves descendants", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gg-reparent-"));
+  const vault = await Vault.create(root, [
+    "Art",
+    "Paintings",
+    "Sculptures",
+    "Photography",
+  ]);
+  await mkdir(join(root, "subvaults", "Photography", "Historic"));
+  await assert.rejects(
+    vault.manage({
+      action: "rename-subvault",
+      from: "Photography",
+      subvault: "Art",
+    }),
+    /Destination already exists.*Art\/Photography/,
+  );
+  for (const from of ["Paintings", "Sculptures", "Photography"]) {
+    await vault.manage({
+      action: "rename-subvault",
+      from,
+      subvault: `Art/${from}`,
+    });
+  }
+  const destinations = await vault.destinations();
+  assert.ok(destinations.includes("Art/Photography/Historic"));
+  for (const from of ["Paintings", "Sculptures", "Photography"]) {
+    assert.ok(destinations.includes(`Art/${from}`));
+    assert.ok(!destinations.includes(from));
+  }
 });
